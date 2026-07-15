@@ -1,5 +1,9 @@
 # kyozai-kobo-oss
 
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6.svg)](#)
+[![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-24C8DB.svg)](https://tauri.app)
+
 塾教材をLaTeXで作成・管理するWindows向けデスクトップアプリ「**教材工房**」と、
 その中から呼び出せるグラフ作成アプリ「**MathGraph PDF Studio**」をまとめたリポジトリです。
 
