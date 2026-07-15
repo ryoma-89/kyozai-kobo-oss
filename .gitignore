@@ -1,0 +1,19 @@
+# 依存・ビルド成果物（すべて再生成可能）
+node_modules/
+target/
+target-pdf-fix/
+dist/
+build/
+
+# 手動バックアップ（Gitが役割を代替）
+backups/
+
+# 一時・ローカル環境
+.runtime-test/
+.claude/settings.local.json
+*.log
+Thumbs.db
+Desktop.ini
+
+# TypeScript増分ビルドキャッシュ（環境依存・再生成可能）
+*.tsbuildinfo

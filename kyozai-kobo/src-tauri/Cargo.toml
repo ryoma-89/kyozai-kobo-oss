@@ -1,0 +1,39 @@
+[package]
+name = "kyozai-kobo"
+version = "0.1.0"
+description = "教材工房 - 塾教材LaTeX管理ツール"
+authors = ["Ryoma"]
+edition = "2021"
+license-file = "../../LICENSE"
+
+[lib]
+name = "kyozai_kobo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+axum = { version = "0.8", features = ["multipart"] }
+include_dir = "0.7"
+sha2 = "0.10"
+rand = "0.8"
+image = "0.25"
+kamadak-exif = "0.6"
+
+[dev-dependencies]
+tempdir = "0.3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kyozai-server",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set KK_PORT=8765&& set KK_CODE=11223344&& set KK_DATA_DIR=C:\\Users\\Ryoma\\AppData\\Local\\Temp\\kyozai-e2e-test&& cd /d C:\\Users\\Ryoma\\kojinkaihatsu\\kyozai-kobo\\src-tauri&& cargo run --example server_dev"
+      ],
+      "port": 8765
+    }
+  ]
+}
