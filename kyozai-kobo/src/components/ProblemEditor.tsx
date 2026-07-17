@@ -22,7 +22,7 @@ import { moveProblems } from "../api";
 import { useApp } from "../store";
 import { compiledPdfUrl, ConflictError, isTauri, revokeIfBlobUrl } from "../transport";
 import type { GraphAssetSummary, ProblemFull, VersionFull, VersionSummary } from "../types";
-import { AiConvertDialog } from "./AiConvertDialog";
+import { AiConvertDialog, type AiConvertPreset } from "./AiConvertDialog";
 import { ConflictDialog } from "./ConflictDialog";
 import { LatexEditor, type LatexEditorHandle } from "./LatexEditor";
 import { LatexPreview } from "./LatexPreview";
@@ -54,29 +54,38 @@ const SNIPPETS: { label: string; text: string; cursorOffset?: number }[] = [
   { label: "\\geqq", text: "\\geqq " },
   { label: "\\pi", text: "\\pi " },
   { label: "\\theta", text: "\\theta " },
+  { label: "式番号①", text: "\\cdots ①" },
   {
-    label: "図[中央]",
-    text: "\n\\begin{center}\n\\includegraphics[width=6cm]{}\n\\end{center}\n",
-    cursorOffset: "\n\\begin{center}\n\\includegraphics[width=6cm]{".length,
+    label: "図[自然]",
+    text: "\n\\noindent\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{}\\par\\smallskip\n",
+    cursorOffset: "\n\\noindent\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{".length,
   },
   {
     label: "図[H]",
-    text: "\n\\begin{figure}[H]\n\\centering\n\\includegraphics[width=6cm]{}\n\\caption{}\n\\end{figure}\n",
-    cursorOffset: "\n\\begin{figure}[H]\n\\centering\n\\includegraphics[width=6cm]{".length,
+    text: "\n\\begin{figure}[H]\n\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{}\n\\caption{}\n\\end{figure}\n",
+    cursorOffset: "\n\\begin{figure}[H]\n\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{".length,
   },
 ];
 
 // 図の幅の候補
-const IMG_WIDTHS = ["4cm", "6cm", "8cm", "10cm", "12cm", "\\linewidth"];
+const IMG_WIDTHS = ["0.45\\linewidth", "0.65\\linewidth", "0.80\\linewidth", "\\linewidth", "4cm", "6cm", "8cm"];
 
-/** カーソル位置に確実に留まる中央寄せ図ブロック（フロートではないので位置がずれない） */
-function centerFigureSnippet(stored: string, width: string): string {
-  return `\n\\begin{center}\n\\includegraphics[width=${width}]{${stored}}\n\\end{center}\n`;
+function imageWidthLabel(width: string): string {
+  if (width === "0.45\\linewidth") return "小さめ (45%)";
+  if (width === "0.65\\linewidth") return "自然 (65%)";
+  if (width === "0.80\\linewidth") return "大きめ (80%)";
+  if (width === "\\linewidth") return "列幅いっぱい";
+  return width;
+}
+
+/** カーソル位置に確実に留まり、現在の列幅を基準に左寄せで収まる図ブロック。 */
+function naturalFigureSnippet(stored: string, width: string): string {
+  return `\n\\noindent\\includegraphics[width=${width},height=0.28\\textheight,keepaspectratio]{${stored}}\\par\\smallskip\n`;
 }
 
 /** figure環境 [H] 指定（float パッケージが必要。番号・キャプション付き） */
 function floatFigureSnippet(stored: string, width: string): string {
-  return `\n\\begin{figure}[H]\n\\centering\n\\includegraphics[width=${width}]{${stored}}\n\\caption{}\n\\end{figure}\n`;
+  return `\n\\begin{figure}[H]\n\\includegraphics[width=${width},height=0.28\\textheight,keepaspectratio]{${stored}}\n\\caption{}\n\\end{figure}\n`;
 }
 
 function clearProblemDraft(problemId: number): void {
@@ -109,7 +118,7 @@ export function ProblemEditor() {
   const [versions, setVersions] = useState<VersionSummary[] | null>(null);
   const [versionView, setVersionView] = useState<VersionFull | null>(null);
   const [showMove, setShowMove] = useState(false);
-  const [imgWidth, setImgWidth] = useState("6cm");
+  const [imgWidth, setImgWidth] = useState("0.65\\linewidth");
   const [previewMode, setPreviewMode] = useState<"quick" | "pdf">("quick");
   const [pdfSrc, setPdfSrc] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -117,6 +126,7 @@ export function ProblemEditor() {
   const [graphAssets, setGraphAssets] = useState<GraphAssetSummary[] | null>(null);
   const [zoom, setZoom] = useState(100);
   const [showAi, setShowAi] = useState(false);
+  const [aiPreset, setAiPreset] = useState<(AiConvertPreset & { targetTab?: Tab }) | null>(null);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<ProblemFull | null>(null);
   const previewBoxRef = useRef<HTMLDivElement>(null);
@@ -744,12 +754,59 @@ export function ProblemEditor() {
             グラフを再編集
           </button>
           <button
-            onClick={() => setShowAi(true)}
+            onClick={() => {
+              setAiPreset(null);
+              setShowAi(true);
+            }}
             className="btn btn-outline btn-sm"
             title="写真やテキストをAIでLaTeXへ変換して挿入"
             style={{ borderColor: "rgba(157,108,242,0.52)", color: "var(--purple)", background: "var(--purple-dim)" }}
           >
             <Icon name="sparkle" size={15} /> AI変換
+          </button>
+          <button
+            onClick={() => {
+              setAiPreset({
+                sourceType: "text",
+                text: problem.statement_latex,
+                mode: "generate_answer",
+                title: "AIで解答を生成（高校範囲）",
+                targetTab: "answer",
+              });
+              setShowAi(true);
+            }}
+            disabled={!problem.statement_latex.trim()}
+            className="btn btn-outline btn-sm"
+            title="現在の問題文から高校範囲内の解答を生成"
+          >
+            <Icon name="sparkle" size={15} /> 解答を生成
+          </button>
+          <button
+            onClick={() => {
+              setAiPreset({
+                sourceType: "text",
+                text: [
+                  "【問題文】",
+                  problem.statement_latex.trim(),
+                  "",
+                  "【参照する解答】",
+                  problem.answer_latex.trim(),
+                ].join("\n"),
+                mode: "generate_explanation",
+                title: "AIで詳しい解説を生成（高校範囲）",
+                targetTab: "explanation",
+              });
+              setShowAi(true);
+            }}
+            disabled={!problem.statement_latex.trim() || !problem.answer_latex.trim()}
+            className="btn btn-outline btn-sm"
+            title={
+              problem.answer_latex.trim()
+                ? "現在の解答の解法・式番号・場合分けに沿った詳しい解説を生成"
+                : "先に解答を入力または生成してください"
+            }
+          >
+            <Icon name="sparkle" size={15} /> 解説を生成
           </button>
         </div>
 
@@ -793,7 +850,7 @@ export function ProblemEditor() {
                 >
                   {IMG_WIDTHS.map((w) => (
                     <option key={w} value={w}>
-                      {w === "\\linewidth" ? "幅いっぱい" : w}
+                      {imageWidthLabel(w)}
                     </option>
                   ))}
                 </select>
@@ -812,9 +869,9 @@ export function ProblemEditor() {
                     {a.stored_name}
                   </code>
                   <button
-                    onClick={() => insertSnippet(centerFigureSnippet(a.stored_name, imgWidth))}
+                    onClick={() => insertSnippet(naturalFigureSnippet(a.stored_name, imgWidth))}
                     className="btn btn-outline btn-sm"
-                    title="カーソル位置に中央寄せの図を挿入（フロートしないので指定位置に確実に入ります）"
+                    title="カーソル位置に列幅基準・左寄せ・縦横比維持で図を挿入"
                   >
                     図を挿入
                   </button>
@@ -910,8 +967,14 @@ export function ProblemEditor() {
       {/* AI変換ダイアログ */}
       {showAi && (
         <AiConvertDialog
-          onClose={() => setShowAi(false)}
-          insertTargets={(["statement", "answer", "explanation"] as Tab[]).map((t) => ({
+          onClose={() => {
+            setShowAi(false);
+            setAiPreset(null);
+          }}
+          preset={aiPreset ?? undefined}
+          insertTargets={(["statement", "answer", "explanation"] as Tab[]).filter(
+            (t) => !aiPreset?.targetTab || aiPreset.targetTab === t,
+          ).map((t) => ({
             label: TAB_LABELS[t],
             field: fieldKey[t],
             entityType: "problem",

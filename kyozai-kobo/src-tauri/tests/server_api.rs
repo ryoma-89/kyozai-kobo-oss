@@ -446,7 +446,9 @@ fn dispatch_emits_change_events() {
 
 #[test]
 fn ai_output_validation() {
-    use kyozai_kobo_lib::ai::{scan_latex_security, validate_output};
+    use kyozai_kobo_lib::ai::{
+        scan_latex_security, scan_solution_layout, scan_solution_notation, validate_output,
+    };
 
     let valid = json!({
         "schemaVersion": 1,
@@ -457,7 +459,8 @@ fn ai_output_validation() {
         "warnings": [{"code": "UNCLEAR_SYMBOL", "severity": "warning", "message": "指数が不鮮明"}],
         "uncertainFragments": [{"id": "u1", "description": "第2式の指数", "candidates": ["2", "3"]}],
         "segments": [{"order": 1, "kind": "text", "latex": "次の問いに答えよ。"}],
-        "suggestedInsertTarget": "problem_body"
+        "suggestedInsertTarget": "problem_body",
+        "problems": []
     })
     .to_string();
     let r = validate_output(&valid).expect("正しいJSONは通ること");
@@ -492,6 +495,106 @@ fn ai_output_validation() {
     assert!(warnings.iter().any(|w| w.code == "UNSAFE_IMAGE_PATH"));
     assert!(warnings.iter().all(|w| w.severity == "error"));
     assert!(scan_latex_security("$x^2+1$").is_empty());
+
+    let safe_figure = "\\noindent\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{figure.pdf}\\par";
+    assert!(scan_solution_layout(safe_figure).is_empty());
+    let unsafe_layout = "\\begin{center}\\includegraphics[width=\\textwidth]{figure.pdf}\\end{center}";
+    let layout_warnings = scan_solution_layout(unsafe_layout);
+    assert!(layout_warnings.iter().any(|warning| warning.code == "TWO_COLUMN_LAYOUT"));
+    assert!(layout_warnings.iter().any(|warning| warning.code == "FIGURE_SIZE"));
+    assert!(layout_warnings.iter().all(|warning| warning.severity == "error"));
+
+    let unexplained_notation = scan_solution_notation("$a\\mid b$, $\\max\\{a,b\\}$");
+    assert_eq!(unexplained_notation.len(), 2);
+    assert!(unexplained_notation
+        .iter()
+        .all(|warning| warning.code == "UNEXPLAINED_NOTATION" && warning.severity == "error"));
+    assert!(scan_solution_notation(
+        "$a\\mid b$は$b$が$a$で割り切れることを表し、$\\max\\{a,b\\}$は$a,b$のうち大きい方を表す。"
+    )
+    .is_empty());
+    assert!(scan_solution_notation(
+        "$a\\equiv b\\pmod m$は、$a,b$を$m$で割った余りが等しいことを表す。"
+    )
+    .is_empty());
+    assert!(scan_solution_notation("$x^2+1=0$").is_empty());
+}
+
+#[test]
+fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
+    use kyozai_kobo_lib::ai::{
+        output_schema, validate_output, FIXED_INSTRUCTIONS, SOLUTION_FIXED_INSTRUCTIONS,
+        SOLUTION_REFERENCE_PROFILE,
+    };
+
+    let valid = json!({
+        "schemaVersion": 1,
+        "detectedType": "problem",
+        "latex": "問題A\\par\\medskip 問題B",
+        "plainText": "問題A 問題B",
+        "requiredPackages": [],
+        "warnings": [],
+        "uncertainFragments": [],
+        "segments": [],
+        "suggestedInsertTarget": "problem_body",
+        "problems": [
+            {"title": "二次関数", "statementLatex": "$y=x^2$について答えよ。", "sourceImageIndexes": [1]},
+            {"title": "確率", "statementLatex": "さいころを2回投げる。", "sourceImageIndexes": [1, 2]}
+        ]
+    });
+    let parsed = validate_output(&valid.to_string()).expect("複数問題の構造化出力は通ること");
+    assert_eq!(parsed.problems.len(), 2);
+    assert_eq!(parsed.problems[1].source_image_indexes, vec![1, 2]);
+
+    let mut bad_source = valid.clone();
+    bad_source["problems"][0]["sourceImageIndexes"] = json!([0]);
+    assert!(validate_output(&bad_source.to_string()).is_err());
+
+    let schema = output_schema();
+    let required = schema["required"].as_array().expect("requiredは配列");
+    assert!(required.iter().any(|value| value == "problems"));
+    assert!(FIXED_INSTRUCTIONS.contains("\\cdots ①"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高等学校"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("着眼点 → 方針 → 手順 → 検算・注意点"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("利用できる横幅は常に\\linewidth"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("width=0.65\\linewidth"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("center環境、\\centering、\\textwidth指定は使わない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("主解法を含めて最大3つ"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("【参照する解答】"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("解答にない別解へ勝手に切り替えたり追加したりしない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高校数学で標準的か判断が分かれる記号"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$a\\mid b$ は「$b$が$a$で割り切れる」"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("日本の高校の教科書・授業で一般的なもの"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解答の方針」"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("論理を飛躍させない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("複雑な因数分解、置換後の式、場合分けの条件などを突然提示せず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("その操作が正当である理由"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("自力で同じ流れを再現できる粒度"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("問題と解答・研究問題の完成解答調"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("板書・授業ノート調"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("必要条件だけで進めた場合は最後に十分性"));
+}
+
+#[test]
+fn ai_answer_guidance_has_a_bounded_length() {
+    use kyozai_kobo_lib::ai::{create_job, CreateJobPayload};
+
+    let (_dir, state) = make_state();
+    let error = create_job(
+        &state,
+        CreateJobPayload {
+            source_type: "text".into(),
+            conversion_mode: Some("generate_answer".into()),
+            options: Some(json!({"solutionGuidance": "あ".repeat(1001)})),
+            input_text: Some("$x^2=1$を解け。".into()),
+            input_names: vec![],
+            target_entity_type: None,
+            target_entity_id: None,
+            target_field: None,
+        },
+    )
+    .expect_err("長すぎる解答方針は拒否すること");
+    assert!(error.contains("最大1,000文字"));
 }
 
 #[test]
@@ -661,8 +764,9 @@ fn graph_exports_and_material_insert_are_snapshotted() {
     let conn = state.conn.lock().unwrap();
     let content: String = conn.query_row("SELECT content FROM project_items WHERE id=?1", [item_id], |r| r.get(0)).unwrap();
     assert!(content.contains("assets/graphs/snapshots/graphasset_"));
-    assert!(content.contains("width=0.95\\linewidth"));
-    assert!(content.contains("height=0.72\\textheight,keepaspectratio"));
+    assert!(content.contains("width=0.72\\linewidth"));
+    assert!(!content.contains("\\begin{center}"));
+    assert!(content.contains("height=0.28\\textheight,keepaspectratio"));
     let usage: i64 = conn.query_row("SELECT COUNT(*) FROM graph_assets WHERE graph_id=?1", [&graph_id], |r| r.get(0)).unwrap();
     let snapshot_pdf: String = conn.query_row(
         "SELECT primary_asset_path FROM graph_assets WHERE graph_id=?1",
@@ -753,7 +857,8 @@ fn web_graph_session_fixes_target_and_rejects_stale_material() {
     let completed = graph_web::complete_graph_web_session(&state, session.session_id, graph_id.clone(), 1).unwrap();
     assert_eq!(completed.session.status, "completed");
     assert!(completed.snapshot.inserted_latex.contains("assets/graphs/snapshots/graphasset_"));
-    assert!(completed.snapshot.inserted_latex.contains("width=0.95\\linewidth"));
+    assert!(completed.snapshot.inserted_latex.contains("width=0.72\\linewidth"));
+    assert!(!completed.snapshot.inserted_latex.contains("\\begin{center}"));
     assert!(state.graph_assets_dir().join("snapshots").join(&completed.snapshot.asset_id).join("graph.pdf").is_file());
 
     let stale = graph_web::create_graph_web_session(&state, graph_web::CreateGraphWebSessionPayload {
@@ -1024,4 +1129,143 @@ async fn read_compiled_file_scope_and_origin() {
     assert!(web.is_err());
 
     std::fs::remove_dir_all(&build_dir).ok();
+}
+
+/// 完了済みジョブの挿入（再コンパイル・起動時修復テスト用の最小フィクスチャ）
+fn insert_completed_ai_job(state: &Arc<AppState>, status: &str, compile_status: &str) -> i64 {
+    let structured = json!({
+        "schemaVersion": 1,
+        "detectedType": "math",
+        "latex": "$x^2$",
+        "plainText": "x^2",
+        "requiredPackages": [],
+        "warnings": [],
+        "uncertainFragments": [],
+        "segments": [],
+        "suggestedInsertTarget": "problem_body"
+    })
+    .to_string();
+    let conn = state.conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO ai_conversion_jobs (job_uuid, source_type, conversion_mode, status, progress_message,
+                input_text, output_latex, structured_result_json, compile_status, created_at, updated_at)
+         VALUES (?1, 'text', 'auto', ?2, '', 'x^2', '$x^2$', ?3, ?4, ?5, ?5)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().simple().to_string(),
+            status,
+            structured,
+            compile_status,
+            kyozai_kobo_lib::db::now_str()
+        ],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+#[test]
+fn extracted_problems_are_saved_as_independent_bank_entries() {
+    use kyozai_kobo_lib::ai::{save_extracted_problems, ExtractedProblem};
+
+    let (_dir, state) = make_state();
+    let unit_id = {
+        let conn = state.conn.lock().unwrap();
+        conn.execute("INSERT INTO subjects (name) VALUES ('数学')", [])
+            .unwrap();
+        let subject_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fields (subject_id, name) VALUES (?1, '数学I')",
+            [subject_id],
+        )
+        .unwrap();
+        let field_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO units (field_id, name) VALUES (?1, '二次関数')",
+            [field_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    let ids = save_extracted_problems(
+        &state,
+        job_id,
+        unit_id,
+        vec![
+            ExtractedProblem {
+                title: "平方完成".into(),
+                statement_latex: "$y=x^2-4x+3$の最小値を求めよ。".into(),
+                source_image_indexes: vec![1],
+            },
+            ExtractedProblem {
+                title: "放物線".into(),
+                statement_latex: "放物線$y=x^2$を平行移動せよ。".into(),
+                source_image_indexes: vec![1, 2],
+            },
+        ],
+        false,
+    )
+    .expect("複数問題を一括保存できること");
+    assert_eq!(ids.len(), 2);
+
+    let conn = state.conn.lock().unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM problems WHERE unit_id=?1 AND memo='AI変換から一括作成'",
+            [unit_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+/// 再コンパイル後にジョブが「コンパイル中」のまま残らないこと（回帰: status復元漏れ）
+#[test]
+fn recompile_restores_completed_status() {
+    let (_dir, state) = make_state();
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+
+    let result = kyozai_kobo_lib::ai::recompile_job(&state, job_id).unwrap();
+    assert_eq!(
+        result.get("status").and_then(Value::as_str),
+        Some("completed"),
+        "再コンパイル後にstatusが完了へ戻っていない: {result}"
+    );
+    // TeX未導入環境ではskipped、導入済みならok/failedのいずれかになる
+    let compile_status = result
+        .get("compileStatus")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        ["ok", "failed", "skipped"].contains(&compile_status),
+        "compileStatusが不正: {compile_status}"
+    );
+    // 完了扱いに戻っているため、編集・削除など完了前提の操作が可能
+    kyozai_kobo_lib::ai::update_job_latex(&state, job_id, "$y^2$".into())
+        .expect("再コンパイル後にLaTeX編集がブロックされている");
+}
+
+/// 起動時修復: 変換・コンパイル結果が揃った'compiling'残骸は完了へ復旧し、
+/// 結果のない実行中ジョブは失敗へ畳む
+#[test]
+fn startup_repair_recovers_stuck_compiling_jobs() {
+    let (_dir, state) = make_state();
+    let stuck = insert_completed_ai_job(&state, "compiling", "ok");
+    let interrupted = insert_completed_ai_job(&state, "converting", "none");
+
+    {
+        let conn = state.conn.lock().unwrap();
+        kyozai_kobo_lib::ai::repair_interrupted_jobs(&conn);
+    }
+
+    let conn = state.conn.lock().unwrap();
+    let status_of = |id: i64| -> String {
+        conn.query_row(
+            "SELECT status FROM ai_conversion_jobs WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(status_of(stuck), "completed", "compiling残骸が復旧されない");
+    assert_eq!(status_of(interrupted), "failed", "実行中ジョブが失敗へ畳まれない");
 }

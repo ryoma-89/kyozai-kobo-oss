@@ -145,7 +145,7 @@ fn is_safe_token(s: &str) -> bool {
 }
 
 pub(crate) fn safe_width(value: Option<&str>) -> String {
-    let v = value.unwrap_or("0.95\\linewidth").trim();
+    let v = value.unwrap_or("0.72\\linewidth").trim();
     let ok = !v.is_empty()
         && v.len() <= 40
         && !v.contains('\n')
@@ -157,7 +157,7 @@ pub(crate) fn safe_width(value: Option<&str>) -> String {
     if ok {
         v.to_string()
     } else {
-        "0.95\\linewidth".to_string()
+        "0.72\\linewidth".to_string()
     }
 }
 
@@ -392,7 +392,7 @@ fn copy_dir_all(src: &Path, dest: &Path) -> Result<(), String> {
 
 fn make_latex(asset_id: &str, primary_name: &str, width: &str) -> String {
     format!(
-        "\n\\begin{{center}}\n  \\includegraphics[width={},height=0.72\\textheight,keepaspectratio]{{assets/graphs/{}/{}}}\n\\end{{center}}\n",
+        "\n\\noindent\\includegraphics[width={},height=0.28\\textheight,keepaspectratio]{{assets/graphs/{}/{}}}\\par\\smallskip\n",
         width, asset_id, primary_name
     )
 }
@@ -702,7 +702,7 @@ pub fn start_graph_integration(
     }
 
     let preferred = get_setting(&conn, "graph_preferred_output").unwrap_or_else(|| "pdf".into());
-    let width = get_setting(&conn, "graph_insert_width").unwrap_or_else(|| "0.95\\linewidth".into());
+    let width = get_setting(&conn, "graph_insert_width").unwrap_or_else(|| "0.72\\linewidth".into());
     let request = json!({
         "protocolVersion": PROTOCOL_VERSION,
         "requestId": request_id,

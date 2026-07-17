@@ -525,6 +525,13 @@ fn dispatch_inner(
             arg::<Option<String>>(args, "title")?.unwrap_or_default(),
             arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
         )?),
+        "ai_save_extracted_problems" => ok(crate::ai::save_extracted_problems(
+            state,
+            arg(args, "jobId")?,
+            arg(args, "unitId")?,
+            arg(args, "problems")?,
+            arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
+        )?),
         "ai_mark_inserted" => ok(crate::ai::mark_inserted(
             state,
             arg(args, "jobId")?,

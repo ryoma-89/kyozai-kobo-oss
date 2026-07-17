@@ -209,6 +209,35 @@ export function SettingsView() {
       </section>
 
       <section className="mb-6 space-y-3">
+        {sectionTitle("AI解答・解説の参考スタイル")}
+        <p className="text-xs" style={{ color: "var(--muted)" }}>
+          提供された駿台の「研究問題・問題と解答」は完成解答の簡潔さへ、
+          「板書・授業ノート」は着眼点や定石を説明する詳しさへ反映します。
+          原文を転載せず、解法の選び方と記述様式を一般化して使用します。
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={(values["solution_reference_style_enabled"] ?? "1") !== "0"}
+            onChange={(e) => set("solution_reference_style_enabled", e.target.checked ? "1" : "0")}
+          />
+          参考資料に寄せた解答・解説を生成する
+        </label>
+        <div>
+          <label className="section-label mb-0.5 block">追加の書き方指定（任意）</label>
+          <textarea
+            value={values["solution_reference_custom"] ?? ""}
+            onChange={(e) => set("solution_reference_custom", e.target.value.slice(0, 6000))}
+            className="input-area h-28 w-full resize-y text-xs"
+            placeholder="例：解答は簡潔に、解説では置換を選ぶ理由を特に詳しく書く"
+          />
+          <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+            数学的正確さ、高校範囲、2段組の列幅、図の自然な配置、「\cdots ①」形式が常に優先されます。
+          </p>
+        </div>
+      </section>
+
+      <section className="mb-6 space-y-3">
         {sectionTitle("TeX環境")}
         <p className="text-xs" style={{ color: "var(--muted)" }}>
           PDF生成には TeX Live または MiKTeX が必要です（コンパイル方式: uplatex + dvipdfmx）。
@@ -261,10 +290,10 @@ export function SettingsView() {
             <div>
               <label className="section-label mb-0.5 block">標準挿入幅</label>
               <input
-                value={values["graph_insert_width"] ?? "0.95\\linewidth"}
+                value={values["graph_insert_width"] ?? "0.72\\linewidth"}
                 onChange={(e) => set("graph_insert_width", e.target.value)}
                 className="input w-full font-mono text-xs"
-                placeholder="0.95\\linewidth"
+                placeholder="0.72\\linewidth"
               />
             </div>
           </div>
@@ -276,7 +305,7 @@ export function SettingsView() {
                 `graph_app_path=${values["graph_app_path"] ?? ""}`,
                 `graph_integration_dir=${values["graph_integration_dir"] ?? "(default)"}`,
                 `graph_preferred_output=${values["graph_preferred_output"] ?? "pdf"}`,
-                `graph_insert_width=${values["graph_insert_width"] ?? "0.95\\linewidth"}`,
+                `graph_insert_width=${values["graph_insert_width"] ?? "0.72\\linewidth"}`,
               ].join("\n")}
               className="input-area h-20 w-full resize-none font-mono text-xs"
             />

@@ -6,6 +6,7 @@ import {
   aiMarkInserted,
   aiRecompileJob,
   aiRetryJob,
+  aiSaveExtractedProblems,
   aiSaveAsPart,
   aiSaveAsProblem,
   aiStoreInputImage,
@@ -14,7 +15,7 @@ import {
 } from "../api";
 import { useApp } from "../store";
 import { buildFileUrl, isTauri } from "../transport";
-import type { AiJob } from "../types";
+import type { AiExtractedProblem, AiJob } from "../types";
 import { LatexEditor } from "./LatexEditor";
 import { UnitPicker } from "./ProblemList";
 import { Icon } from "./Icon";
@@ -22,10 +23,13 @@ import { Icon } from "./Icon";
 /** 変換モード一覧 */
 const MODES: { value: string; label: string; experimental?: boolean }[] = [
   { value: "auto", label: "自動判定" },
+  { value: "problem_bank_import", label: "問題バンク取込（複数対応）" },
   { value: "math_only", label: "数式のみ" },
   { value: "problem", label: "問題文" },
   { value: "problem_with_subquestions", label: "問題文＋小問" },
   { value: "answer_explanation", label: "解答・解説" },
+  { value: "generate_answer", label: "解答を生成（高校範囲）" },
+  { value: "generate_explanation", label: "解説を生成（高校範囲）" },
   { value: "table", label: "表" },
   { value: "matrix", label: "行列" },
   { value: "cases", label: "場合分け" },
@@ -54,6 +58,15 @@ function booleanOption(
   return typeof value === "boolean" ? value : fallback;
 }
 
+function stringOption(
+  options: Record<string, unknown> | undefined,
+  key: string,
+  fallback = "",
+): string {
+  const value = options?.[key];
+  return typeof value === "string" ? value : fallback;
+}
+
 function reformatOption(options: Record<string, unknown> | undefined): boolean {
   if (typeof options?.reformat === "boolean") return options.reformat;
   if (typeof options?.faithful === "boolean") return !options.faithful;
@@ -73,6 +86,20 @@ export interface InsertTarget {
   entityType: string;
   entityId: number;
   insert: (latex: string) => void;
+}
+
+export interface AiConvertPreset {
+  sourceType?: "image" | "text";
+  text?: string;
+  mode?: string;
+  title?: string;
+}
+
+function extractedProblemsOf(job?: AiJob | null): AiExtractedProblem[] {
+  return (job?.structuredResult?.problems ?? []).map((problem) => ({
+    ...problem,
+    sourceImageIndexes: [...problem.sourceImageIndexes],
+  }));
 }
 
 /** 画像ファイル → 向き補正・縮小済みのJPEG/PNG DataURL */
@@ -122,19 +149,23 @@ export function AiConvertDialog({
   onClose,
   insertTargets,
   initialJob,
+  preset,
 }: {
   onClose: () => void;
   insertTargets?: InsertTarget[];
   initialJob?: AiJob | null;
+  preset?: AiConvertPreset;
 }) {
   const { showToast, confirm, bumps } = useApp();
   const [step, setStep] = useState<"input" | "running" | "review">(
     initialJob ? (RUNNING_STATUSES.includes(initialJob.status) ? "running" : "review") : "input",
   );
-  const [sourceType, setSourceType] = useState<"image" | "text">("image");
+  const [sourceType, setSourceType] = useState<"image" | "text">(
+    initialJob?.sourceType ?? preset?.sourceType ?? (preset?.text ? "text" : "image"),
+  );
   const [images, setImages] = useState<LocalImage[]>([]);
-  const [text, setText] = useState("");
-  const [mode, setMode] = useState(initialJob?.conversionMode ?? "auto");
+  const [text, setText] = useState(initialJob?.inputText ?? preset?.text ?? "");
+  const [mode, setMode] = useState(initialJob?.conversionMode ?? preset?.mode ?? "auto");
   const [reformat, setReformat] = useState(() => reformatOption(initialJob?.options));
   const [enumerateSub, setEnumerateSub] = useState(() =>
     booleanOption(initialJob?.options, "enumerateSubquestions", true),
@@ -145,6 +176,9 @@ export function AiConvertDialog({
   const [useTemplateContext, setUseTemplateContext] = useState(() =>
     booleanOption(initialJob?.options, "useTemplateContext", true),
   );
+  const [solutionGuidance, setSolutionGuidance] = useState(() =>
+    stringOption(initialJob?.options, "solutionGuidance"),
+  );
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<AiJob | null>(initialJob ?? null);
   const [latex, setLatex] = useState(initialJob?.outputLatex ?? "");
@@ -153,7 +187,12 @@ export function AiConvertDialog({
   const [showLog, setShowLog] = useState(false);
   const [showUnitPicker, setShowUnitPicker] = useState(false);
   const [dataDir, setDataDir] = useState<string | null>(null);
-  const [reviewPane, setReviewPane] = useState<"source" | "preview" | "latex" | "warnings">("latex");
+  const [reviewPane, setReviewPane] = useState<"source" | "preview" | "latex" | "warnings" | "problems">(
+    extractedProblemsOf(initialJob).length > 0 ? "problems" : "latex",
+  );
+  const [problemDrafts, setProblemDrafts] = useState<AiExtractedProblem[]>(() =>
+    extractedProblemsOf(initialJob),
+  );
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 900);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -187,6 +226,9 @@ export function AiConvertDialog({
         if (!RUNNING_STATUSES.includes(j.status)) {
           if (j.status === "completed") {
             setLatex(j.outputLatex);
+            const extracted = extractedProblemsOf(j);
+            setProblemDrafts(extracted);
+            setReviewPane(extracted.length > 0 ? "problems" : "latex");
             setStep("review");
           } else if (j.status === "failed") {
             setStep("review");
@@ -301,6 +343,7 @@ export function AiConvertDialog({
           displayMath,
           useTemplateContext,
           suggestPackages: true,
+          solutionGuidance: mode === "generate_answer" ? solutionGuidance.trim() : "",
         },
         inputText: text,
         inputNames: sourceType === "image" ? images.map((i) => i.name) : [],
@@ -354,8 +397,10 @@ export function AiConvertDialog({
         displayMath,
         useTemplateContext,
         suggestPackages: booleanOption(job.options, "suggestPackages", true),
+        solutionGuidance: mode === "generate_answer" ? solutionGuidance.trim() : "",
       });
       setJob(j);
+      setProblemDrafts([]);
       setStep("running");
     } catch (e) {
       showToast(String(e), "error");
@@ -365,6 +410,7 @@ export function AiConvertDialog({
   };
 
   const uncertainList = job?.uncertainFragments ?? [];
+  const hasBlockingWarnings = (job?.warnings ?? []).some((warning) => warning.severity === "error");
   const allConfirmed =
     uncertainList.length === 0 ||
     overrideUncertain ||
@@ -418,9 +464,25 @@ export function AiConvertDialog({
     if (!job) return;
     const confirmed = await guardInsert();
     if (!confirmed) return;
-    const title = window.prompt("問題のタイトル", "AI変換問題");
-    if (title == null) return;
     try {
+      if (problemDrafts.length > 0) {
+        const combined = problemDrafts.map((problem) => problem.statementLatex.trim()).join("\n\n\\par\\medskip\n\n");
+        await aiUpdateJobLatex(job.id, combined);
+        const checkedJob = await aiRecompileJob(job.id);
+        setJob(checkedJob);
+        setLatex(combined);
+        if (checkedJob.compileStatus !== "ok") {
+          throw new Error("編集後の問題文をコンパイルできませんでした。内容を確認してください。");
+        }
+        const ids = await aiSaveExtractedProblems(job.id, unitId, problemDrafts, confirmed);
+        showToast(`${ids.length}件の問題を一括保存しました`);
+        setShowUnitPicker(false);
+        onClose();
+        return;
+      }
+
+      const title = window.prompt("問題のタイトル", "AI変換問題");
+      if (title == null) return;
       await aiUpdateJobLatex(job.id, latex);
       const id = await aiSaveAsProblem(job.id, unitId, title, confirmed);
       showToast(`新規問題として保存しました (ID: ${id})`);
@@ -443,10 +505,12 @@ export function AiConvertDialog({
 
   const severityColor = (s: string) =>
     s === "error" ? "var(--danger)" : s === "warning" ? "var(--warn)" : "var(--muted)";
+  const isGenerationMode = mode === "generate_answer" || mode === "generate_explanation";
+  const isProblemImportMode = mode === "problem_bank_import";
 
   // ---- 入力ステップ ----
   const renderInput = () => (
-    <div className="space-y-4">
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
       <div className="flex gap-1">
         <button
           onClick={() => setSourceType("image")}
@@ -562,7 +626,11 @@ export function AiConvertDialog({
           onChange={(e) => setText(e.target.value)}
           className="input w-full font-mono text-xs"
           rows={10}
-          placeholder="変換したい文章・数式を貼り付けてください（Word・PDFからのコピー等）"
+          placeholder={
+            mode === "generate_explanation"
+              ? "【問題文】と【参照する解答】を貼り付けてください"
+              : "変換したい文章・数式を貼り付けてください（Word・PDFからのコピー等）"
+          }
         />
       )}
 
@@ -586,21 +654,57 @@ export function AiConvertDialog({
             関数グラフの場合は、教材編集画面の「グラフを挿入」（グラフ作成アプリ連携）の方が正確です。
           </p>
         )}
+        {mode === "problem_bank_import" && (
+          <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
+            1枚・複数枚の画像から独立した問題をすべて分離します。不要な大問番号・下線・採点欄は除去し、
+            小問番号や選択肢など解答に必要な記号は残します。
+          </p>
+        )}
+        {isGenerationMode && (
+          <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
+            設定が有効なら、参考資料の完成解答調・板書調を使い分けます。日本の高校数学の範囲だけを使い、
+            2段組の列幅に収まるよう長い式を改行し、図は列幅基準の自然な大きさで左寄せ配置します。
+            {mode === "generate_answer"
+              ? " 重要な別解がある場合は、主解法を含めて最大3つまで出力します。"
+              : " 解説は入力された参照解答の解法・式番号・場合分けに沿わせます。"}
+            高校範囲か判断が分かれる記号は、初出で意味を日本語で説明します。
+            式を番号で引用する場合は「\cdots ①」形式に統一します。
+          </p>
+        )}
       </div>
 
+      {mode === "generate_answer" && (
+        <div>
+          <label className="section-label mb-1 block">解答の方針（任意）</label>
+          <textarea
+            value={solutionGuidance}
+            onChange={(event) => setSolutionGuidance(event.target.value.slice(0, 1000))}
+            className="input-area min-h-20 w-full resize-y text-xs"
+            placeholder="例：ベクトルを使わず座標を置いて解く／相加平均・相乗平均の関係を用いる"
+          />
+          <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+            指定が数学的に適切で高校範囲に収まる場合に優先します。空欄ならAIが最も自然な方針を選びます。
+          </p>
+        </div>
+      )}
+
       <div className="grid gap-1 text-xs sm:grid-cols-2" style={{ color: "var(--text)" }}>
-        <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={!reformat} onChange={(e) => setReformat(!e.target.checked)} />
-          原文に忠実（推奨）
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={reformat} onChange={(e) => setReformat(e.target.checked)} />
-          教材向けに体裁を整える
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={enumerateSub} onChange={(e) => setEnumerateSub(e.target.checked)} />
-          小問をenumerateへ変換
-        </label>
+        {!isGenerationMode && (
+          <>
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={!reformat} onChange={(e) => setReformat(!e.target.checked)} />
+              原文に忠実（推奨）
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={reformat} onChange={(e) => setReformat(e.target.checked)} />
+              教材向けに体裁を整える
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={enumerateSub} onChange={(e) => setEnumerateSub(e.target.checked)} />
+              小問をenumerateへ変換
+            </label>
+          </>
+        )}
         <label className="flex items-center gap-1.5">
           <input type="checkbox" checked={displayMath} onChange={(e) => setDisplayMath(e.target.checked)} />
           数式を別行立てにする
@@ -615,7 +719,13 @@ export function AiConvertDialog({
         </label>
       </div>
       <p className="text-[11px]" style={{ color: "var(--muted)" }}>
-        AIは問題を解かず、解答の生成も行いません。不鮮明な箇所は推測せず「要確認」として報告されます。
+        {isGenerationMode
+          ? mode === "generate_explanation"
+            ? "参照解答の内容に沿って、定石・必要知識・適用理由・手順・検算まで再現できる詳しさで説明します。"
+            : "答えだけでなく、正答に必要な式変形・場合分けと、重要な場合に限り最大3つの解法を生成します。"
+          : isProblemImportMode
+            ? "問題文だけを抽出し、解答・解説や不要な紙面要素は取り込みません。抽出後に問題ごとに編集・除外できます。"
+            : "AIは原文にない内容を補わず転記します。不鮮明な箇所は推測せず「要確認」として報告されます。"}
       </p>
 
       <div className="flex justify-end gap-2">
@@ -627,7 +737,7 @@ export function AiConvertDialog({
           disabled={busy || (sourceType === "image" ? images.length === 0 : !text.trim())}
           className="btn btn-solid"
         >
-          {busy ? "準備中..." : <><Icon name="play" size={15} /> LaTeXへ変換</>}
+          {busy ? "準備中..." : <><Icon name="play" size={15} /> {isGenerationMode ? "生成する" : isProblemImportMode ? "問題文を抽出" : "LaTeXへ変換"}</>}
         </button>
       </div>
     </div>
@@ -670,6 +780,12 @@ export function AiConvertDialog({
         <pre className="text-xs whitespace-pre-wrap" style={{ color: "var(--text)" }}>
           {job?.inputText || "（入力なし）"}
         </pre>
+      )}
+      {job && stringOption(job.options, "solutionGuidance").trim() && (
+        <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
+          <p className="section-label mb-1">追加した解答の方針</p>
+          <p className="whitespace-pre-wrap">{stringOption(job.options, "solutionGuidance").trim()}</p>
+        </div>
       )}
     </div>
   );
@@ -785,16 +901,86 @@ export function AiConvertDialog({
   );
 
   const renderLatexPane = () => (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <LatexEditor value={latex} onChange={setLatex} className="min-h-[180px] flex-1" placeholder="変換結果のLaTeX" />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <LatexEditor value={latex} onChange={setLatex} className="min-h-0 flex-1" placeholder="変換結果のLaTeX" />
+    </div>
+  );
+
+  const syncProblemDrafts = (next: AiExtractedProblem[]) => {
+    setProblemDrafts(next);
+    setLatex(next.map((problem) => problem.statementLatex.trim()).join("\n\n\\par\\medskip\n\n"));
+  };
+
+  const renderProblemsPane = () => (
+    <div className="min-h-0 flex-1 overflow-y-auto rounded border p-2" style={{ borderColor: "var(--border)" }}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs" style={{ color: "var(--muted)" }}>
+          抽出した{problemDrafts.length}件を別々の問題として保存します。タイトル・問題文を修正でき、不要な問題は除外できます。
+        </p>
+        <span className="badge badge-muted shrink-0">{problemDrafts.length}件</span>
+      </div>
+      <div className="space-y-2">
+        {problemDrafts.map((problem, index) => (
+          <section key={`${index}-${problem.sourceImageIndexes.join("-")}`} className="card p-2">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-xs font-bold">問題 {index + 1}</span>
+              {problem.sourceImageIndexes.length > 0 && (
+                <span className="text-[10px]" style={{ color: "var(--muted)" }}>
+                  元画像: {problem.sourceImageIndexes.map((value) => `${value}枚目`).join("・")}
+                </span>
+              )}
+              <button
+                type="button"
+                className="btn btn-danger btn-sm ml-auto"
+                onClick={() => syncProblemDrafts(problemDrafts.filter((_, current) => current !== index))}
+              >
+                除外
+              </button>
+            </div>
+            <input
+              className="input mb-1 w-full text-xs font-semibold"
+              value={problem.title}
+              maxLength={200}
+              aria-label={`問題${index + 1}のタイトル`}
+              onChange={(event) =>
+                syncProblemDrafts(
+                  problemDrafts.map((item, current) =>
+                    current === index ? { ...item, title: event.target.value } : item,
+                  ),
+                )
+              }
+            />
+            <textarea
+              className="input min-h-28 w-full resize-y font-mono text-xs"
+              value={problem.statementLatex}
+              aria-label={`問題${index + 1}の問題文`}
+              onChange={(event) =>
+                syncProblemDrafts(
+                  problemDrafts.map((item, current) =>
+                    current === index ? { ...item, statementLatex: event.target.value } : item,
+                  ),
+                )
+              }
+            />
+          </section>
+        ))}
+      </div>
     </div>
   );
 
   const renderReview = () => (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
       {isNarrow ? (
         <>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
+            {problemDrafts.length > 0 && (
+              <button
+                onClick={() => setReviewPane("problems")}
+                className={`tab ${reviewPane === "problems" ? "tab-active" : ""}`}
+              >
+                抽出問題({problemDrafts.length})
+              </button>
+            )}
             {(
               [
                 ["source", "元画像・原文"],
@@ -812,16 +998,17 @@ export function AiConvertDialog({
               </button>
             ))}
           </div>
-          <div className="flex min-h-[300px] flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {reviewPane === "source" && renderSourcePane()}
             {reviewPane === "preview" && renderPreviewPane()}
             {reviewPane === "latex" && renderLatexPane()}
             {reviewPane === "warnings" && renderWarningsPane()}
+            {reviewPane === "problems" && renderProblemsPane()}
           </div>
         </>
       ) : (
         <>
-          <div className="grid min-h-[260px] flex-1 grid-cols-2 gap-2">
+          <div className="grid min-h-[180px] flex-1 grid-cols-2 gap-2 overflow-hidden">
             <div className="flex min-h-0 flex-col">
               <p className="section-label mb-1">元画像・入力文</p>
               {renderSourcePane()}
@@ -831,15 +1018,17 @@ export function AiConvertDialog({
               {renderPreviewPane()}
             </div>
           </div>
-          <div className="flex min-h-[160px] flex-col">
-            <p className="section-label mb-1">LaTeXソース（編集可能）</p>
-            {renderLatexPane()}
+          <div className="flex min-h-[160px] flex-[0_0_34%] flex-col overflow-hidden">
+            <p className="section-label mb-1">
+              {problemDrafts.length > 0 ? `抽出した問題（${problemDrafts.length}件・編集可能）` : "LaTeXソース（編集可能）"}
+            </p>
+            {problemDrafts.length > 0 ? renderProblemsPane() : renderLatexPane()}
           </div>
-          <div className="max-h-48 min-h-[80px]">{renderWarningsPane()}</div>
+          <div className="max-h-48 min-h-[80px] shrink-0 overflow-hidden">{renderWarningsPane()}</div>
         </>
       )}
 
-      <div className="flex flex-wrap items-center justify-end gap-1.5 border-t pt-2" style={{ borderColor: "var(--border)" }}>
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t pt-2" style={{ borderColor: "var(--border)" }}>
         <button onClick={recompile} disabled={busy} className="btn btn-outline btn-sm">
           ⟳ 再コンパイル
         </button>
@@ -847,30 +1036,42 @@ export function AiConvertDialog({
           再変換
         </button>
         <span className="mx-1 h-4 w-px" style={{ background: "var(--border)" }} />
-        {(insertTargets ?? []).map((t) => (
+        {problemDrafts.length > 0 ? (
           <button
-            key={t.field}
-            onClick={() => doInsert(t)}
-            disabled={busy || !latex.trim() || job?.status === "failed"}
+            onClick={() => setShowUnitPicker(true)}
+            disabled={busy || hasBlockingWarnings || problemDrafts.some((problem) => !problem.title.trim() || !problem.statementLatex.trim()) || job?.status === "failed"}
             className="btn btn-solid btn-sm"
           >
-            {t.label}へ挿入
+            {problemDrafts.length}件を問題バンクへ一括保存
           </button>
-        ))}
-        <button
-          onClick={saveAsPart}
-          disabled={busy || !latex.trim() || job?.status === "failed"}
-          className="btn btn-outline btn-sm"
-        >
-          部品として保存
-        </button>
-        <button
-          onClick={() => setShowUnitPicker(true)}
-          disabled={busy || !latex.trim() || job?.status === "failed"}
-          className="btn btn-outline btn-sm"
-        >
-          新規問題として保存
-        </button>
+        ) : (
+          <>
+            {(insertTargets ?? []).map((t) => (
+              <button
+                key={t.field}
+                onClick={() => doInsert(t)}
+                disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+                className="btn btn-solid btn-sm"
+              >
+                {t.label}へ挿入
+              </button>
+            ))}
+            <button
+              onClick={saveAsPart}
+              disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+              className="btn btn-outline btn-sm"
+            >
+              部品として保存
+            </button>
+            <button
+              onClick={() => setShowUnitPicker(true)}
+              disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+              className="btn btn-outline btn-sm"
+            >
+              新規問題として保存
+            </button>
+          </>
+        )}
         <button onClick={onClose} className="btn btn-ghost btn-sm">
           閉じる
         </button>
@@ -886,13 +1087,13 @@ export function AiConvertDialog({
       }}
     >
       <div
-        className="fade-in flex max-h-[95vh] w-full max-w-5xl flex-col rounded-md border shadow-2xl"
+        className="fade-in flex h-[95dvh] max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border shadow-2xl"
         style={{ background: "var(--panel)", borderColor: "var(--border-strong)" }}
       >
-        <div className="flex items-center justify-between border-b px-4 py-2.5" style={{ borderColor: "var(--border)" }}>
+        <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5" style={{ borderColor: "var(--border)" }}>
           <h2 className="text-sm font-bold">
             <span className="brand-mark mr-1.5">▸</span>
-            AI変換（写真・テキスト → LaTeX）
+            {preset?.title ?? (isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
             {job && (
               <span className="badge badge-muted ml-2">ジョブ #{job.id}</span>
             )}
@@ -903,7 +1104,7 @@ export function AiConvertDialog({
             </button>
           )}
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
           {step === "input" && renderInput()}
           {step === "running" && renderRunning()}
           {step === "review" && renderReview()}
@@ -912,7 +1113,7 @@ export function AiConvertDialog({
 
       {showUnitPicker && (
         <UnitPicker
-          title="保存先の単元を選択"
+          title={problemDrafts.length > 0 ? `${problemDrafts.length}件の保存先単元を選択` : "保存先の単元を選択"}
           onClose={() => setShowUnitPicker(false)}
           onPick={saveAsProblem}
         />

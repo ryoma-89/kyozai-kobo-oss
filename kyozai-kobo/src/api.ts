@@ -1,5 +1,6 @@
 import { invoke, invokeTauriOnly } from "./transport";
 import type {
+  AiExtractedProblem,
   AiJob,
   Attachment,
   BookletKind,
@@ -424,6 +425,13 @@ export const aiSaveAsProblem = (
   confirmed: boolean,
 ) =>
   invoke<number>("ai_save_as_problem", { jobId, unitId, title, confirmed });
+export const aiSaveExtractedProblems = (
+  jobId: number,
+  unitId: number,
+  problems: AiExtractedProblem[],
+  confirmed: boolean,
+) =>
+  invoke<number[]>("ai_save_extracted_problems", { jobId, unitId, problems, confirmed });
 export const aiMarkInserted = (
   jobId: number,
   entityType: string,

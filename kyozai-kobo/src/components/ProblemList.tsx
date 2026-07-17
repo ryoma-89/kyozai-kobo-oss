@@ -4,6 +4,8 @@ import { createProblem, deleteProblems, exportBank, listProblems, moveProblems }
 import { useApp } from "../store";
 import { isTauri } from "../transport";
 import type { DifficultyRank, ProblemSummary, RequiredFilter } from "../types";
+import { AiConvertDialog } from "./AiConvertDialog";
+import { Icon } from "./Icon";
 import { DIFFICULTY_RANKS, DifficultyBadge, DifficultyRankBadge, Modal, TagChips } from "./ui";
 
 /** 選択中の単元の問題一覧（複数選択で一括移動・削除・エクスポート） */
@@ -13,6 +15,7 @@ export function ProblemList() {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showMove, setShowMove] = useState(false);
+  const [showAiImport, setShowAiImport] = useState(false);
   const [rankFilters, setRankFilters] = useState<(DifficultyRank | "__unset")[]>([]);
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("all");
   const seenProblemsBumpRef = useRef(bumps.problems);
@@ -195,9 +198,18 @@ export function ProblemList() {
             <option value="not_required">★以外</option>
           </select>
         </span>
-        <button onClick={onCreate} className="problem-list-new btn btn-solid btn-sm">
-          ＋ 新規問題 <span className="problem-list-shortcut">(Ctrl+N)</span>
-        </button>
+        <span className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={() => setShowAiImport(true)}
+            className="btn btn-outline btn-sm"
+            title="1枚または複数枚の写真から、複数の問題文を分離して取り込む"
+          >
+            <Icon name="sparkle" size={15} /> AIで写真取込
+          </button>
+          <button onClick={onCreate} className="problem-list-new btn btn-solid btn-sm">
+            ＋ 新規問題 <span className="problem-list-shortcut">(Ctrl+N)</span>
+          </button>
+        </span>
       </div>
 
       {/* 一括操作バー */}
@@ -326,6 +338,19 @@ export function ProblemList() {
           excludeUnitId={selectedUnitId}
           onPick={onBulkMove}
           onClose={() => setShowMove(false)}
+        />
+      )}
+      {showAiImport && (
+        <AiConvertDialog
+          preset={{
+            sourceType: "image",
+            mode: "problem_bank_import",
+            title: "AIで写真から問題バンクへ取り込む",
+          }}
+          onClose={() => {
+            setShowAiImport(false);
+            void load(true);
+          }}
         />
       )}
     </div>

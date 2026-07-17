@@ -1200,7 +1200,7 @@ pub(crate) fn prepare_graph_snapshot(
     }
     let insert_width = safe_width(get_setting(conn, "graph_insert_width").as_deref());
     let inserted_latex = format!(
-        "\\begin{{center}}\n  \\includegraphics[width={},height=0.72\\textheight,keepaspectratio]{{assets/graphs/snapshots/{}/graph.pdf}}\n\\end{{center}}",
+        "\\noindent\\includegraphics[width={},height=0.28\\textheight,keepaspectratio]{{assets/graphs/snapshots/{}/graph.pdf}}\\par\\smallskip",
         insert_width, asset_id
     );
     Ok(PreparedGraphSnapshot {

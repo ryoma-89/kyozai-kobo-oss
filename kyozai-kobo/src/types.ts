@@ -566,6 +566,12 @@ export interface AiSegment {
   latex: string;
 }
 
+export interface AiExtractedProblem {
+  title: string;
+  statementLatex: string;
+  sourceImageIndexes: number[];
+}
+
 export interface AiStructuredResult {
   schemaVersion: number;
   detectedType: string;
@@ -576,6 +582,8 @@ export interface AiStructuredResult {
   uncertainFragments: AiUncertainFragment[];
   segments: AiSegment[];
   suggestedInsertTarget: string;
+  /** 問題バンク取込モードで抽出された、独立保存可能な問題。 */
+  problems?: AiExtractedProblem[];
 }
 
 export interface AiGraphSpec {
