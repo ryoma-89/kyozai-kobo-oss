@@ -232,7 +232,7 @@ export function SettingsView() {
             placeholder="例：解答は簡潔に、解説では置換を選ぶ理由を特に詳しく書く"
           />
           <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
-            数学的正確さ、高校範囲、2段組の列幅、図の自然な配置、「\cdots ①」形式が常に優先されます。
+            数学的正確さ、高校範囲、生成時に選んだ段組の本文幅、図の自然な配置、「\cdots ①」形式が常に優先されます。
           </p>
         </div>
       </section>

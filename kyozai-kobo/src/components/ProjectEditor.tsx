@@ -924,6 +924,9 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
         <ItemEditModal
           projectId={project.id}
           item={editItem}
+          solutionLayout={
+            project.settings.two_column_mode === "none" ? "single_column" : "two_column"
+          }
           onClose={() => setEditItem(null)}
           onSaved={async () => {
             setEditItem(null);
@@ -1203,11 +1206,13 @@ function SettingsModal({
 function ItemEditModal({
   projectId,
   item,
+  solutionLayout,
   onClose,
   onSaved,
 }: {
   projectId: number;
   item: ProjectItem;
+  solutionLayout: "two_column" | "single_column";
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -1447,6 +1452,7 @@ function ItemEditModal({
         {showAi && (
           <AiConvertDialog
             onClose={() => setShowAi(false)}
+            preset={{ solutionLayout }}
             insertTargets={[
               {
                 label: "この項目へ挿入",
@@ -1511,6 +1517,7 @@ function ItemEditModal({
       {showAi && (
         <AiConvertDialog
           onClose={() => setShowAi(false)}
+          preset={{ solutionLayout }}
           insertTargets={[
             {
               label: `${tabs[tab]}へ挿入`,

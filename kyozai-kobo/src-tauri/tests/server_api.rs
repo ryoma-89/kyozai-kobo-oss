@@ -447,7 +447,8 @@ fn dispatch_emits_change_events() {
 #[test]
 fn ai_output_validation() {
     use kyozai_kobo_lib::ai::{
-        scan_latex_security, scan_solution_layout, scan_solution_notation, validate_output,
+        scan_explanation_structure, scan_latex_security, scan_solution_layout,
+        scan_solution_notation, validate_output,
     };
 
     let valid = json!({
@@ -497,12 +498,18 @@ fn ai_output_validation() {
     assert!(scan_latex_security("$x^2+1$").is_empty());
 
     let safe_figure = "\\noindent\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{figure.pdf}\\par";
-    assert!(scan_solution_layout(safe_figure).is_empty());
+    assert!(scan_solution_layout(safe_figure, "two_column").is_empty());
     let unsafe_layout = "\\begin{center}\\includegraphics[width=\\textwidth]{figure.pdf}\\end{center}";
-    let layout_warnings = scan_solution_layout(unsafe_layout);
+    let layout_warnings = scan_solution_layout(unsafe_layout, "two_column");
     assert!(layout_warnings.iter().any(|warning| warning.code == "TWO_COLUMN_LAYOUT"));
     assert!(layout_warnings.iter().any(|warning| warning.code == "FIGURE_SIZE"));
     assert!(layout_warnings.iter().all(|warning| warning.severity == "error"));
+    let wide_fixed_figure =
+        "\\noindent\\includegraphics[width=12cm,keepaspectratio]{figure.pdf}\\par";
+    assert!(scan_solution_layout(wide_fixed_figure, "single_column").is_empty());
+    assert!(scan_solution_layout(wide_fixed_figure, "two_column")
+        .iter()
+        .any(|warning| warning.code == "FIGURE_SIZE"));
 
     let unexplained_notation = scan_solution_notation("$a\\mid b$, $\\max\\{a,b\\}$");
     assert_eq!(unexplained_notation.len(), 2);
@@ -517,6 +524,53 @@ fn ai_output_validation() {
         "$a\\equiv b\\pmod m$は、$a,b$を$m$で割った余りが等しいことを表す。"
     )
     .is_empty());
+    let inverse_trig = scan_solution_notation("$y=\\arcsin x$");
+    assert!(inverse_trig.iter().any(|warning| {
+        warning.code == "OUT_OF_SCOPE_INVERSE_TRIG" && warning.severity == "error"
+    }));
+    let direct_inverse_derivative =
+        scan_solution_notation("$\\dfrac{d}{dx}\\left(\\sin^{-1}x\\right)$");
+    assert!(direct_inverse_derivative.iter().any(|warning| {
+        warning.code == "DIRECT_INVERSE_TRIG_DERIVATIVE" && warning.severity == "error"
+    }));
+    assert!(scan_solution_notation(
+        "$y=\\sin^{-1}x$とおくと$x=\\sin y$であるから、$1=\\cos y\\dfrac{dy}{dx}$である。"
+    )
+    .is_empty());
+    for forbidden in ["$x\\leq 1$", "$x\\ge 0$", "$a\\leqslant b$", "$x≤1$"] {
+        let warnings = scan_solution_notation(forbidden);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "INEQUALITY_SYMBOL_STYLE" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation("$0\\leqq x<1$かつ$y\\geqq 2$").is_empty());
+    for decorated in ["$\\boxed{x=1}$", "\\fbox{$x=1$}", "$x=1$（答）"] {
+        let warnings = scan_solution_notation(decorated);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "ANSWER_DECORATION" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation("したがって、$x=1$である。").is_empty());
+    for punctuated in [
+        "$x=1$.",
+        r#"\[x=1.\]"#,
+        r#"\begin{align*}x&=1.\\y&=2\end{align*}"#,
+        r#"\begin{align*}x&=1\end{align*}."#,
+    ] {
+        let warnings = scan_solution_notation(punctuated);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "FORMULA_TRAILING_PERIOD" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation("$x=1.5$である。").is_empty());
+    assert!(scan_explanation_structure(
+        "着眼点を示す。\\par\\textbf{【定石】}平方完成の形に着目する。"
+    )
+    .is_empty());
+    let missing_standard_method = scan_explanation_structure("着眼点と方針だけを示す。");
+    assert!(missing_standard_method.iter().any(|warning| {
+        warning.code == "MISSING_STANDARD_METHOD" && warning.severity == "error"
+    }));
     assert!(scan_solution_notation("$x^2+1=0$").is_empty());
 }
 
@@ -524,7 +578,8 @@ fn ai_output_validation() {
 fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     use kyozai_kobo_lib::ai::{
         output_schema, validate_output, FIXED_INSTRUCTIONS, SOLUTION_FIXED_INSTRUCTIONS,
-        SOLUTION_REFERENCE_PROFILE,
+        SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS, SOLUTION_REFERENCE_PROFILE,
+        TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
     };
 
     let valid = json!({
@@ -555,7 +610,7 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(required.iter().any(|value| value == "problems"));
     assert!(FIXED_INSTRUCTIONS.contains("\\cdots ①"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高等学校"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("着眼点 → 方針 → 手順 → 検算・注意点"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("着眼点 → 【定石】 → 方針 → 手順 → 検算・注意点"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("利用できる横幅は常に\\linewidth"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("width=0.65\\linewidth"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("center環境、\\centering、\\textwidth指定は使わない"));
@@ -570,9 +625,43 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("複雑な因数分解、置換後の式、場合分けの条件などを突然提示せず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("その操作が正当である理由"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("自力で同じ流れを再現できる粒度"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("計算量や場合分けを減らせる場合は、その方法を積極的に選んで"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("通常の計算より何を省けるか"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("同型問題にも応用できる判断の仕方"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("特殊で分かりにくい技巧を使わず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\arcsin、\\arccos、\\arctan等のarcを付けた関数名は高校範囲外"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず$x=\\sin y$と書き直してから"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$1=\\cos y\\dfrac{dy}{dx}$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$x=\\cos y$、$x=\\tan y$へ戻し"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず$\\leqq$と$\\geqq$を使用"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("元の式がすでに短く十分に扱いやすい場合"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("わずかに短くするだけのために新しい文字へ置き換えず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("置換によって何が簡単になったか"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("試験で提出する答案を基準"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("採点官が前後の式のつながりと用いた根拠を確認できる"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("暗算で一段階に確認できる自明な四則計算"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\boxed、\\fbox、\\framebox等で囲んだり"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず独立した見出し「【定石】」"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("数式の末尾や数式を閉じた直後にASCIIのピリオド"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("下の式$\\leqq$対象の式$\\leqq$上の式"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("別々の不等式へ分けず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("関数を微分して増減、極値、最大・最小"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("導関数の符号変化と結論の対応が見やすくなるときに増減表"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("先に導関数を求め"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("表は論証の代わりではなく"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("二段組では列数と記述を絞って\\linewidth内"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("増減表を加えても理解が改善しない場合は無理に入れない"));
+    assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("二段組の片方の列"));
+    assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("各行が単独で列幅に収まる"));
+    assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("\\linewidthの横幅を活かし"));
+    assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("超えそうな場合"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("問題と解答・研究問題の完成解答調"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("板書・授業ノート調"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("必要条件だけで進めた場合は最後に十分性"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("答えを枠で囲んだり"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("覚えるべき手法・知識、その手法を選ぶ目印"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("必要に応じて増減表で区間ごとの増減と関数値"));
+    assert!(!SOLUTION_REFERENCE_PROFILE.contains("必要に応じて末尾へ「（答）」"));
 }
 
 #[test]
@@ -595,6 +684,22 @@ fn ai_answer_guidance_has_a_bounded_length() {
     )
     .expect_err("長すぎる解答方針は拒否すること");
     assert!(error.contains("最大1,000文字"));
+
+    let error = create_job(
+        &state,
+        CreateJobPayload {
+            source_type: "text".into(),
+            conversion_mode: Some("generate_answer".into()),
+            options: Some(json!({"solutionLayout": "three_column"})),
+            input_text: Some("$x^2=1$を解け。".into()),
+            input_names: vec![],
+            target_entity_type: None,
+            target_entity_id: None,
+            target_field: None,
+        },
+    )
+    .expect_err("未対応の想定レイアウトは拒否すること");
+    assert!(error.contains("two_column / single_column"));
 }
 
 #[test]

@@ -93,6 +93,7 @@ export interface AiConvertPreset {
   text?: string;
   mode?: string;
   title?: string;
+  solutionLayout?: "two_column" | "single_column";
 }
 
 function extractedProblemsOf(job?: AiJob | null): AiExtractedProblem[] {
@@ -178,6 +179,15 @@ export function AiConvertDialog({
   );
   const [solutionGuidance, setSolutionGuidance] = useState(() =>
     stringOption(initialJob?.options, "solutionGuidance"),
+  );
+  const [solutionLayout, setSolutionLayout] = useState<"two_column" | "single_column">(() =>
+    stringOption(
+      initialJob?.options,
+      "solutionLayout",
+      preset?.solutionLayout ?? "two_column",
+    ) === "single_column"
+      ? "single_column"
+      : "two_column",
   );
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<AiJob | null>(initialJob ?? null);
@@ -344,6 +354,7 @@ export function AiConvertDialog({
           useTemplateContext,
           suggestPackages: true,
           solutionGuidance: mode === "generate_answer" ? solutionGuidance.trim() : "",
+          solutionLayout,
         },
         inputText: text,
         inputNames: sourceType === "image" ? images.map((i) => i.name) : [],
@@ -398,6 +409,7 @@ export function AiConvertDialog({
         useTemplateContext,
         suggestPackages: booleanOption(job.options, "suggestPackages", true),
         solutionGuidance: mode === "generate_answer" ? solutionGuidance.trim() : "",
+        solutionLayout,
       });
       setJob(j);
       setProblemDrafts([]);
@@ -663,7 +675,7 @@ export function AiConvertDialog({
         {isGenerationMode && (
           <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
             設定が有効なら、参考資料の完成解答調・板書調を使い分けます。日本の高校数学の範囲だけを使い、
-            2段組の列幅に収まるよう長い式を改行し、図は列幅基準の自然な大きさで左寄せ配置します。
+            選択した段組の幅に合わせて式を配置し、はみ出しそうな式は改行します。図は本文幅基準の自然な大きさで左寄せ配置します。
             {mode === "generate_answer"
               ? " 重要な別解がある場合は、主解法を含めて最大3つまで出力します。"
               : " 解説は入力された参照解答の解法・式番号・場合分けに沿わせます。"}
@@ -672,6 +684,27 @@ export function AiConvertDialog({
           </p>
         )}
       </div>
+
+      {isGenerationMode && (
+        <div>
+          <label className="section-label mb-1 block">想定する解答・解説のレイアウト</label>
+          <select
+            value={solutionLayout}
+            onChange={(event) =>
+              setSolutionLayout(event.target.value as "two_column" | "single_column")
+            }
+            className="select w-full sm:max-w-md"
+          >
+            <option value="two_column">二段組（片方の列幅に合わせる）</option>
+            <option value="single_column">一段組（横幅を活かす）</option>
+          </select>
+          <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+            {solutionLayout === "two_column"
+              ? "長い式を早めに改行し、狭い列からはみ出さない構成にします。"
+              : "短い計算は読みやすくまとめ、横幅を超えそうな式だけを意味の区切りで改行します。"}
+          </p>
+        </div>
+      )}
 
       {mode === "generate_answer" && (
         <div>
@@ -785,6 +818,16 @@ export function AiConvertDialog({
         <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
           <p className="section-label mb-1">追加した解答の方針</p>
           <p className="whitespace-pre-wrap">{stringOption(job.options, "solutionGuidance").trim()}</p>
+        </div>
+      )}
+      {job && ["generate_answer", "generate_explanation"].includes(job.conversionMode) && (
+        <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
+          <p className="section-label mb-1">想定レイアウト</p>
+          <p>
+            {stringOption(job.options, "solutionLayout", "two_column") === "single_column"
+              ? "一段組"
+              : "二段組"}
+          </p>
         </div>
       )}
     </div>
