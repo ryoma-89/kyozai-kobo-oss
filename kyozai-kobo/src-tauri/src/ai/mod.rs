@@ -79,6 +79,9 @@ $y=\cos^{-1}x$や$y=\tan^{-1}x$に相当する内容も同様に、それぞれ$
 大小関係を表す不等号で等号を含める場合は、必ず$\leqq$と$\geqq$を使用してください。$\leq$、$\geq$、$\le$、$\ge$、$\leqslant$、$\geqslant$やUnicodeの「≤」「≥」は使用しないでください。
 等号を含まない厳密な不等号には通常どおり$<$と$>$を使用してください。
 
+ベクトルは太字ではなく、必ず矢印付きで表してください。文字で表すベクトルは$\vec{a}$、2点を結ぶ有向線分は$\overrightarrow{AB}$、零ベクトルは$\vec{0}$のように記述してください。
+ベクトルを表すために\mathbf、\boldsymbol、\bm、\pmb等の太字コマンドを使用しないでください。問題文でベクトルが太字表記されている場合も、解答・解説では数学的な対応を保ったまま矢印付き表記へ統一してください。
+
 ユーザーから「解答の方針」が追加指定された場合は、その方針が数学的に適切で、高校範囲に収まり、問題の条件と矛盾しないときに優先してください。
 指定方針が使えない場合は無理に合わせず、warningsへ理由を記録して高校範囲の正しい方針で解いてください。
 
@@ -808,6 +811,18 @@ pub fn scan_solution_notation(latex: &str) -> Vec<AiWarning> {
             code: "ANSWER_DECORATION".into(),
             severity: "error".into(),
             message: "答えを枠で囲んだり『(答)』と付けたりせず、解答の最後にそのまま記述してください".into(),
+        });
+    }
+
+    let bold_vector_commands = ["\\mathbf", "\\boldsymbol", "\\bm", "\\pmb"];
+    if bold_vector_commands
+        .iter()
+        .any(|command| contains_latex_command(latex, command))
+    {
+        warnings.push(AiWarning {
+            code: "VECTOR_NOTATION_STYLE".into(),
+            severity: "error".into(),
+            message: "ベクトルは太字コマンドを使わず、\\vec{a}や\\overrightarrow{AB}のように矢印付きで表してください".into(),
         });
     }
 
@@ -2394,6 +2409,7 @@ pub fn update_job_latex(state: &Arc<AppState>, job_id: i64, latex: String) -> Re
                 | "DIRECT_INVERSE_TRIG_DERIVATIVE"
                 | "INEQUALITY_SYMBOL_STYLE"
                 | "ANSWER_DECORATION"
+                | "VECTOR_NOTATION_STYLE"
                 | "FORMULA_TRAILING_PERIOD"
                 | "MISSING_STANDARD_METHOD"
         )

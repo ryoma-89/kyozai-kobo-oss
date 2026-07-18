@@ -550,6 +550,21 @@ fn ai_output_validation() {
             warning.code == "ANSWER_DECORATION" && warning.severity == "error"
         }));
     }
+    for bold_vector in [
+        "$\\mathbf{a}$",
+        "$\\boldsymbol{v}$",
+        "$\\bm{x}$",
+        "$\\pmb{AB}$",
+    ] {
+        let warnings = scan_solution_notation(bold_vector);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "VECTOR_NOTATION_STYLE" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation(
+        "$\\vec{a}$、$\\overrightarrow{AB}$、$\\vec{0}$を考える。"
+    )
+    .is_empty());
     assert!(scan_solution_notation("したがって、$x=1$である。").is_empty());
     for punctuated in [
         "$x=1$.",
@@ -643,6 +658,9 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\boxed、\\fbox、\\framebox等で囲んだり"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず独立した見出し「【定石】」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("数式の末尾や数式を閉じた直後にASCIIのピリオド"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ベクトルは太字ではなく、必ず矢印付き"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$\\vec{a}$、2点を結ぶ有向線分は$\\overrightarrow{AB}$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\mathbf、\\boldsymbol、\\bm、\\pmb等"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("下の式$\\leqq$対象の式$\\leqq$上の式"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("別々の不等式へ分けず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("関数を微分して増減、極値、最大・最小"));
