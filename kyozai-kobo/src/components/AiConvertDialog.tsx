@@ -30,6 +30,7 @@ const MODES: { value: string; label: string; experimental?: boolean }[] = [
   { value: "answer_explanation", label: "解答・解説" },
   { value: "generate_answer", label: "解答を生成（高校範囲）" },
   { value: "generate_explanation", label: "解説を生成（高校範囲）" },
+  { value: "generate_topic_guide", label: "分野・解法の解説部品を生成" },
   { value: "table", label: "表" },
   { value: "matrix", label: "行列" },
   { value: "cases", label: "場合分け" },
@@ -94,6 +95,8 @@ export interface AiConvertPreset {
   mode?: string;
   title?: string;
   solutionLayout?: "two_column" | "single_column";
+  solutionDetail?: "standard" | "beginner";
+  explanationGuidance?: string;
 }
 
 function extractedProblemsOf(job?: AiJob | null): AiExtractedProblem[] {
@@ -180,6 +183,13 @@ export function AiConvertDialog({
   const [solutionGuidance, setSolutionGuidance] = useState(() =>
     stringOption(initialJob?.options, "solutionGuidance"),
   );
+  const [explanationGuidance, setExplanationGuidance] = useState(() =>
+    stringOption(
+      initialJob?.options,
+      "explanationGuidance",
+      preset?.explanationGuidance ?? "",
+    ),
+  );
   const [solutionLayout, setSolutionLayout] = useState<"two_column" | "single_column">(() =>
     stringOption(
       initialJob?.options,
@@ -188,6 +198,15 @@ export function AiConvertDialog({
     ) === "single_column"
       ? "single_column"
       : "two_column",
+  );
+  const [solutionDetail, setSolutionDetail] = useState<"standard" | "beginner">(() =>
+    stringOption(
+      initialJob?.options,
+      "solutionDetail",
+      preset?.solutionDetail ?? "standard",
+    ) === "beginner"
+      ? "beginner"
+      : "standard",
   );
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<AiJob | null>(initialJob ?? null);
@@ -353,8 +372,17 @@ export function AiConvertDialog({
           displayMath,
           useTemplateContext,
           suggestPackages: true,
-          solutionGuidance: mode === "generate_answer" ? solutionGuidance.trim() : "",
+          solutionGuidance:
+            mode === "generate_answer" || mode === "generate_topic_guide"
+              ? solutionGuidance.trim()
+              : "",
+          explanationGuidance:
+            mode === "generate_explanation" ? explanationGuidance.trim() : "",
           solutionLayout,
+          solutionDetail:
+            mode === "generate_answer" || mode === "generate_topic_guide"
+              ? solutionDetail
+              : "standard",
         },
         inputText: text,
         inputNames: sourceType === "image" ? images.map((i) => i.name) : [],
@@ -408,8 +436,17 @@ export function AiConvertDialog({
         displayMath,
         useTemplateContext,
         suggestPackages: booleanOption(job.options, "suggestPackages", true),
-        solutionGuidance: mode === "generate_answer" ? solutionGuidance.trim() : "",
+        solutionGuidance:
+          mode === "generate_answer" || mode === "generate_topic_guide"
+            ? solutionGuidance.trim()
+            : "",
+        explanationGuidance:
+          mode === "generate_explanation" ? explanationGuidance.trim() : "",
         solutionLayout,
+        solutionDetail:
+          mode === "generate_answer" || mode === "generate_topic_guide"
+            ? solutionDetail
+            : "standard",
       });
       setJob(j);
       setProblemDrafts([]);
@@ -460,7 +497,16 @@ export function AiConvertDialog({
     if (!job) return;
     const confirmed = await guardInsert();
     if (!confirmed) return;
-    const title = window.prompt("部品のタイトル", "AI変換部品");
+    const inputTitle = (job.inputText || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.slice(0, 50);
+    const defaultTitle =
+      job.conversionMode === "generate_topic_guide"
+        ? inputTitle || "分野・解法の解説"
+        : "AI変換部品";
+    const title = window.prompt("部品のタイトル", defaultTitle);
     if (title == null) return;
     try {
       await aiUpdateJobLatex(job.id, latex);
@@ -517,7 +563,9 @@ export function AiConvertDialog({
 
   const severityColor = (s: string) =>
     s === "error" ? "var(--danger)" : s === "warning" ? "var(--warn)" : "var(--muted)";
-  const isGenerationMode = mode === "generate_answer" || mode === "generate_explanation";
+  const isTopicGuideMode = mode === "generate_topic_guide";
+  const isGenerationMode =
+    mode === "generate_answer" || mode === "generate_explanation" || isTopicGuideMode;
   const isProblemImportMode = mode === "problem_bank_import";
 
   // ---- 入力ステップ ----
@@ -639,7 +687,9 @@ export function AiConvertDialog({
           className="input w-full font-mono text-xs"
           rows={10}
           placeholder={
-            mode === "generate_explanation"
+            isTopicGuideMode
+              ? "詳しく解説する分野・単元・公式・解法を入力してください\n例：2次関数の最大・最小／置換積分の考え方と使い分け"
+              : mode === "generate_explanation"
               ? "【問題文】と【参照する解答】を貼り付けてください"
               : "変換したい文章・数式を貼り付けてください（Word・PDFからのコピー等）"
           }
@@ -674,20 +724,29 @@ export function AiConvertDialog({
         )}
         {isGenerationMode && (
           <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
-            設定が有効なら、参考資料の完成解答調・板書調を使い分けます。日本の高校数学の範囲だけを使い、
-            選択した段組の幅に合わせて式を配置し、はみ出しそうな式は改行します。図は本文幅基準の自然な大きさで左寄せ配置します。
-            {mode === "generate_answer"
-              ? " 重要な別解がある場合は、主解法を含めて最大3つまで出力します。"
-              : " 解説は入力された参照解答の解法・式番号・場合分けに沿わせます。"}
-            高校範囲か判断が分かれる記号は、初出で意味を日本語で説明します。
-            式を番号で引用する場合は「\cdots ①」形式に統一します。
+            {isTopicGuideMode ? (
+              <>
+                高校数学の分野・解法を、概要、基本事項、定石、再現可能な手順、典型例、よくある誤りの順にまとめ、
+                単独で教材へ挿入できる詳しい解説部品を作ります。分野が広い場合は浅い網羅ではなく、核となる見方と代表的な定石をつなげます。
+              </>
+            ) : (
+              <>
+                設定が有効なら、参考資料の完成解答調・板書調を使い分けます。日本の高校数学の範囲だけを使い、
+                選択した段組の幅に合わせて式を配置し、はみ出しそうな式は改行します。図は本文幅基準の自然な大きさで左寄せ配置します。
+                {mode === "generate_answer"
+                  ? " 重要な別解がある場合は、主解法を含めて最大3つまで出力します。"
+                  : " 解説は入力された参照解答の解法・式番号・場合分けに沿わせます。"}
+                高校範囲か判断が分かれる記号は、初出で意味を日本語で説明します。
+                式を番号で引用する場合は「\cdots ①」形式に統一します。
+              </>
+            )}
           </p>
         )}
       </div>
 
       {isGenerationMode && (
         <div>
-          <label className="section-label mb-1 block">想定する解答・解説のレイアウト</label>
+          <label className="section-label mb-1 block">想定する出力レイアウト</label>
           <select
             value={solutionLayout}
             onChange={(event) =>
@@ -706,19 +765,72 @@ export function AiConvertDialog({
         </div>
       )}
 
-      {mode === "generate_answer" && (
-        <div>
-          <label className="section-label mb-1 block">解答の方針（任意）</label>
-          <textarea
-            value={solutionGuidance}
-            onChange={(event) => setSolutionGuidance(event.target.value.slice(0, 1000))}
-            className="input-area min-h-20 w-full resize-y text-xs"
-            placeholder="例：ベクトルを使わず座標を置いて解く／相加平均・相乗平均の関係を用いる"
-          />
-          <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
-            指定が数学的に適切で高校範囲に収まる場合に優先します。空欄ならAIが最も自然な方針を選びます。
-          </p>
-        </div>
+      {(mode === "generate_answer" || mode === "generate_explanation" || isTopicGuideMode) && (
+        <>
+          {mode !== "generate_explanation" && (
+            <div>
+              <label className="section-label mb-1 block">
+                {isTopicGuideMode ? "説明レベル" : "解答モード"}
+              </label>
+              <select
+                value={solutionDetail}
+                onChange={(event) =>
+                  setSolutionDetail(event.target.value as "standard" | "beginner")
+                }
+                className="select w-full sm:max-w-md"
+              >
+                <option value="standard">
+                  {isTopicGuideMode ? "標準（高校生向け詳説）" : "標準（試験で提出する答案向け）"}
+                </option>
+                <option value="beginner">基礎から丁寧（数学が苦手な人向け）</option>
+              </select>
+              <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+                {solutionDetail === "beginner"
+                  ? isTopicGuideMode
+                    ? "用語・記号・公式の意味から説明し、典型例を手順と対応させて丁寧に示します。"
+                    : "問題の見方や基本事項から説明し、公式を使える理由と式変形を標準より丁寧に示します。"
+                  : isTopicGuideMode
+                    ? "高校生が同型問題へ応用できる詳しさで、要点と再現手順を整理します。"
+                    : "採点官が流れを確認できる、簡潔で論理の飛躍がない答案を作ります。"}
+              </p>
+            </div>
+          )}
+          <div>
+            <label className="section-label mb-1 block">
+              {isTopicGuideMode
+                ? "解説の重点（任意）"
+                : mode === "generate_explanation"
+                  ? "解説内容の指示（任意）"
+                  : "解答の方針（任意）"}
+            </label>
+            <textarea
+              value={mode === "generate_explanation" ? explanationGuidance : solutionGuidance}
+              onChange={(event) => {
+                const value = event.target.value.slice(0, 1000);
+                if (mode === "generate_explanation") {
+                  setExplanationGuidance(value);
+                } else {
+                  setSolutionGuidance(value);
+                }
+              }}
+              className="input-area min-h-20 w-full resize-y text-xs"
+              placeholder={
+                isTopicGuideMode
+                  ? "例：数学が苦手な生徒向け／グラフとの対応を重視／使い分けを詳しく"
+                  : mode === "generate_explanation"
+                    ? "例：式①から②への変形を特に丁寧に／増減表の読み方を初歩から／この置換を使う理由を詳しく"
+                  : "例：ベクトルを使わず座標を置いて解く／相加平均・相乗平均の関係を用いる"
+              }
+            />
+            <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+              {isTopicGuideMode
+                ? "高校範囲に収まる場合に反映します。空欄なら入力された分野・解法の核となる内容を選びます。"
+                : mode === "generate_explanation"
+                  ? "重点的に説明する箇所、詳しさ、観点、つまずきやすい点などを指定できます。参照解答の流れと【定石】は維持します。"
+                : "指定が数学的に適切で高校範囲に収まる場合に優先します。空欄ならAIが最も自然な方針を選びます。"}
+            </p>
+          </div>
+        </>
       )}
 
       <div className="grid gap-1 text-xs sm:grid-cols-2" style={{ color: "var(--text)" }}>
@@ -753,7 +865,9 @@ export function AiConvertDialog({
       </div>
       <p className="text-[11px]" style={{ color: "var(--muted)" }}>
         {isGenerationMode
-          ? mode === "generate_explanation"
+          ? isTopicGuideMode
+            ? "単一問題の答案ではなく、他の教材でも再利用できる分野・解法の解説として生成し、そのまま部品保存できます。"
+            : mode === "generate_explanation"
             ? "参照解答の内容に沿って、定石・必要知識・適用理由・手順・検算まで再現できる詳しさで説明します。"
             : "答えだけでなく、正答に必要な式変形・場合分けと、重要な場合に限り最大3つの解法を生成します。"
           : isProblemImportMode
@@ -816,17 +930,43 @@ export function AiConvertDialog({
       )}
       {job && stringOption(job.options, "solutionGuidance").trim() && (
         <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
-          <p className="section-label mb-1">追加した解答の方針</p>
+          <p className="section-label mb-1">
+            {job.conversionMode === "generate_topic_guide"
+              ? "追加した解説の重点"
+              : "追加した解答の方針"}
+          </p>
           <p className="whitespace-pre-wrap">{stringOption(job.options, "solutionGuidance").trim()}</p>
         </div>
       )}
-      {job && ["generate_answer", "generate_explanation"].includes(job.conversionMode) && (
+      {job && stringOption(job.options, "explanationGuidance").trim() && (
+        <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
+          <p className="section-label mb-1">追加した解説内容の指示</p>
+          <p className="whitespace-pre-wrap">
+            {stringOption(job.options, "explanationGuidance").trim()}
+          </p>
+        </div>
+      )}
+      {job && ["generate_answer", "generate_explanation", "generate_topic_guide"].includes(job.conversionMode) && (
         <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
           <p className="section-label mb-1">想定レイアウト</p>
           <p>
             {stringOption(job.options, "solutionLayout", "two_column") === "single_column"
               ? "一段組"
               : "二段組"}
+          </p>
+        </div>
+      )}
+      {job && ["generate_answer", "generate_topic_guide"].includes(job.conversionMode) && (
+        <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
+          <p className="section-label mb-1">
+            {job.conversionMode === "generate_topic_guide" ? "説明レベル" : "解答モード"}
+          </p>
+          <p>
+            {stringOption(job.options, "solutionDetail", "standard") === "beginner"
+              ? "基礎から丁寧"
+              : job.conversionMode === "generate_topic_guide"
+                ? "標準（高校生向け詳説）"
+                : "標準"}
           </p>
         </div>
       )}
@@ -1136,7 +1276,7 @@ export function AiConvertDialog({
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5" style={{ borderColor: "var(--border)" }}>
           <h2 className="text-sm font-bold">
             <span className="brand-mark mr-1.5">▸</span>
-            {preset?.title ?? (isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
+            {preset?.title ?? (isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
             {job && (
               <span className="badge badge-muted ml-2">ジョブ #{job.id}</span>
             )}

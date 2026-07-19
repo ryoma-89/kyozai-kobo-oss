@@ -454,6 +454,45 @@ fn compile_pdf_with_real_tex() {
     assert!(pdf.exists(), "PDFが生成されていない");
     assert!(std::fs::metadata(&pdf).unwrap().len() > 1000);
 
+    // 軌跡問題の回帰スナップショットが、指定したgathered・左波括弧を含めて実際に組版できること。
+    let trajectory_body = include_str!("fixtures/trajectory_hyperbola_midpoint.tex");
+    let trajectory_tex = format!(
+        "\\documentclass[uplatex]{{ujarticle}}\n\\usepackage{{amsmath,amssymb}}\n\\begin{{document}}\n{}\n\\end{{document}}\n",
+        trajectory_body
+    );
+    let trajectory_build = tempdir::TempDir::new("kyozai-trajectory-pdf").unwrap();
+    let (trajectory_success, trajectory_pdf, trajectory_log, trajectory_message) =
+        run_compile_with(
+            &uplatex,
+            &dvipdfmx,
+            trajectory_build.path(),
+            &trajectory_tex,
+        )
+        .unwrap();
+    assert!(
+        trajectory_success,
+        "{}\n{}",
+        trajectory_message, trajectory_log
+    );
+    assert!(trajectory_pdf.unwrap().exists());
+
+    // 動く線分の通過領域から回転体の体積へ進む複合問題も実際に組版できること。
+    let compound_body = include_str!("fixtures/moving_segment_rotation_volume.tex");
+    let compound_tex = format!(
+        "\\documentclass[uplatex]{{ujarticle}}\n\\usepackage{{amsmath,amssymb}}\n\\begin{{document}}\n{}\n\\end{{document}}\n",
+        compound_body
+    );
+    let compound_build = tempdir::TempDir::new("kyozai-compound-trajectory-pdf").unwrap();
+    let (compound_success, compound_pdf, compound_log, compound_message) = run_compile_with(
+        &uplatex,
+        &dvipdfmx,
+        compound_build.path(),
+        &compound_tex,
+    )
+    .unwrap();
+    assert!(compound_success, "{}\n{}", compound_message, compound_log);
+    assert!(compound_pdf.unwrap().exists());
+
     // PDF添付を含む教材でもshell-escapeを使わず、事前生成した.xbbでコンパイルできること。
     let graphic_build = tempdir::TempDir::new("kyozai-pdf-graphic").unwrap();
     std::fs::copy(&pdf, graphic_build.path().join("figure.pdf")).unwrap();

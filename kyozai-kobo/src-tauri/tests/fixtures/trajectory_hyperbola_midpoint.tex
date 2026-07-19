@@ -1,0 +1,63 @@
+求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。
+また、交点$A,B$の$x$座標をそれぞれ$\alpha,\beta$とする。
+
+直線の式を双曲線の式へ代入すると、交点の$x$座標は
+\[
+8X^2+6kX+k^2+2=0
+\]
+を満たす。
+この2次方程式の判別式を$D$とすると、
+\[
+D=(6k)^2-4\cdot8(k^2+2)
+  =4(k^2-16)
+\]
+である。また、解と係数の関係から、
+\[
+\alpha+\beta=-\frac{3k}{4}
+\]
+である。
+
+\[
+\begin{aligned}
+M(x,y)\in R
+&\Longleftrightarrow
+\begin{gathered}
+\text{「直線 }y=3x+k\text{ が双曲線 }x^2-y^2=2\text{ と異なる2点 }A,B\text{ で交わり、}\\
+\text{その中点が }M(x,y)\text{ となる実数 }k\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+D&>0\\
+x&=\frac{\alpha+\beta}{2}\\
+y&=\frac{3(\alpha+\beta)+2k}{2}
+\end{aligned}
+\right.\\
+\text{を満たす実数 }k\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+|k|&>4\\
+x&=-\frac{3k}{8}\\
+y&=-\frac{k}{8}
+\end{aligned}
+\right.\\
+\text{を満たす実数 }k\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow
+\left\{
+\begin{aligned}
+x&=3y\\
+|x|&>\frac32
+\end{aligned}
+\right.
+\end{aligned}
+\]
+
+したがって、求める軌跡は、直線$x=3y$のうち
+$x<-\frac32$または$x>\frac32$を満たす部分である。

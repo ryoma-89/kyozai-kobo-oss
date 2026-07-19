@@ -86,7 +86,7 @@ export function PartsView() {
   const [versions, setVersions] = useState<PartVersionSummary[] | null>(null);
   const [addTarget, setAddTarget] = useState<PartSummary | PartFull | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [showAi, setShowAi] = useState(false);
+  const [aiDialogMode, setAiDialogMode] = useState<"convert" | "topic_guide" | null>(null);
   const [conflict, setConflict] = useState<PartFull | null>(null);
   const webFileInputRef = useRef<HTMLInputElement>(null);
   const latestPart = useRef<PartFull | null>(null);
@@ -436,6 +436,14 @@ export function PartsView() {
             <button onClick={onCreate} className="btn btn-solid btn-sm">
               ＋ 新規
             </button>
+            <button
+              onClick={() => setAiDialogMode("topic_guide")}
+              className="btn btn-outline btn-sm"
+              title="高校数学の分野・解法を詳しく説明する新しい部品をAIで生成"
+              style={{ borderColor: "rgba(157,108,242,0.52)", color: "var(--purple)", background: "var(--purple-dim)" }}
+            >
+              <Icon name="sparkle" size={14} /> 解説生成
+            </button>
           </div>
           <div className="flex flex-wrap gap-1.5">
             <select value={partType} onChange={(e) => setPartType(e.target.value)} className="select text-xs">
@@ -544,7 +552,7 @@ export function PartsView() {
                 <DifficultyRankBadge rank={part.difficulty_rank} required={part.is_required} />
                 {dirty && <span className="badge badge-warn">● 未保存</span>}
                 <button
-                  onClick={() => setShowAi(true)}
+                  onClick={() => setAiDialogMode("convert")}
                   className="btn btn-outline btn-sm"
                   title="写真やテキストをAIでLaTeXへ変換して挿入"
                   style={{ borderColor: "rgba(157,108,242,0.52)", color: "var(--purple)", background: "var(--purple-dim)" }}
@@ -735,23 +743,38 @@ export function PartsView() {
         </Modal>
       )}
 
-      {showAi && part && (
+      {aiDialogMode && (
         <AiConvertDialog
-          onClose={() => setShowAi(false)}
-          insertTargets={[
-            {
-              label: "部品本文",
-              field: "latex_source",
-              entityType: "part",
-              entityId: part.id,
-              insert: (latexText: string) => {
-                const latest = latestPart.current;
-                if (!latest) return;
-                const base = latest.latex_source;
-                patch({ latex_source: base ? `${base}\n${latexText}` : latexText });
-              },
-            },
-          ]}
+          onClose={() => setAiDialogMode(null)}
+          preset={
+            aiDialogMode === "topic_guide"
+              ? {
+                  sourceType: "text",
+                  mode: "generate_topic_guide",
+                  title: "分野・解法の解説部品を生成",
+                  solutionLayout: "single_column",
+                  solutionDetail: "standard",
+                }
+              : undefined
+          }
+          insertTargets={
+            aiDialogMode === "convert" && part
+              ? [
+                  {
+                    label: "部品本文",
+                    field: "latex_source",
+                    entityType: "part",
+                    entityId: part.id,
+                    insert: (latexText: string) => {
+                      const latest = latestPart.current;
+                      if (!latest) return;
+                      const base = latest.latex_source;
+                      patch({ latex_source: base ? `${base}\n${latexText}` : latexText });
+                    },
+                  },
+                ]
+              : undefined
+          }
         />
       )}
 

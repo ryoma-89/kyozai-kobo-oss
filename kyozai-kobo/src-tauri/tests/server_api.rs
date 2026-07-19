@@ -544,6 +544,16 @@ fn ai_output_validation() {
         }));
     }
     assert!(scan_solution_notation("$0\\leqq x<1$かつ$y\\geqq 2$").is_empty());
+    for quantified in [
+        "$\\exists t\\in\\mathbb{R}$",
+        "$\\forall x\\in\\mathbb{R}$",
+    ] {
+        let warnings = scan_solution_notation(quantified);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "QUANTIFIER_NOTATION_STYLE" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation("条件を満たす実数$t$が存在する。").is_empty());
     for decorated in ["$\\boxed{x=1}$", "\\fbox{$x=1$}", "$x=1$（答）"] {
         let warnings = scan_solution_notation(decorated);
         assert!(warnings.iter().any(|warning| {
@@ -565,6 +575,48 @@ fn ai_output_validation() {
         "$\\vec{a}$、$\\overrightarrow{AB}$、$\\vec{0}$を考える。"
     )
     .is_empty());
+    for point_with_equals in ["$M=(x,y)$とする。", "$A = \\left(1,2\\right)$とする。"] {
+        let warnings = scan_solution_notation(point_with_equals);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "POINT_COORDINATE_NOTATION" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation("$AB$の中点を$M(x,y)$とする。").is_empty());
+    assert!(scan_solution_notation("点$A(1,2)$を通る直線を考える。").is_empty());
+    for braced_with_commas in [
+        r#"\left\{\begin{aligned}x&=1,\\y&=2\end{aligned}\right."#,
+        r#"\left\{\begin{aligned}x&=1\\y&=2,\end{aligned}\right."#,
+        r#"\begin{cases}x=1,\\y=2\end{cases}"#,
+    ] {
+        let warnings = scan_solution_notation(braced_with_commas);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "BRACED_SYSTEM_COMMA" && warning.severity == "error"
+        }));
+    }
+    assert!(scan_solution_notation(
+        r#"\left\{\begin{aligned}x&=1\\y&=2\end{aligned}\right."#
+    )
+    .is_empty());
+    for term in ["臨界点", "臨界値", "critical point", "critical value"] {
+        let warnings = scan_solution_notation(term);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "NON_HIGH_SCHOOL_CRITICAL_TERM" && warning.severity == "error"
+        }));
+    }
+    let derivative_range_without_table = r#"$f'(x)=x-1$であり、$f'(x)>0$と$f'(x)<0$となる区間を調べると、値域が求まる。"#;
+    assert!(scan_solution_notation(derivative_range_without_table)
+        .iter()
+        .any(|warning| warning.code == "MISSING_VARIATION_TABLE"));
+    let incomplete_variation_table = r#"$f'(x)=x-1$の正負から値域を求める。
+\[\begin{array}{c|ccc}x&0&1&2\\ \hline f'(x)&-&0&+\end{array}\]"#;
+    assert!(scan_solution_notation(incomplete_variation_table)
+        .iter()
+        .any(|warning| warning.code == "INCOMPLETE_VARIATION_TABLE"));
+    assert!(scan_solution_notation(
+        r#"$f'(x)=1>0$であるから定義域全体で増加し、値域は$0<y<1$である。"#
+    )
+    .iter()
+    .all(|warning| warning.code != "MISSING_VARIATION_TABLE"));
     assert!(scan_solution_notation("したがって、$x=1$である。").is_empty());
     for punctuated in [
         "$x=1$.",
@@ -590,11 +642,634 @@ fn ai_output_validation() {
 }
 
 #[test]
+fn trajectory_region_prompt_and_structure_regression() {
+    use kyozai_kobo_lib::ai::{
+        is_compound_trajectory_region_problem, is_moving_figure_region_problem,
+        is_trajectory_region_problem, prefers_swept_region_membership_structure,
+        requires_strict_point_locus_structure, scan_solution_notation,
+        scan_condition_quote_structure, scan_trajectory_solution_structure,
+        should_attach_trajectory_instructions, trajectory_target_point_name,
+    };
+
+    let hyperbola_problem = "双曲線$x^2-y^2=2$と直線$y=3x+k$が異なる2点$A,B$で交わるとき、線分$AB$の中点$M$の軌跡を求めよ。";
+    assert!(is_trajectory_region_problem(hyperbola_problem));
+    assert!(requires_strict_point_locus_structure(hyperbola_problem));
+    assert_eq!(trajectory_target_point_name(hyperbola_problem), Some('M'));
+
+    let classification_cases = [
+        "媒介変数$t$で表された動点$P$の軌跡を求めよ。",
+        "線分上を動く点$P$の軌跡を求めよ。",
+        "点$Q$までの距離が一定となる点$M$の軌跡を求めよ。",
+        "2点からの距離の和が一定以下となる領域を求めよ。",
+        "境界を含む領域を図示せよ。",
+        "境界を含まない領域を求めよ。",
+        "点$Q$が円弧上を動くときの軌跡を求めよ。",
+        "点$C$が動くときの軌跡を求めよ。",
+        "円$R$上の動点$Q$の軌跡を求めよ。",
+    ];
+    for problem in classification_cases {
+        assert!(is_trajectory_region_problem(problem), "分類できない問題: {problem}");
+    }
+    assert!(!is_trajectory_region_problem("関数$y=x^2$の最大値を求めよ。"));
+    assert!(should_attach_trajectory_instructions("text", hyperbola_problem));
+    assert!(!should_attach_trajectory_instructions(
+        "text",
+        "関数$y=x^2$の最大値を求めよ。"
+    ));
+    assert!(should_attach_trajectory_instructions("image", ""));
+
+    let moving_segment_volume_problem = r#"実数$\theta$が動くとき、動点$P(0,\sin\theta)$および$Q(8\cos\theta,0)$を考える。$0\leqq\theta\leqq\frac{\pi}{2}$のとき、平面内で線分$PQ$が通過する部分を$D$とする。$D$を$x$軸のまわりに1回転してできる立体の体積$V$を求めよ。"#;
+    assert!(is_trajectory_region_problem(moving_segment_volume_problem));
+    assert!(is_moving_figure_region_problem(
+        moving_segment_volume_problem
+    ));
+    assert!(is_compound_trajectory_region_problem(
+        moving_segment_volume_problem
+    ));
+    assert!(prefers_swept_region_membership_structure(
+        moving_segment_volume_problem
+    ));
+    assert!(!requires_strict_point_locus_structure(
+        moving_segment_volume_problem
+    ));
+    assert!(!prefers_swept_region_membership_structure(
+        "曲線族の包絡線が囲む領域を求めよ。"
+    ));
+    let maximum_as_condition =
+        "関数の最大値が1となるとき、動点$P$の軌跡を求めよ。";
+    assert!(is_trajectory_region_problem(maximum_as_condition));
+    assert!(!is_compound_trajectory_region_problem(maximum_as_condition));
+    assert!(requires_strict_point_locus_structure(maximum_as_condition));
+
+    let defined_d_point_region =
+        "動点$P$の動く範囲を$D$とする。領域$D$を求めよ。";
+    let defined_d_answer = r#"求める領域を$D$とし、動点$P$の座標を$P(x,y)$とする。
+\[
+P(x,y)\in D
+\Longleftrightarrow
+\left\{
+\begin{aligned}
+x&\geqq0\\
+y&\geqq0
+\end{aligned}
+\right.
+\]
+"#;
+    assert!(requires_strict_point_locus_structure(
+        defined_d_point_region
+    ));
+    let defined_d_warnings =
+        scan_trajectory_solution_structure(defined_d_point_region, defined_d_answer);
+    assert!(
+        defined_d_warnings.is_empty(),
+        "問題文で定義済みの領域Dに警告: {:?}",
+        defined_d_warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    let unnecessarily_renamed = defined_d_answer.replace("$D$", "$R$").replace("\\in D", "\\in R");
+    assert!(scan_trajectory_solution_structure(defined_d_point_region, &unnecessarily_renamed)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_DEFINED_REGION_SYMBOL"));
+
+    for (problem, expected) in [
+        ("線分$AB$の中点$M$の軌跡を求めよ。", 'M'),
+        ("動点$P$の軌跡を求めよ。", 'P'),
+        ("点$Q$の軌跡を求めよ。", 'Q'),
+        ("点$C$が動くときの軌跡を求めよ。", 'C'),
+    ] {
+        assert_eq!(trajectory_target_point_name(problem), Some(expected));
+    }
+
+    let snapshot = include_str!("fixtures/trajectory_hyperbola_midpoint.tex");
+    let warnings = scan_trajectory_solution_structure(hyperbola_problem, snapshot);
+    assert!(
+        warnings.is_empty(),
+        "回帰スナップショットに構造警告: {:?}",
+        warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    let notation_warnings = scan_solution_notation(snapshot);
+    assert!(
+        notation_warnings.is_empty(),
+        "回帰スナップショットに表記警告: {:?}",
+        notation_warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    assert!(snapshot.contains("M(x,y)\\in R"));
+    assert!(snapshot.starts_with(
+        "求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。"
+    ));
+    assert!(snapshot.contains("判別式を$D$"));
+    assert!(!snapshot.contains("\\Delta"));
+    assert!(!snapshot.contains("\\exists"));
+    assert!(!snapshot.contains("逆に"));
+    assert!(!snapshot.contains("以上を一続きの同値変形でまとめると"));
+    assert!(!snapshot.contains("以上の準備のもとで"));
+    assert!(snapshot.contains("|x|&>\\frac32"));
+    assert!(!snapshot.contains("|y|&>"));
+    assert!(!snapshot.contains("すなわち"));
+    assert!(snapshot.contains("\\text{「直線 }y=3x+k\\text{ が双曲線 }"));
+    assert!(snapshot.contains("\\text{その中点が }M(x,y)\\text{ となる実数 }k\\text{ が存在する」}"));
+    assert_eq!(snapshot.matches("「").count(), 3);
+    assert_eq!(snapshot.matches("」").count(), 3);
+    assert!(snapshot.contains(
+        "\\text{「}\\;\n\\left\\{\n\\begin{aligned}\nD&>0"
+    ));
+    assert!(snapshot.contains("\\text{を満たす実数 }k\\text{ が存在する」}"));
+
+    let compound_snapshot = include_str!("fixtures/moving_segment_rotation_volume.tex");
+    let compound_warnings =
+        scan_trajectory_solution_structure(moving_segment_volume_problem, compound_snapshot);
+    assert!(
+        compound_warnings.is_empty(),
+        "複合問題の回帰スナップショットに構造警告: {:?}",
+        compound_warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    assert!(scan_solution_notation(compound_snapshot).is_empty());
+    assert!(compound_snapshot.contains("領域$D$"));
+    assert!(compound_snapshot.starts_with("$xy$平面上の任意の点を$X(x,y)$とする。"));
+    assert!(!compound_snapshot.contains("領域$D$内の任意の点を"));
+    assert!(compound_snapshot.contains("X(x,y)\\in D"));
+    assert!(compound_snapshot.contains("0&\\leqq t\\leqq1"));
+    assert!(compound_snapshot.contains(
+        "\\text{「}\\;\n\\left\\{\n\\begin{aligned}\n0&\\leqq\\theta"
+    ));
+    assert!(compound_snapshot.contains(
+        "\\text{を満たす実数 }\\theta,t\\text{ が存在する」}"
+    ));
+    assert!(compound_snapshot.contains(
+        "0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"
+    ));
+    assert!(compound_snapshot.contains(
+        "&\\Longleftrightarrow\n0\\leqq\\theta\\leqq\\alpha"
+    ));
+    assert!(compound_snapshot.matches("X(x,y)\\in D").count() >= 3);
+    assert_eq!(
+        compound_snapshot
+            .matches("\\text{を満たす実数 }\\theta,t\\text{ が存在する」}")
+            .count(),
+        3
+    );
+    assert_eq!(
+        compound_snapshot
+            .matches("\\text{を満たす実数 }\\theta\\text{ が存在する」}")
+            .count(),
+        2
+    );
+    assert!(compound_snapshot.contains(
+        "t&=\\dfrac{x}{8\\cos\\theta}\\\\\ny&=\\left(1-\\dfrac{x}{8\\cos\\theta}\\right)\\sin\\theta"
+    ));
+    assert!(compound_snapshot.contains(
+        "0&\\leqq\\theta\\leqq\\alpha\\\\\ny&=f_x(\\theta)\n\\end{aligned}\n\\right.\\\\\n\\text{を満たす実数 }\\theta\\text{ が存在する」}"
+    ));
+    assert!(compound_snapshot.contains("$0<x<8$を固定し"));
+    assert!(compound_snapshot.contains(
+        "$0\\leqq\\theta\\leqq\\alpha<\\dfrac{\\pi}{2}$では"
+    ));
+    assert!(compound_snapshot.contains("\\cos^3\\beta=\\frac{x}{8}"));
+    assert!(compound_snapshot.contains(
+        "\\frac{x}{8}<\\left(\\frac{x}{8}\\right)^{1/3}<1"
+    ));
+    assert!(compound_snapshot.contains("0<\\beta<\\alpha"));
+    assert!(compound_snapshot.contains("f_x'(\\theta)&>0"));
+    assert!(compound_snapshot.contains("f_x'(\\beta)&=0"));
+    assert!(compound_snapshot.contains("f_x'(\\theta)&<0"));
+    assert!(compound_snapshot.contains("\\begin{array}{c|ccccc}"));
+    assert!(compound_snapshot.contains("f_x'(\\theta)&&+&0&-&"));
+    assert!(compound_snapshot.contains("&\\nearrow&"));
+    assert!(compound_snapshot.contains("&\\searrow&0"));
+    assert!(compound_snapshot.contains(
+        "$f_x(\\theta)$は$\\theta=\\beta$のとき最大となり、最大値は"
+    ));
+    assert!(compound_snapshot.contains("$f_x$の値域は"));
+    let solved_t_position = compound_snapshot
+        .find("t&=\\dfrac{x}{8\\cos\\theta}")
+        .expect("補間パラメータを表す連立条件があること");
+    let first_single_parameter_position = compound_snapshot
+        .find("\\text{を満たす実数 }\\theta\\text{ が存在する」}")
+        .expect("増減表前にthetaだけの存在条件があること");
+    let variation_table_position = compound_snapshot
+        .find("\\begin{array}{c|ccccc}")
+        .expect("増減表があること");
+    let last_single_parameter_position = compound_snapshot
+        .rfind("\\text{を満たす実数 }\\theta\\text{ が存在する」}")
+        .expect("増減表後にthetaだけの存在条件があること");
+    assert!(solved_t_position < first_single_parameter_position);
+    assert!(first_single_parameter_position < variation_table_position);
+    assert!(variation_table_position < last_single_parameter_position);
+    assert!(compound_snapshot.contains(
+        "0&\\leqq y\\leqq\n\\left\\{1-\\left(\\dfrac{x}{8}\\right)^{2/3}\\right\\}^{3/2}"
+    ));
+    assert!(compound_snapshot.contains("V\n=\\pi\\int_0^8"));
+    assert!(compound_snapshot.contains("\\frac{128\\pi}{105}"));
+    assert!(compound_snapshot.contains("$x=0$では$0\\leqq y\\leqq1$"));
+    assert!(compound_snapshot.contains("$x=8$では$t=1$かつ$\\theta=0$"));
+    assert!(compound_snapshot.contains("\\Longleftrightarrow"));
+    assert!(!compound_snapshot.contains("\\exists"));
+    assert!(!compound_snapshot.contains("\\forall"));
+    assert!(!compound_snapshot.contains("逆に"));
+    assert!(!compound_snapshot.contains("この範囲は十分でもある"));
+    assert!(!compound_snapshot.contains("十分性を確認"));
+    assert!(!compound_snapshot.contains("この範囲の任意の"));
+    assert!(!compound_snapshot.contains("実際に$t$を定めることができる"));
+    for forbidden in ["臨界点", "臨界値", "critical point", "critical value"] {
+        assert!(!compound_snapshot.contains(forbidden));
+    }
+
+    let missing_variation_table = compound_snapshot
+        .replacen("\\begin{array}{c|ccccc}", "\\begin{aligned}", 1)
+        .replacen("\\end{array}", "\\end{aligned}", 1);
+    assert!(scan_solution_notation(&missing_variation_table)
+        .iter()
+        .any(|warning| warning.code == "MISSING_VARIATION_TABLE"));
+
+    let incomplete_variation_table = compound_snapshot.replacen("\\nearrow", "\\quad", 1);
+    assert!(scan_solution_notation(&incomplete_variation_table)
+        .iter()
+        .any(|warning| warning.code == "INCOMPLETE_VARIATION_TABLE"));
+
+    let renamed_region = compound_snapshot
+        .replace("領域$D$", "領域$R$")
+        .replace("\\in D", "\\in R");
+    assert!(scan_trajectory_solution_structure(moving_segment_volume_problem, &renamed_region)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_DEFINED_REGION_SYMBOL"));
+
+    let stopped_after_region = compound_snapshot
+        .split("この領域$D$を$x$軸のまわりに回転した立体の体積$V$は")
+        .next()
+        .unwrap_or_default();
+    assert!(scan_trajectory_solution_structure(moving_segment_volume_problem, stopped_after_region)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_COMPOUND_INCOMPLETE"));
+    assert!(!scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        compound_snapshot
+    )
+    .iter()
+    .any(|warning| matches!(
+        warning.code.as_str(),
+        "TRAJECTORY_MISSING_EQUIVALENCE"
+            | "TRAJECTORY_POINT_NAME"
+            | "TRAJECTORY_SET_SYMBOL"
+            | "TRAJECTORY_SWEPT_MEMBERSHIP"
+            | "TRAJECTORY_SWEPT_POINT_SETUP"
+            | "TRAJECTORY_SWEPT_ASSUMED_MEMBERSHIP"
+            | "TRAJECTORY_SWEPT_PARAMETER_CONDITION"
+            | "TRAJECTORY_SWEPT_QUOTED_CONDITION"
+            | "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"
+    )));
+
+    let missing_solved_parameter_system = compound_snapshot.replacen(
+        "t&=\\dfrac{x}{8\\cos\\theta}\\\\",
+        "t&\\in\\mathbb{R}\\\\",
+        1,
+    );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &missing_solved_parameter_system
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"));
+
+    let missing_single_parameter_stage = compound_snapshot.replacen(
+        "\\text{を満たす実数 }\\theta\\text{ が存在する」}",
+        "\\text{を満たす実数 }\\theta,t\\text{ が存在する」}",
+        1,
+    );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &missing_single_parameter_stage
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"));
+
+    let detached_parameter_elimination = compound_snapshot.replacen(
+        "X(x,y)\\in D",
+        "X_0(x,y)\\in D",
+        2,
+    );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &detached_parameter_elimination
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"));
+
+    let missing_swept_membership = compound_snapshot.replacen(
+        "X(x,y)\\in D\n&\\Longleftrightarrow",
+        "X(x,y)\\in D\n&\\Longrightarrow",
+        1,
+    );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &missing_swept_membership
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_SWEPT_MEMBERSHIP"));
+
+    let missing_interpolation_range = compound_snapshot.replacen(
+        "0&\\leqq t\\leqq1\\\\",
+        "t&\\in\\mathbb{R}\\\\",
+        1,
+    );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &missing_interpolation_range
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_SWEPT_PARAMETER_CONDITION"));
+
+    let unquoted_existence = compound_snapshot
+        .replace(
+            "\\text{「}\\;\n\\left\\{",
+            "\\left\\{",
+        )
+        .replace(
+            "\\text{を満たす実数 }\\theta,t\\text{ が存在する」}",
+            "\\text{を満たす実数 }\\theta,t\\text{ が存在する}",
+        );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &unquoted_existence
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_SWEPT_QUOTED_CONDITION"));
+
+    let membership_assumed_at_opening = compound_snapshot.replacen(
+        "$xy$平面上の任意の点を$X(x,y)$とする。",
+        "領域$D$内の任意の点を$X(x,y)$とする。",
+        1,
+    );
+    assert!(scan_trajectory_solution_structure(
+        moving_segment_volume_problem,
+        &membership_assumed_at_opening
+    )
+    .iter()
+    .any(|warning| warning.code == "TRAJECTORY_SWEPT_ASSUMED_MEMBERSHIP"));
+
+    let x_name_collision_problem =
+        "動点$P,X$を結ぶ線分$PX$が通過する部分を$D$とする。領域$D$を求めよ。";
+    let x_name_collision_answer = r#"$xy$平面上の任意の点を$Y(x,y)$とする。
+\[
+\begin{aligned}
+Y(x,y)\in D
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+0&\leqq s\leqq1\\
+0&\leqq t\leqq1\\
+x&=t\\
+y&=s(1-t)
+\end{aligned}
+\right.\\
+\text{を満たす実数 }s,t\text{ が存在する」}
+\end{gathered}
+\end{aligned}
+\]
+"#;
+    assert!(
+        scan_trajectory_solution_structure(x_name_collision_problem, x_name_collision_answer)
+            .is_empty(),
+        "問題文でXが使用済みなら補助点Yを選ぶ"
+    );
+
+    let valid_condition_quote_examples = [
+        r#"\begin{gathered}
+\text{「①と②が異なる2点 }A,B\text{ で交わり，}\\
+\text{線分 }AB\text{ の中点が }M(x,y)\text{ となる}\\
+\text{実数 }k\text{ が存在する」}
+\end{gathered}"#,
+        r#"\text{「}y=f(\theta)\text{ となる実数 }\theta\text{ が存在する」}"#,
+        r#"\text{「}0\leqq t\leqq1\text{ を満たす実数 }t\text{ が存在する」}"#,
+        r#"\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+D&>0\\
+x&=-\frac{3k}{8}\\
+y&=-\frac{k}{8}
+\end{aligned}
+\right.\\
+\text{を満たす実数 }k\text{ が存在する」}
+\end{gathered}"#,
+        r#"\text{「点 }P(x,y)\text{ が円 }C\text{ の内部にある」}"#,
+    ];
+    for example in valid_condition_quote_examples {
+        assert!(
+            scan_condition_quote_structure(example).is_empty(),
+            "正しい条件全体の鉤括弧を誤検出: {example}"
+        );
+    }
+
+    let invalid_condition_quote_examples = [
+        (
+            r#"0\leqq t\leqq1\quad\text{「を満たす実数 }t\text{ が存在する」}"#,
+            "CONDITION_QUOTE_SCOPE",
+        ),
+        (
+            r#"y=f(\theta)\quad\text{「となる実数 }\theta\text{ が存在する」}"#,
+            "CONDITION_QUOTE_SCOPE",
+        ),
+        (
+            r#"\text{「点が円の内部にある」}\quad P(x,y),C"#,
+            "CONDITION_QUOTE_SCOPE",
+        ),
+        (
+            r#"\text{「これらを満たす実数が存在する」 }k"#,
+            "CONDITION_QUOTE_SCOPE",
+        ),
+        (
+            r#"\begin{gathered}
+\text{「①と②が異なる2点 }A,B\text{ で交わる」}\\
+\text{「線分 }AB\text{ の中点が }M(x,y)\text{ となる」}\\
+\text{「実数 }k\text{ が存在する」}
+\end{gathered}"#,
+            "CONDITION_QUOTE_MULTIPLE_PAIRS",
+        ),
+        (
+            r#"\begin{gathered}
+\left\{
+\begin{aligned}
+D&>0\\
+x&=-\frac{3k}{8}\\
+y&=-\frac{k}{8}
+\end{aligned}
+\right.\\
+\text{「これらを満たす実数 }k\text{ が存在する」}
+\end{gathered}"#,
+            "CONDITION_QUOTE_SCOPE",
+        ),
+        (
+            r#"\left\{\begin{aligned}\text{「}D&>0\text{」}\\x&=1\end{aligned}\right."#,
+            "CONDITION_QUOTE_BRACED_SYSTEM",
+        ),
+        (
+            r#"\text{「点 \(P(x,y)\) が円 \(C\) の内部にある」}"#,
+            "CONDITION_QUOTE_MATH_MODE",
+        ),
+        (
+            r#"\text{「}\quad\text{点 }P(x,y)\text{ が円 }C\text{ の内部にある}\quad\text{」}"#,
+            "CONDITION_QUOTE_SCOPE",
+        ),
+    ];
+    for (example, expected_code) in invalid_condition_quote_examples {
+        assert!(
+            scan_condition_quote_structure(example)
+                .iter()
+                .any(|warning| warning.code == expected_code),
+            "誤った鉤括弧構造を検出できない: {example}"
+        );
+    }
+
+    let wrong_point = snapshot.replacen("M(x,y)\\in R", "P(x,y)\\in R", 1);
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, &wrong_point)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_POINT_NAME"));
+
+    let missing_coordinate_setup = snapshot.replacen(
+        "求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。",
+        "求める軌跡を$R$とする。",
+        1,
+    );
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, &missing_coordinate_setup)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_MISSING_COORDINATE_SETUP"));
+    assert!(scan_trajectory_solution_structure("", &missing_coordinate_setup)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_MISSING_COORDINATE_SETUP"));
+
+    let delta = snapshot.replacen("D=(6k)^2", "\\Delta=(6k)^2", 1);
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, &delta)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_DISCRIMINANT_SYMBOL"));
+
+    let posthoc = format!("{}\n以上を一続きの同値変形でまとめると、次のようになる。", snapshot);
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, &posthoc)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_POSTHOC_EQUIVALENCE"));
+
+    for unnecessary_preface in [
+        "以上の準備のもとで、軌跡の条件を同値変形すると",
+        "以上の準備のもとで,軌跡の条件を同値変形すると",
+    ] {
+        let with_preface = snapshot.replacen(
+            "\\[\n\\begin{aligned}\nM(x,y)\\in R",
+            &format!("{}\n\\[\n\\begin{{aligned}}\nM(x,y)\\in R", unnecessary_preface),
+            1,
+        );
+        assert!(scan_trajectory_solution_structure(hyperbola_problem, &with_preface)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_POSTHOC_EQUIVALENCE"));
+    }
+
+    let split_proof = format!("{}\n逆に、この条件から十分性を確認する。", snapshot);
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, &split_proof)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_SPLIT_NECESSITY_SUFFICIENCY"));
+
+    let bad_existence_layout = r#"
+求める軌跡を$R$とする。
+\[
+\begin{aligned}
+M(x,y)\in R
+&\Longleftrightarrow
+|k|>4,\quad x=-\frac{3k}{8},\quad y=-\frac{k}{8}
+\text{を満たす実数 }k\text{ が存在する}
+\end{aligned}
+\]
+"#;
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, bad_existence_layout)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_EXISTENCE_LAYOUT"));
+
+    let redundant_conclusion = format!("{}\nすなわち、これは2本の半直線である。", snapshot);
+    assert!(scan_trajectory_solution_structure(hyperbola_problem, &redundant_conclusion)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_REDUNDANT_CONCLUSION"));
+
+    let structural_cases = [
+        ("媒介変数$t$で表された動点$P$の軌跡を求めよ。", 'P', "R"),
+        ("線分上を動く点$Q$の軌跡を求めよ。", 'Q', "R"),
+        ("距離の等式を2乗して点$M$の軌跡を求めよ。", 'M', "R"),
+        ("距離の不等式から点$P$の存在領域を求めよ。", 'P', "R"),
+        ("境界を含む点$Q$の領域を求めよ。", 'Q', "R"),
+        ("境界を含まない点$C$の領域を求めよ。", 'C', "R"),
+        ("円弧上を動く点$M$の軌跡を求めよ。", 'M', "R"),
+        ("円$R$上を動く点$Q$の軌跡を求めよ。", 'Q', "S"),
+    ];
+    for (problem, point, set_name) in structural_cases {
+        let answer = format!(
+            "求める軌跡を${set_name}$とし、点${point}$の座標を${point}(x,y)$とする。\\[\\begin{{aligned}}{point}(x,y)\\in {set_name}&\\Longleftrightarrow\\text{{問題文の条件}}\\\\&\\Longleftrightarrow\\text{{最終条件}}\\end{{aligned}}\\]"
+        );
+        assert!(
+            scan_trajectory_solution_structure(problem, &answer).is_empty(),
+            "構造ケースで警告: {problem}"
+        );
+    }
+}
+
+#[test]
+fn topic_method_guide_structure_regression() {
+    use kyozai_kobo_lib::ai::scan_topic_method_guide_structure;
+
+    let guide = r#"
+\textbf{【概要】}\par
+2次関数の最大・最小を扱う。
+\textbf{【基本事項】}\par
+$y=a(x-p)^2+q$では頂点は$(p,q)$である。
+\textbf{【定石】}\par
+定義域と頂点の位置に着目する。
+\textbf{【手順】}\par
+平方完成し、頂点と端点の値を比較する。
+\textbf{【典型例】}\par
+$0\leqq x\leqq2$での値を調べる。
+\textbf{【よくある誤り】}\par
+定義域を確認せず頂点の値だけを採用しない。
+"#;
+    assert!(scan_topic_method_guide_structure(guide).is_empty());
+
+    let missing = guide.replace(
+        "\\textbf{【典型例】}\\par\n$0\\leqq x\\leqq2$での値を調べる。\n",
+        "",
+    );
+    assert!(scan_topic_method_guide_structure(&missing)
+        .iter()
+        .any(|warning| warning.code == "TOPIC_GUIDE_MISSING_SECTIONS"));
+
+    let duplicated = format!("{}\n\\textbf{{【定石】}}\\par\n別の定石。", guide);
+    assert!(scan_topic_method_guide_structure(&duplicated)
+        .iter()
+        .any(|warning| warning.code == "TOPIC_GUIDE_DUPLICATE_SECTIONS"));
+
+    let wrong_order = guide
+        .replace("【基本事項】", "【一時見出し】")
+        .replace("【定石】", "【基本事項】")
+        .replace("【一時見出し】", "【定石】");
+    assert!(scan_topic_method_guide_structure(&wrong_order)
+        .iter()
+        .any(|warning| warning.code == "TOPIC_GUIDE_SECTION_ORDER"));
+}
+
+#[test]
 fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     use kyozai_kobo_lib::ai::{
-        output_schema, validate_output, FIXED_INSTRUCTIONS, SOLUTION_FIXED_INSTRUCTIONS,
+        output_schema, validate_output, BEGINNER_SOLUTION_INSTRUCTIONS,
+        BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS, FIXED_INSTRUCTIONS,
+        SOLUTION_FIXED_INSTRUCTIONS, TOPIC_METHOD_GUIDE_INSTRUCTIONS,
         SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS, SOLUTION_REFERENCE_PROFILE,
-        TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
+        TRAJECTORY_REGION_INSTRUCTIONS, TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
     };
 
     let valid = json!({
@@ -636,9 +1311,175 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$a\\mid b$ は「$b$が$a$で割り切れる」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("日本の高校の教科書・授業で一般的なもの"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解答の方針」"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解説内容の指示」"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("解説する箇所、説明の詳しさ、観点、強調点、つまずきやすい点"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("未指定部分でも論理を追うために必要な説明"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("論理を飛躍させない"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("複雑な因数分解、置換後の式、場合分けの条件などを突然提示せず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("その操作が正当である理由"));
+    assert!(!SOLUTION_FIXED_INSTRUCTIONS.contains("【軌跡・領域問題専用の解答規則】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【軌跡・領域問題専用の解答規則】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【最初に問題の型を判定する】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "2と3でも、$xy$平面上の任意の点の領域への所属条件をパラメータの存在条件として自然に表せる場合"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("問題文で中点が$M$なら$M(x,y)$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "後で使用する求める点の座標は、必要最小限の準備計算より前に必ず設定"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("形式統一のために$P$など別の点名へ変更してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("判別式には必ず$D$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("判別式に$\\Delta$を使用してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "判別式を使用しないなら、領域を最後まで$D$と表してください"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "実際に存在しない衝突を避けるための改名は禁止"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("準備計算の段階で、求める軌跡・領域の最終的な$x,y$の条件まで導いてはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("M(x,y)\\in R"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("同値変形は解答末尾の要約ではなく、解答本体そのもの"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "以上の準備のもとで、軌跡の条件を同値変形すると"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "最終的な範囲が1文字だけの不等式となり、$x$でも$y$でも同程度に簡潔に書ける場合"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$|x|>\\dfrac32$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("以上を一続きの同値変形でまとめると"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$\\exists$、$\\forall$などの量化記号を使用してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("\\left\\{"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("存在文は連立条件の下の行へ置き"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("各条件の行末にもコンマを付けない"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("異なる2実根をもつ$\\Longleftrightarrow D>0$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("結論後に「すなわち」"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【動く線分・図形が通過する領域】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "領域への所属をパラメータの存在条件として記述するために$xy$平面上の任意の点を置くことは、必要な記号の導入"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "特に動く線分では、補間パラメータによって線分上の条件を正確に保持できる"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("0&\\leqq t\\leqq1"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "\\text{「}\\;\n\\left\\{"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "\\text{を満たす実数 }s,t\\text{ が存在する」}"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "【条件全体を1組の鉤括弧で囲む】"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "日本語と数式、点名、図形名、変数、不等式などが組み合わさって論理的に1つの条件"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "\\text{「}y=f(\\theta)\\text{ となる実数 }\\theta\\text{ が存在する」}"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "開き鉤括弧を左波括弧の直前に置き、連立式と存在文の全体を1組で囲んでください"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "冒頭で「$xy$平面上の任意の点を$X(x,y)$とする。"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "「領域$D$内の任意の点を$X(x,y)$とする」"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "【複数パラメータを1文字ずつ消去する】"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "どの文字がどの段階で消去されたかが見える同値変形へ戻してください"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "t&=T_x(s)"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "\\text{を満たす実数 }s\\text{ が存在する」}"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "増減表の前には第3段階の$s$だけの存在条件へ到達"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "増減表の後は同じ条件を値域へ変形するために1回だけ再掲"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "この範囲は十分でもある"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "線分上の条件から得られる正しい定義域"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$0\\leqq\\theta\\leqq\\cos^{-1}\\dfrac{x}{8}$"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$\\cos^{-1}$そのものを微分してはいけません"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$x=0$と$0<x\\leqq8$を分ける"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "【値域によるパラメータ消去のfew-shot】"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "t&=\\dfrac{x}{8\\cos\\theta}"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "y&=\\left(1-\\dfrac{x}{8\\cos\\theta}\\right)\\sin\\theta"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "\\text{を満たす実数 }\\theta\\text{ が存在する」}"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "この計算だけで所属条件を離れず、次の連続した同値変形へ必ず反映"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "増減表前に到達した$\\theta$だけの存在条件を、$\\theta$を消去するための起点として1回だけ再掲"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$\\cos^3\\beta=\\dfrac{x}{8}$"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$0<\\beta<\\alpha$を確認"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "\\begin{array}{c|ccccc}"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "f_x'(\\theta)&&+&0&-&"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "定義域、導関数、導関数が0になる点の定義と区間内確認、各区間での符号、関数値、増減表、最大値と値域の順"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$f_x(\\theta)$は$\\theta=\\beta$のとき最大となり、その最大値は"
+    ));
+    let range_few_shot = TRAJECTORY_REGION_INSTRUCTIONS
+        .split("【値域によるパラメータ消去のfew-shot】")
+        .nth(1)
+        .and_then(|text| text.split("【領域決定後に最終計算がある複合問題】").next())
+        .expect("値域のfew-shotが存在すること");
+    for forbidden in ["臨界点", "臨界値", "critical point", "critical value"] {
+        assert!(!range_few_shot.contains(forbidden));
+    }
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "V=\\pi\\int_0^8"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "【領域決定後に最終計算がある複合問題】"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "領域を求めた時点で解答を終了してはいけません"
+    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
+        "$V=\\pi\\int f(x)^2\\,dx$"
+    ));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("自力で同じ流れを再現できる粒度"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("計算量や場合分けを減らせる場合は、その方法を積極的に選んで"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("通常の計算より何を省けるか"));
@@ -661,10 +1502,23 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ベクトルは太字ではなく、必ず矢印付き"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$\\vec{a}$、2点を結ぶ有向線分は$\\overrightarrow{AB}$"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\mathbf、\\boldsymbol、\\bm、\\pmb等"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("点名と座標の組を等号で結ばない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$AB$の中点を$M(x,y)$とする"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("点$A(1,2)$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("各行末にコンマを付けない"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("下の式$\\leqq$対象の式$\\leqq$上の式"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("別々の不等式へ分けず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("関数を微分して増減、極値、最大・最小"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("導関数の符号変化と結論の対応が見やすくなるときに増減表"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
+        "1変数関数の値域または最大・最小を導関数の正負と符号変化から求める場合"
+    ));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
+        "文章で「増加し、その後減少する」と述べるだけで終えず"
+    ));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
+        "「臨界点」「臨界値」「critical point」「critical value」は高校数学の答案・解説では使用しない"
+    ));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("先に導関数を求め"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("表は論証の代わりではなく"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("二段組では列数と記述を絞って\\linewidth内"));
@@ -673,17 +1527,30 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("各行が単独で列幅に収まる"));
     assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("\\linewidthの横幅を活かし"));
     assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("超えそうな場合"));
+    assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("数学が苦手な高校生"));
+    assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("基本事項は省略しない"));
+    assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("非自明な変形を一段ずつ"));
+    assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("同じ手順を自分で再現できる"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("問題と解答・研究問題の完成解答調"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("板書・授業ノート調"));
-    assert!(SOLUTION_REFERENCE_PROFILE.contains("必要条件だけで進めた場合は最後に十分性"));
+    assert!(SOLUTION_REFERENCE_PROFILE.contains("問題別の追加指示がある場合は、その構成を優先"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("答えを枠で囲んだり"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("覚えるべき手法・知識、その手法を選ぶ目印"));
     assert!(SOLUTION_REFERENCE_PROFILE.contains("必要に応じて増減表で区間ごとの増減と関数値"));
     assert!(!SOLUTION_REFERENCE_PROFILE.contains("必要に応じて末尾へ「（答）」"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("単一の問題文ではなく"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【概要】"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【基本事項】"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【定石】"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【手順】"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【典型例】"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【よくある誤り】"));
+    assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("detectedTypeはpart"));
+    assert!(BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("数学が苦手な高校生"));
 }
 
 #[test]
-fn ai_answer_guidance_has_a_bounded_length() {
+fn ai_generation_guidance_has_a_bounded_length() {
     use kyozai_kobo_lib::ai::{create_job, CreateJobPayload};
 
     let (_dir, state) = make_state();
@@ -707,6 +1574,24 @@ fn ai_answer_guidance_has_a_bounded_length() {
         &state,
         CreateJobPayload {
             source_type: "text".into(),
+            conversion_mode: Some("generate_explanation".into()),
+            options: Some(json!({"explanationGuidance": "あ".repeat(1001)})),
+            input_text: Some(r"【問題文】$x^2=1$を解け。
+【参照する解答】$x=\pm1$".into()),
+            input_names: vec![],
+            target_entity_type: None,
+            target_entity_id: None,
+            target_field: None,
+        },
+    )
+    .expect_err("長すぎる解説内容の指示は拒否すること");
+    assert!(error.contains("解説内容の指示"));
+    assert!(error.contains("最大1,000文字"));
+
+    let error = create_job(
+        &state,
+        CreateJobPayload {
+            source_type: "text".into(),
             conversion_mode: Some("generate_answer".into()),
             options: Some(json!({"solutionLayout": "three_column"})),
             input_text: Some("$x^2=1$を解け。".into()),
@@ -718,6 +1603,22 @@ fn ai_answer_guidance_has_a_bounded_length() {
     )
     .expect_err("未対応の想定レイアウトは拒否すること");
     assert!(error.contains("two_column / single_column"));
+
+    let error = create_job(
+        &state,
+        CreateJobPayload {
+            source_type: "text".into(),
+            conversion_mode: Some("generate_answer".into()),
+            options: Some(json!({"solutionDetail": "expert"})),
+            input_text: Some("$x^2=1$を解け。".into()),
+            input_names: vec![],
+            target_entity_type: None,
+            target_entity_id: None,
+            target_field: None,
+        },
+    )
+    .expect_err("未対応の解答モードは拒否すること");
+    assert!(error.contains("standard / beginner"));
 }
 
 #[test]

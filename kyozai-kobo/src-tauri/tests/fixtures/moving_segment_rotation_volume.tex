@@ -1,0 +1,220 @@
+$xy$平面上の任意の点を$X(x,y)$とする。
+線分$PQ$上の点は、$0\leqq t\leqq1$を用いて端点を補間して表せるから、
+\[
+\begin{aligned}
+X(x,y)\in D
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+0&\leqq\theta\leqq\dfrac{\pi}{2}\\
+0&\leqq t\leqq1\\
+x&=8t\cos\theta\\
+y&=(1-t)\sin\theta
+\end{aligned}
+\right.\\
+\text{を満たす実数 }\theta,t\text{ が存在する」}
+\end{gathered}
+\end{aligned}
+\]
+
+$0<x<8$を固定し、
+\[
+\cos\alpha=\frac{x}{8},
+\qquad
+0<\alpha<\frac{\pi}{2}
+\]
+とする。$x=8t\cos\theta>0$であるから、$t>0$かつ
+$\cos\theta>0$であり、
+\[
+t=\frac{x}{8\cos\theta}
+\]
+となる。$\cos\theta$は
+$0\leqq\theta\leqq\dfrac{\pi}{2}$で減少するので、
+\[
+\begin{aligned}
+0\leqq t\leqq1
+&\Longleftrightarrow
+0<\frac{x}{8\cos\theta}\leqq1\\
+&\Longleftrightarrow
+x\leqq8\cos\theta\\
+&\Longleftrightarrow
+\cos\alpha\leqq\cos\theta\\
+&\Longleftrightarrow
+0\leqq\theta\leqq\alpha
+\end{aligned}
+\]
+である。また、
+\[
+f_x(\theta)
+=\sin\theta-\frac{x}{8}\tan\theta
+\]
+とおく。ここで、所属条件から$t$を消去する。
+\[
+\begin{aligned}
+X(x,y)\in D
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+0&\leqq\theta\leqq\dfrac{\pi}{2}\\
+0&\leqq t\leqq1\\
+x&=8t\cos\theta\\
+y&=(1-t)\sin\theta
+\end{aligned}
+\right.\\
+\text{を満たす実数 }\theta,t\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+0&\leqq\theta\leqq\alpha\\
+t&=\dfrac{x}{8\cos\theta}\\
+y&=\left(1-\dfrac{x}{8\cos\theta}\right)\sin\theta
+\end{aligned}
+\right.\\
+\text{を満たす実数 }\theta,t\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+0&\leqq\theta\leqq\alpha\\
+y&=f_x(\theta)
+\end{aligned}
+\right.\\
+\text{を満たす実数 }\theta\text{ が存在する」}
+\end{gathered}
+\end{aligned}
+\]
+
+残った$\theta$を消去するため、$f_x$の値域を求める。
+
+$0\leqq\theta\leqq\alpha<\dfrac{\pi}{2}$では
+\[
+f_x'(\theta)
+=\cos\theta-\frac{x}{8\cos^2\theta}
+=\frac{\cos^3\theta-\dfrac{x}{8}}{\cos^2\theta}
+\]
+である。ここで、
+\[
+\cos^3\beta=\frac{x}{8},
+\qquad
+0<\beta<\frac{\pi}{2}
+\]
+となる$\beta$をとる。$0<\dfrac{x}{8}<1$であるから、
+\[
+\frac{x}{8}<\left(\frac{x}{8}\right)^{1/3}<1
+\]
+である。$\cos\alpha=\dfrac{x}{8}$、
+$\cos\beta=\left(\dfrac{x}{8}\right)^{1/3}$より
+\[
+\cos\alpha<\cos\beta<1
+\]
+であり、$0\leqq\theta\leqq\dfrac{\pi}{2}$では$\cos\theta$が減少するので、
+\[
+0<\beta<\alpha
+\]
+となる。
+
+この範囲では$\cos^2\theta>0$である。また、
+$\cos\theta$は減少するから、$f_x'(\theta)$の符号は
+\[
+\left\{
+\begin{aligned}
+f_x'(\theta)&>0 &&(0\leqq\theta<\beta)\\
+f_x'(\beta)&=0\\
+f_x'(\theta)&<0 &&(\beta<\theta\leqq\alpha)
+\end{aligned}
+\right.
+\]
+となる。このとき、
+\[
+\begin{aligned}
+f_x(\beta)
+&=\sin\beta-\cos^3\beta\tan\beta\\
+&=(1-\cos^2\beta)\sin\beta\\
+&=\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\end{aligned}
+\]
+であり、$f_x(0)=f_x(\alpha)=0$である。したがって、増減表は
+\[
+\begin{array}{c|ccccc}
+\theta&0&&\beta&&\alpha\\ \hline
+f_x'(\theta)&&+&0&-&\\ \hline
+f_x(\theta)&0&\nearrow&
+\left\{1-\left(\dfrac{x}{8}\right)^{2/3}\right\}^{3/2}
+&\searrow&0
+\end{array}
+\]
+となる。この表より、$f_x(\theta)$は$\theta=\beta$のとき最大となり、最大値は
+\[
+\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\]
+である。さらに、$f_x$は$0\leqq\theta\leqq\alpha$で連続であるから、$f_x$の値域は
+\[
+0\leqq f_x(\theta)\leqq
+\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\]
+である。よって、$0<x<8$を固定すると、
+\[
+\begin{aligned}
+X(x,y)\in D
+&\Longleftrightarrow
+\begin{gathered}
+\text{「}\;
+\left\{
+\begin{aligned}
+0&\leqq\theta\leqq\alpha\\
+y&=f_x(\theta)
+\end{aligned}
+\right.\\
+\text{を満たす実数 }\theta\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow
+0\leqq y\leqq
+\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\end{aligned}
+\]
+となる。
+
+初めの補間条件から、$x=0$では$0\leqq y\leqq1$であり、
+$x=8$では$t=1$かつ$\theta=0$となるので$y=0$である。これらを統合すると、
+\[
+\begin{aligned}
+X(x,y)\in D
+&\Longleftrightarrow
+\left\{
+\begin{aligned}
+0&\leqq x\leqq8\\
+0&\leqq y\leqq
+\left\{1-\left(\dfrac{x}{8}\right)^{2/3}\right\}^{3/2}
+\end{aligned}
+\right.
+\end{aligned}
+\]
+
+この領域$D$を$x$軸のまわりに回転した立体の体積$V$は
+\[
+V
+=\pi\int_0^8
+\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3}
+\,dx
+\]
+である。$x=8u^3$とおくと、$0\leqq u\leqq1$かつ$dx=24u^2\,du$であるから、
+\[
+\begin{aligned}
+V
+&=24\pi\int_0^1u^2(1-u^2)^3\,du\\
+&=24\pi\int_0^1
+\left(u^2-3u^4+3u^6-u^8\right)\,du\\
+&=24\pi
+\left(\frac13-\frac35+\frac37-\frac19\right)\\
+&=\frac{128\pi}{105}
+\end{aligned}
+\]
