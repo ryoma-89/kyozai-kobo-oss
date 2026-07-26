@@ -46,5 +46,7 @@ npm run tauri build
 
 ## ライセンス
 
-[../LICENSE](../LICENSE)（PolyForm Noncommercial License 1.0.0）を参照してください。
-個人利用・非商用利用は自由ですが、商用利用はできません。
+[../LICENSE](../LICENSE)（PolyForm Internal Use License 1.0.0 + 追加許諾）を参照してください。
+
+個人利用・業務利用ともに自由で、作成したグラフ・PDF・教材は商用を含めて自由に利用できます。
+一方、**本ソフトウェア自体（改変版・ビルド済みEXEを含む）を第三者へ配布・販売することはできません**。

@@ -1,14 +1,19 @@
 # kyozai-kobo-oss
 
-[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![License: PolyForm Internal Use 1.0.0](https://img.shields.io/badge/License-PolyForm%20Internal%20Use%201.0.0%20%2B%20Additional%20Permissions-blue.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6.svg)](#)
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-24C8DB.svg)](https://tauri.app)
 
 塾教材をLaTeXで作成・管理するWindows向けデスクトップアプリ「**教材工房**」と、
 その中から呼び出せるグラフ作成アプリ「**MathGraph PDF Studio**」をまとめたリポジトリです。
 
-> **ライセンス: [PolyForm Noncommercial License 1.0.0](LICENSE)**
-> 個人利用・研究・学習・非営利団体での利用は自由に行えますが、**商用利用はできません**。
+> **ライセンス: [PolyForm Internal Use License 1.0.0 + 追加許諾](LICENSE)**
+>
+> - ✅ **使うのは自由**: 個人でも、塾・学校などの業務でも、このソフトで教材を作れます
+> - ✅ **作った教材はあなたのもの**: 生成した教材・PDF・`.tex`・図表は、有料授業での配布や販売を含め**商用でも自由に利用できます**
+> - ✅ **自分用の改造は自由**
+> - ❌ **ソフト自体の再配布・販売は不可**: 本体・改変版・ビルド済みEXEを第三者へ配布できません
+>
 > 詳細条件は [LICENSE](LICENSE) を必ず確認してください。
 
 ## 構成

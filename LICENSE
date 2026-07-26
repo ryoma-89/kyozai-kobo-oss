@@ -1,8 +1,98 @@
-# PolyForm Noncommercial License 1.0.0
+# License — 教材工房 / MathGraph PDF Studio
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+This software is licensed under the **PolyForm Internal Use License 1.0.0**
+(reproduced in full below), **together with the Additional Permissions** granted
+in the next section.
 
 Required Notice: Copyright Ryoma (https://github.com/ryoma-89)
+
+---
+
+## Summary (plain language — not part of the license terms)
+
+概要（法的効力を持たない参考説明）:
+
+- ✅ **使ってよい**: 個人でも、塾・学校・予備校などの業務でも、このソフトを使って教材を作れます。
+- ✅ **作った教材は自由**: このソフトで作成した教材・PDF・`.tex`・図表は**あなたのもの**です。
+  有料授業での配布や販売を含め、商用でも自由に利用できます。
+- ✅ **自分用に改造してよい**: 自分・自社で使うために改変できます。
+- ❌ **ソフト自体を配ってはいけない**: 本体・改変版・ビルド済みEXEを第三者へ配布・販売できません。
+  入手は作者の公式リポジトリからお願いします。
+
+In short: **use it freely, including in your business; keep everything you make with it;
+just don't redistribute or sell the software itself.**
+
+---
+
+## Additional Permissions
+
+These permissions are granted by the licensor **in addition to** the PolyForm
+Internal Use License 1.0.0 below. Where these Additional Permissions grant more
+than the PolyForm terms, these Additional Permissions control.
+
+### 1. Personal Use
+
+Use of the software for personal purposes — including personal study, research,
+lesson preparation, teaching, and hobby projects — is a permitted purpose, in
+addition to the internal business use permitted by the PolyForm terms.
+
+### 2. Materials You Create
+
+Teaching materials and other documents you create using the software —
+including generated PDF, LaTeX (`.tex`), image, graph, and archive files — are
+yours. The licensor claims no ownership of your content and imposes no
+restriction on those materials under these terms. You may use, reproduce,
+distribute, publish, and sell those materials, **including for commercial
+purposes**.
+
+For the avoidance of doubt: where the software inserts its own template text,
+boilerplate, sample content, or generated code into such output, the licensor
+additionally grants you a perpetual, worldwide, royalty-free, irrevocable
+license to use, reproduce, modify, distribute, and sell those inserted portions
+as part of your materials, for any purpose including commercial purposes.
+
+This permission applies only to output you produce with the software. It does
+not permit distributing the software itself, in source or executable form.
+
+### 3. Governing Text
+
+The English text of these Additional Permissions is the operative text. The
+Japanese text below is a reference translation (参考訳) provided for
+convenience; if the two differ, the English text controls.
+
+---
+
+## 追加許諾（参考訳）
+
+以下は上記 Additional Permissions の参考訳です。効力を持つのは英語版です。
+
+### 1. 個人利用
+
+個人の学習・研究・授業準備・指導・趣味の目的で本ソフトウェアを使用することは、
+PolyForm 本文が認める社内業務利用に加えて、許可された目的とします。
+
+### 2. 作成した教材
+
+本ソフトウェアを使って作成した教材その他の文書（生成されたPDF、LaTeX（`.tex`）、
+画像、グラフ、アーカイブファイルを含む）は、**あなたのもの**です。
+ライセンサーはあなたの内容物に対する権利を主張せず、本ライセンスによる制限も課しません。
+**商用目的を含め**、それらの教材を自由に使用・複製・配布・公表・販売できます。
+
+疑義を避けるために付言すると、本ソフトウェアが自身のテンプレート文、定型文、
+サンプル内容、生成コードをそれらの出力へ挿入する場合、ライセンサーは、
+それらの挿入部分をあなたの教材の一部として、商用を含むあらゆる目的で
+使用・複製・改変・配布・販売するための、永続的・世界的・無償・取消不能の
+ライセンスを追加的に許諾します。
+
+この許諾は本ソフトウェアを用いて生成した出力のみに適用されます。
+本ソフトウェア自体を、ソースコード形式・実行可能形式のいずれであっても
+配布することを許可するものではありません。
+
+---
+
+# PolyForm Internal Use License 1.0.0
+
+<https://polyformproject.org/licenses/internal-use/1.0.0>
 
 ## Acceptance
 
@@ -10,17 +100,7 @@ In order to get any license under these terms, you must agree to them as both st
 
 ## Copyright License
 
-The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
-
-## Distribution License
-
-The licensor grants you an additional copyright license to distribute copies of the software.  Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
-
-## Notices
-
-You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
-
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license), and you may not distribute the software.
 
 ## Changes and New Works License
 
@@ -30,21 +110,13 @@ The licensor grants you an additional copyright license to make changes and new 
 
 The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
 
-## Noncommercial Purposes
-
-Any noncommercial purpose is a permitted purpose.
-
-## Personal Uses
-
-Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
-
-## Noncommercial Organizations
-
-Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
-
 ## Fair Use
 
 You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+## Internal Business Use
+
+Use of the software for the internal business operations of you and your company is use for a permitted purpose.
 
 ## No Other Rights
 
