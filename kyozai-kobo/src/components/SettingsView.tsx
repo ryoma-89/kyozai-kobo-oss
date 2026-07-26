@@ -15,6 +15,8 @@ import type { TemplateSummary } from "../types";
 import { CodexSettings } from "./CodexSettings";
 import { ServerSettings } from "./ServerSettings";
 import { Icon } from "./Icon";
+import { SetupGuide } from "./SetupGuide";
+import { Modal } from "./ui";
 
 /** 設定画面 */
 export function SettingsView() {
@@ -24,6 +26,7 @@ export function SettingsView() {
   const [detecting, setDetecting] = useState(false);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [localDirty, setLocalDirty] = useState(false);
+  const [setupGuideOpen, setSetupGuideOpen] = useState(false);
   const seenSettingsBumpRef = useRef(bumps.settings);
   const pendingSettingsRefreshRef = useRef(false);
   const settingsLoadRequestRef = useRef(0);
@@ -198,6 +201,19 @@ export function SettingsView() {
 
       {isTauri && (
         <section className="mb-6 space-y-3">
+          {sectionTitle("セットアップ診断")}
+          <p className="text-xs" style={{ color: "var(--muted)" }}>
+            PDF生成に必要なTeX Liveと、AI機能に必要なCodex CLIの検出結果、公式の導入手順、
+            導入後に確認する設定をいつでも表示できます。
+          </p>
+          <button type="button" className="btn btn-outline" onClick={() => setSetupGuideOpen(true)}>
+            環境と導入手順を確認
+          </button>
+        </section>
+      )}
+
+      {isTauri && (
+        <section className="mb-6 space-y-3">
           {sectionTitle("教材サーバー（iPad・ブラウザからのアクセス）")}
           <ServerSettings />
         </section>
@@ -366,6 +382,15 @@ export function SettingsView() {
           保存
         </button>
       </div>
+
+      {setupGuideOpen && (
+        <Modal title="セットアップ診断" onClose={() => setSetupGuideOpen(false)} wide>
+          <SetupGuide
+            onDone={() => setSetupGuideOpen(false)}
+            onOpenSettings={() => setSetupGuideOpen(false)}
+          />
+        </Modal>
+      )}
     </div>
   );
 }

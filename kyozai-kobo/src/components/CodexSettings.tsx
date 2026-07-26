@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   codexLoginCancel,
   codexLoginStart,
@@ -12,6 +13,12 @@ import {
 import { useApp } from "../store";
 import { isTauri } from "../transport";
 import type { CodexModelSettings, CodexStatus } from "../types";
+import {
+  CODEX_INSTALL_URL,
+  CODEX_NPM_INSTALL_COMMAND,
+  CODEX_WINDOWS_INSTALL_COMMAND,
+  NODE_DOWNLOAD_URL,
+} from "../setupRequirements";
 
 /** Codex / ChatGPT接続設定（デスクトップ・Web共通） */
 export function CodexSettings() {
@@ -108,13 +115,33 @@ export function CodexSettings() {
         </div>
 
         {!status.installed && (
-          <p style={{ color: "var(--muted)" }}>
-            OpenAIのCodex CLIが見つかりません。PC上のPowerShellで
-            <code className="mx-1 rounded px-1" style={{ background: "var(--panel-3)" }}>
-              npm install -g @openai/codex
+          <div className="space-y-2" style={{ color: "var(--muted)" }}>
+            <p>
+              OpenAIのCodex CLIが見つかりません。Windowsでは、PC上のPowerShellで次の公式インストールコマンドを実行できます。
+            </p>
+            <code className="block select-all overflow-x-auto rounded px-2 py-1.5" style={{ background: "var(--panel-3)" }}>
+              {CODEX_WINDOWS_INSTALL_COMMAND}
             </code>
-            を実行してインストールしてください（Node.jsが必要）。
-          </p>
+            <p>
+              npm版を使う場合は <code>{CODEX_NPM_INSTALL_COMMAND}</code> を実行します。この方法だけNode.jsが必要です。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => void openUrl(CODEX_INSTALL_URL).catch((error) => showToast(String(error), "error"))}
+              >
+                Codex公式の導入案内
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => void openUrl(NODE_DOWNLOAD_URL).catch((error) => showToast(String(error), "error"))}
+              >
+                Node.js公式（npm版用）
+              </button>
+            </div>
+          </div>
         )}
 
         {authenticated && (

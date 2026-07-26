@@ -1,5 +1,14 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { aiCancelJob, aiListJobs, createSampleData, hasAnyData, openPath, showInFolder } from "./api";
+import {
+  aiCancelJob,
+  aiListJobs,
+  createSampleData,
+  getSettings,
+  hasAnyData,
+  openPath,
+  setSettings,
+  showInFolder,
+} from "./api";
 import { AiJobsView } from "./components/AiJobsView";
 import { BankView } from "./components/BankView";
 import { PairingScreen } from "./components/PairingScreen";
@@ -8,6 +17,7 @@ import { PdfSaveButton } from "./components/PdfSaveButton";
 import { PartsView } from "./components/PartsView";
 import { ProjectsView } from "./components/ProjectsView";
 import { SearchView } from "./components/SearchView";
+import { SetupGuide } from "./components/SetupGuide";
 import { SettingsView } from "./components/SettingsView";
 import { TemplatesView } from "./components/TemplatesView";
 import { ConfirmDialog, Modal, Toast } from "./components/ui";
@@ -62,6 +72,8 @@ export default function App() {
     closeGraphOverlay,
   } = useApp();
   const [welcome, setWelcome] = useState(false);
+  const [setupGuideOpen, setSetupGuideOpen] = useState(false);
+  const [initialHasData, setInitialHasData] = useState<boolean | null>(null);
   // Web版の認証状態: null=確認中
   const [authed, setAuthed] = useState<boolean | null>(isTauri ? true : null);
   const [authUnavailable, setAuthUnavailable] = useState(false);
@@ -227,14 +239,28 @@ export default function App() {
     };
   }, []);
 
-  // 初回起動時: データが空ならサンプルデータ作成を提案（デスクトップのみ）
+  // 初回起動時: 先に必要環境を案内し、その後データが空ならサンプル作成を提案する
   useEffect(() => {
     if (!isTauri || !authed) return;
-    hasAnyData()
-      .then((has) => {
-        if (!has) setWelcome(true);
+    let active = true;
+    Promise.all([
+      getSettings().catch(() => ({} as Record<string, string>)),
+      hasAnyData(),
+    ])
+      .then(([settings, has]) => {
+        if (!active) return;
+        setInitialHasData(has);
+        if (settings["setup_guide_completed"] !== "1") {
+          setWelcome(false);
+          setSetupGuideOpen(true);
+        } else if (!has) {
+          setWelcome(true);
+        }
       })
       .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [authed]);
 
   // グローバルショートカット: Ctrl+F で検索
@@ -268,6 +294,20 @@ export default function App() {
       showToast("サンプルデータを追加しました");
     } catch (e) {
       showToast(String(e), "error");
+    }
+  };
+
+  const finishSetupGuide = async (openSettings: boolean) => {
+    try {
+      await setSettings({ setup_guide_completed: "1" });
+      setSetupGuideOpen(false);
+      if (openSettings) {
+        setView("settings");
+      } else if (initialHasData === false) {
+        setWelcome(true);
+      }
+    } catch (error) {
+      showToast(`セットアップ案内の状態を保存できませんでした: ${String(error)}`, "error");
     }
   };
 
@@ -630,6 +670,15 @@ export default function App() {
           <div className="max-h-[68vh] overflow-auto rounded border p-2" style={{ borderColor: "var(--border)" }}>
             <PdfCanvasViewer src={pdfViewer.url} zoom={pdfViewer.zoom} />
           </div>
+        </Modal>
+      )}
+
+      {setupGuideOpen && (
+        <Modal title="初回セットアップ" onClose={() => void finishSetupGuide(false)} wide>
+          <SetupGuide
+            onDone={() => void finishSetupGuide(false)}
+            onOpenSettings={() => void finishSetupGuide(true)}
+          />
         </Modal>
       )}
 
