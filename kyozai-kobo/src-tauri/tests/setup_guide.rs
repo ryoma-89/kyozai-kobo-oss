@@ -28,6 +28,8 @@ fn nsis_installer_shows_prerequisites_without_installing_them() {
         "OpenAI Codex CLI",
         "ChatGPT",
         "Node.js",
+        "Tailscale",
+        "任意",
         "自動インストールされません",
     ] {
         assert!(hook.contains(required), "インストーラー案内に {required} がありません");
@@ -46,11 +48,14 @@ fn first_run_guide_uses_live_detection_and_can_be_reopened() {
     assert!(app.contains("setView(\"settings\")"));
 
     let guide = project_file("../src/components/SetupGuide.tsx");
-    assert!(guide.contains("Promise.allSettled([detectTex(), codexStatus()])"));
+    assert!(guide.contains("tailscaleStatus()"));
     assert!(guide.contains("tex?.uplatex_path"));
     assert!(guide.contains("tex?.dvipdfmx_path"));
     assert!(guide.contains("codex?.installed"));
     assert!(guide.contains("codex?.account?.account"));
+    assert!(guide.contains("tailscale?.installed"));
+    assert!(guide.contains("tailscale?.serveConfigured"));
+    assert!(guide.contains("同じWi-Fi内だけで使う場合は不要です"));
     assert!(guide.contains("教材工房が外部ソフトを無断でインストールすることはありません"));
 
     let settings = project_file("../src/components/SettingsView.tsx");
@@ -64,6 +69,8 @@ fn codex_guide_distinguishes_windows_installer_from_npm_requirements() {
     assert!(requirements.contains("https://chatgpt.com/codex/install.ps1"));
     assert!(requirements.contains("npm install -g @openai/codex"));
     assert!(requirements.contains("https://nodejs.org/en/download"));
+    assert!(requirements.contains("https://tailscale.com/docs/install/windows"));
+    assert!(requirements.contains("https://tailscale.com/docs/install/ios"));
 
     let guide = project_file("../src/components/SetupGuide.tsx");
     assert!(guide.contains("npm版を使う場合だけNode.jsが必要です"));
