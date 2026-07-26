@@ -44,8 +44,8 @@ fn seed(conn: &rusqlite::Connection) -> (i64, i64, i64, i64) {
     .unwrap();
     let unit_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO problems (unit_id, title, statement_latex, answer_latex, explanation_latex, difficulty, created_at, updated_at)
-         VALUES (?1, '頂点を求める', '二次関数 $y = x^2 - 4x + 7$ の頂点を求めよ。', '$(2,\\ 3)$', '平方完成する。', '基礎', ?2, ?2)",
+        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, created_at, updated_at)
+         VALUES (?1, '頂点を求める', '二次関数 $y = x^2 - 4x + 7$ の頂点を求めよ。', '二次関数 $y = x^2 - 4x + 7$ の\\par 頂点を求めよ。', '$(2,\\ 3)$', '平方完成する。', '基礎', ?2, ?2)",
         params![unit_id, now],
     )
     .unwrap();
@@ -72,8 +72,8 @@ fn create_project(conn: &rusqlite::Connection, name: &str) -> i64 {
 /// add_problem_to_project コマンドと同じスナップショットINSERT
 fn snapshot_into_project(conn: &rusqlite::Connection, project_id: i64, problem_id: i64) {
     conn.execute(
-        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, snap_title, snap_statement, snap_answer, snap_explanation, snap_difficulty, snap_attachments, created_at)
-         SELECT ?1, 'problem', COALESCE((SELECT MAX(sort_order) FROM project_items WHERE project_id=?1),0)+1, id, title, statement_latex, answer_latex, explanation_latex, difficulty, '[]', ?2
+        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_attachments, created_at)
+         SELECT ?1, 'problem', COALESCE((SELECT MAX(sort_order) FROM project_items WHERE project_id=?1),0)+1, id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, '[]', ?2
          FROM problems WHERE id=?3",
         params![project_id, db::now_str(), problem_id],
     )
@@ -142,6 +142,7 @@ fn snapshot_is_immutable_after_bank_update() {
     // スナップショットは登録時のまま
     assert_eq!(item.snap_title, "頂点を求める");
     assert!(item.snap_statement.contains("x^2 - 4x + 7"));
+    assert!(item.snap_statement_two_column.contains("\\par"));
     // バンク側更新が検知される
     assert!(item.bank_updated, "バンク更新の差分検知ができていない");
     assert!(item.source_exists);
@@ -167,6 +168,7 @@ fn default_settings() -> ProjectSettings {
         auto_number: true,
         page_break_per_problem: false,
         include_explanation: true,
+        problem_two_column: false,
         two_column_mode: "none".into(),
         show_title: true,
         show_header: true,
@@ -259,6 +261,18 @@ fn tex_generation_problems_and_answers() {
         "問題文は2段組の外（1段）にあるべき"
     );
 
+    // 問題冊子2段組: 問題本文全体を1つのmulticolsへ入れ、解答冊子には影響させない
+    let mut problem_two_columns = default_settings();
+    problem_two_columns.problem_two_column = true;
+    let tex_p_two = build_tex("テスト教材", &problem_two_columns, &items, "problems");
+    assert_eq!(tex_p_two.matches("\\begin{multicols}{2}").count(), 1);
+    assert!(tex_p_two.contains("\\setlength{\\columnseprule}{0.4pt}"));
+    assert!(tex_p_two.contains("\\setlength{\\emergencystretch}{1.5em}"));
+    let problem_mc_start = tex_p_two.find("\\begin{multicols}{2}").unwrap();
+    assert!(tex_p_two[problem_mc_start..].contains("x^2 - 4x + 7"));
+    let tex_a_single = build_tex("テスト教材", &problem_two_columns, &items, "answers");
+    assert!(!tex_a_single.contains("\\begin{multicols}{2}"));
+
     // 番号形式のカスタマイズ
     let mut s4 = default_settings();
     s4.number_format = "第{n}問".into();
@@ -294,6 +308,111 @@ fn tex_generation_problems_and_answers() {
     s8.header_left = "講座名".into();
     let tex_p8 = build_tex("テスト教材", &s8, &items, "problems");
     assert!(tex_p8.contains("講座名"));
+}
+
+#[test]
+fn problem_statement_variant_follows_each_booklets_actual_column_width() {
+    let (_dir, conn) = setup();
+    let (_s, _f, _u, problem_id) = seed(&conn);
+    let project_id = create_project(&conn, "問題文表示形式テスト");
+    snapshot_into_project(&conn, project_id, problem_id);
+    let mut items = items_of(&conn, project_id).unwrap();
+    items[0].snap_statement = "SINGLE-COLUMN-STATEMENT".into();
+    items[0].snap_statement_two_column = "TWO-COLUMN-STATEMENT".into();
+
+    let settings = default_settings();
+    let single_problem = build_tex("表示形式テスト", &settings, &items, "problems");
+    assert!(single_problem.contains("SINGLE-COLUMN-STATEMENT"));
+    assert!(!single_problem.contains("TWO-COLUMN-STATEMENT"));
+
+    let mut two_column_problem_settings = settings.clone();
+    two_column_problem_settings.problem_two_column = true;
+    let two_column_problem =
+        build_tex("表示形式テスト", &two_column_problem_settings, &items, "problems");
+    assert!(two_column_problem.contains("TWO-COLUMN-STATEMENT"));
+    assert!(!two_column_problem.contains("SINGLE-COLUMN-STATEMENT"));
+
+    let mut all_two_column_answer_settings = settings.clone();
+    all_two_column_answer_settings.two_column_mode = "all".into();
+    let all_two_column_answer =
+        build_tex("表示形式テスト", &all_two_column_answer_settings, &items, "answers");
+    assert!(all_two_column_answer.contains("TWO-COLUMN-STATEMENT"));
+    assert!(!all_two_column_answer.contains("SINGLE-COLUMN-STATEMENT"));
+
+    let mut answer_only_settings = settings;
+    answer_only_settings.two_column_mode = "answer_only".into();
+    let answer_only = build_tex("表示形式テスト", &answer_only_settings, &items, "answers");
+    assert!(answer_only.contains("SINGLE-COLUMN-STATEMENT"));
+    assert!(!answer_only.contains("TWO-COLUMN-STATEMENT"));
+}
+
+#[test]
+fn part_layout_mode_wraps_only_two_column_parts_without_nested_multicols() {
+    let (_dir, conn) = setup();
+    let project_id = create_project(&conn, "部品段組テスト");
+    let now = db::now_str();
+    conn.execute(
+        "INSERT INTO parts (title, part_type, latex_source, plain_text_preview, output_target, layout_mode, created_at, updated_at)
+         VALUES ('二段部品', 'text', 'TWO-COLUMN-PART', 'TWO-COLUMN-PART', 'both', 'two_column', ?1, ?1)",
+        params![now],
+    )
+    .unwrap();
+    let two_column_part_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO parts (title, part_type, latex_source, plain_text_preview, output_target, created_at, updated_at)
+         VALUES ('一段部品', 'text', 'SINGLE-COLUMN-PART', 'SINGLE-COLUMN-PART', 'both', ?1, ?1)",
+        params![now],
+    )
+    .unwrap();
+    let single_column_part_id = conn.last_insert_rowid();
+
+    for (sort_order, part_id) in [(1_i64, two_column_part_id), (2_i64, single_column_part_id)] {
+        conn.execute(
+            "INSERT INTO project_items (
+                project_id, item_type, sort_order, part_id, snap_title, content,
+                snap_part_type, snap_part_output_target, snap_part_layout_mode, created_at
+             )
+             SELECT ?1, 'part', ?2, id, title, latex_source, part_type, output_target, layout_mode, ?3
+             FROM parts WHERE id=?4",
+            params![project_id, sort_order, now, part_id],
+        )
+        .unwrap();
+    }
+
+    let items = items_of(&conn, project_id).unwrap();
+    assert_eq!(items[0].snap_part_layout_mode, "two_column");
+    assert_eq!(items[1].snap_part_layout_mode, "single_column");
+
+    let tex = build_tex("部品段組テスト", &default_settings(), &items, "problems");
+    assert_eq!(tex.matches("\\begin{multicols}{2}").count(), 1);
+    assert!(tex.contains("\\usepackage{multicol}"));
+    let two_start = tex.find("\\begin{multicols}{2}").unwrap();
+    let two_end = tex[two_start..].find("\\end{multicols}").unwrap() + two_start;
+    assert!(tex[two_start..two_end].contains("TWO-COLUMN-PART"));
+    assert!(!tex[two_start..two_end].contains("SINGLE-COLUMN-PART"));
+
+    let mut all_two_columns = default_settings();
+    all_two_columns.two_column_mode = "all".into();
+    let answer_tex = build_tex("部品段組テスト", &all_two_columns, &items, "answers");
+    assert_eq!(
+        answer_tex.matches("\\begin{multicols}{2}").count(),
+        1,
+        "教材全体の二段組内に部品の multicols を入れ子にしない"
+    );
+
+    let mut problem_two_columns = default_settings();
+    problem_two_columns.problem_two_column = true;
+    let problem_tex = build_tex("部品段組テスト", &problem_two_columns, &items, "problems");
+    assert_eq!(
+        problem_tex.matches("\\begin{multicols}{2}").count(),
+        1,
+        "問題冊子全体の二段組内に部品の multicols を入れ子にしない"
+    );
+    let problem_two_start = problem_tex.find("\\begin{multicols}{2}").unwrap();
+    let problem_two_end =
+        problem_tex[problem_two_start..].find("\\end{multicols}").unwrap() + problem_two_start;
+    assert!(problem_tex[problem_two_start..problem_two_end].contains("TWO-COLUMN-PART"));
+    assert!(problem_tex[problem_two_start..problem_two_end].contains("SINGLE-COLUMN-PART"));
 }
 
 #[test]
@@ -373,10 +492,14 @@ fn template_validation_and_seed() {
     // 既定テンプレートは警告なし
     let w = validate_templates("", DEFAULT_PROBLEM_TEMPLATE, DEFAULT_ANSWER_TEMPLATE);
     assert!(w.is_empty(), "既定テンプレートに警告: {:?}", w);
-    // physics / float パッケージが含まれる
+    // 提示された標準パッケージとTikZライブラリが問題・解答の両方に含まれる
     for tpl in [DEFAULT_PROBLEM_TEMPLATE, DEFAULT_ANSWER_TEMPLATE] {
+        assert!(tpl.contains("\\usepackage{niceframe}"));
         assert!(tpl.contains("\\usepackage{physics}"));
-        assert!(tpl.contains("\\usepackage{float}"));
+        assert!(tpl.contains("\\usepackage{tikz}"));
+        assert!(tpl.contains("\\usetikzlibrary{intersections,patterns}"));
+        assert!(tpl.contains("\\usetikzlibrary{trees}"));
+        assert!(!tpl.contains("\\usepackage{float}"));
     }
     // BODYなしテンプレートは警告あり
     let w2 = validate_templates("", "\\begin{document}\\end{document}", DEFAULT_ANSWER_TEMPLATE);
@@ -384,6 +507,38 @@ fn template_validation_and_seed() {
     // 不明プレースホルダ警告
     let w3 = validate_templates("", DEFAULT_PROBLEM_TEMPLATE, &format!("{}\n{{{{UNKNOWN_PH}}}}", DEFAULT_ANSWER_TEMPLATE));
     assert!(w3.iter().any(|w| w.contains("UNKNOWN_PH")));
+}
+
+#[test]
+fn unedited_standard_template_is_upgraded_for_tikz() {
+    let (_dir, conn) = setup();
+    seed_default_template(&conn).unwrap();
+    conn.execute(
+        "UPDATE templates
+         SET problem_template='\\documentclass{ujarticle}\\usepackage{physics}\\begin{document}{{BODY}}\\end{document}',
+             answer_template='\\documentclass{ujarticle}\\usepackage{physics}\\begin{document}{{ANSWER_BODY}}\\end{document}',
+             packages_memo='physics'
+         WHERE name='高校数学教材・標準'",
+        [],
+    )
+    .unwrap();
+
+    seed_default_template(&conn).unwrap();
+    let (problem, answer, memo): (String, String, String) = conn
+        .query_row(
+            "SELECT problem_template, answer_template, packages_memo
+             FROM templates WHERE name='高校数学教材・標準'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    for template in [problem, answer] {
+        assert!(template.contains("\\usepackage{niceframe}"));
+        assert!(template.contains("\\usepackage{tikz}"));
+        assert!(template.contains("\\usetikzlibrary{intersections,patterns}"));
+        assert!(template.contains("\\usetikzlibrary{trees}"));
+    }
+    assert!(memo.contains("tikz(intersections, patterns, trees)"));
 }
 
 /// プロジェクトのテンプレートスナップショットが、テンプレート本体の変更に影響されないこと
@@ -453,6 +608,31 @@ fn compile_pdf_with_real_tex() {
     let pdf = pdf.expect("PDFパスが返ること");
     assert!(pdf.exists(), "PDFが生成されていない");
     assert!(std::fs::metadata(&pdf).unwrap().len() > 1000);
+
+    // 標準テンプレートでTikZ本体をそのまま挿入して組版できること。
+    let tikz_body = r#"\noindent
+\begin{tikzpicture}[scale=0.8]
+  \coordinate (A) at (0,0);
+  \coordinate (B) at (3,0);
+  \coordinate (C) at (1,2);
+  \draw (A)--(B)--(C)--cycle;
+  \fill[pattern=north east lines] (A)--(B)--(C)--cycle;
+  \node[below] at (A) {$A$};
+  \node[below] at (B) {$B$};
+  \node[above] at (C) {$C$};
+\end{tikzpicture}"#;
+    let tikz_tex = DEFAULT_PROBLEM_TEMPLATE
+        .replace("{{TITLE}}", "TikZテスト")
+        .replace("{{SUBTITLE}}", "")
+        .replace("{{HEADER_LEFT}}", "")
+        .replace("{{HEADER_RIGHT}}", "")
+        .replace("{{NAME_FIELD}}", "")
+        .replace("{{BODY}}", tikz_body);
+    let tikz_build = tempdir::TempDir::new("kyozai-tikz-pdf").unwrap();
+    let (tikz_success, tikz_pdf, tikz_log, tikz_message) =
+        run_compile_with(&uplatex, &dvipdfmx, tikz_build.path(), &tikz_tex).unwrap();
+    assert!(tikz_success, "{}\n{}", tikz_message, tikz_log);
+    assert!(tikz_pdf.unwrap().exists());
 
     // 軌跡問題の回帰スナップショットが、指定したgathered・左波括弧を含めて実際に組版できること。
     let trajectory_body = include_str!("fixtures/trajectory_hyperbola_midpoint.tex");
@@ -714,7 +894,10 @@ fn bank_export_import_roundtrip() {
         .unwrap();
     conn_a
         .execute(
-            "UPDATE problems SET statement_latex = statement_latex || ' \\includegraphics{imgabc.png}' WHERE id=?1",
+            "UPDATE problems
+             SET statement_latex = statement_latex || ' \\includegraphics{imgabc.png}',
+                 statement_latex_two_column = statement_latex_two_column || ' \\includegraphics{imgabc.png}'
+             WHERE id=?1",
             params![problem_id],
         )
         .unwrap();
@@ -734,9 +917,12 @@ fn bank_export_import_roundtrip() {
     assert_eq!(result.problems_imported, 1);
 
     // 問題・タグ・添付が復元され、LaTeX中のファイル名が新しい保存名に置換されている
-    let (title, statement): (String, String) = conn_b
-        .query_row("SELECT title, statement_latex FROM problems LIMIT 1", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+    let (title, statement, statement_two_column): (String, String, String) = conn_b
+        .query_row(
+            "SELECT title, statement_latex, statement_latex_two_column FROM problems LIMIT 1",
+            [],
+            |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .unwrap();
     assert_eq!(title, "頂点を求める");
@@ -745,6 +931,10 @@ fn bank_export_import_roundtrip() {
         .query_row("SELECT stored_name FROM attachments LIMIT 1", [], |r| r.get(0))
         .unwrap();
     assert!(statement.contains(&new_stored), "新ファイル名に置換されていない");
+    assert!(
+        statement_two_column.contains(&new_stored),
+        "二段組版の添付参照が新ファイル名へ置換されていない"
+    );
     assert!(att_dir_b.join(&new_stored).exists(), "添付ファイルが復元されていない");
     let tag: String = conn_b
         .query_row(

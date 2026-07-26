@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 /// 初期テンプレート「高校数学教材・標準」問題冊子用
 pub const DEFAULT_PROBLEM_TEMPLATE: &str = r#"\documentclass[uplatex,a4paper,11pt]{ujarticle}
 
+\usepackage{niceframe}
 \usepackage[dvipdfmx]{graphicx}
 \usepackage{amsmath,amssymb,mathtools}
 \usepackage{geometry}
@@ -15,10 +16,11 @@ pub const DEFAULT_PROBLEM_TEMPLATE: &str = r#"\documentclass[uplatex,a4paper,11p
 \usepackage{ascmac}
 \usepackage{multicol}
 \usepackage{tcolorbox}
-\tcbuselibrary{skins}
 \usepackage{enumitem}
 \usepackage{physics}
-\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{intersections,patterns}
+\usetikzlibrary{trees}
 
 \geometry{
   top=20mm,
@@ -59,6 +61,7 @@ pub const DEFAULT_PROBLEM_TEMPLATE: &str = r#"\documentclass[uplatex,a4paper,11p
 /// 初期テンプレート「高校数学教材・標準」解答冊子用
 pub const DEFAULT_ANSWER_TEMPLATE: &str = r#"\documentclass[uplatex,a4paper,11pt]{ujarticle}
 
+\usepackage{niceframe}
 \usepackage[dvipdfmx]{graphicx}
 \usepackage{amsmath,amssymb,mathtools}
 \usepackage{geometry}
@@ -67,10 +70,11 @@ pub const DEFAULT_ANSWER_TEMPLATE: &str = r#"\documentclass[uplatex,a4paper,11pt
 \usepackage{ascmac}
 \usepackage{multicol}
 \usepackage{tcolorbox}
-\tcbuselibrary{skins}
 \usepackage{enumitem}
 \usepackage{physics}
-\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{intersections,patterns}
+\usetikzlibrary{trees}
 
 \geometry{
   top=20mm,
@@ -85,6 +89,13 @@ pub const DEFAULT_ANSWER_TEMPLATE: &str = r#"\documentclass[uplatex,a4paper,11pt
 \rhead{{{HEADER_RIGHT}}}
 \cfoot{\thepage}
 \setlength{\headheight}{15pt}
+
+\newcounter{mondai}
+\newcommand{\mondai}{%
+  \refstepcounter{mondai}%
+  \par\medskip
+  \noindent\textbf{問題\themondai}\par
+}
 
 \begin{document}
 
@@ -213,17 +224,18 @@ fn assets_of(conn: &Connection, template_id: i64) -> rusqlite::Result<Vec<Templa
 pub fn seed_default_template(conn: &Connection) -> rusqlite::Result<()> {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM templates", [], |r| r.get(0))?;
     if n > 0 {
-        // 未編集（履歴なし）の既定テンプレートに新パッケージ（physics/float等）を反映
+        // 未編集（履歴なし）の既定テンプレートに新パッケージ（niceframe/TikZ等）を反映
         conn.execute(
             "UPDATE templates SET problem_template=?1, answer_template=?2,
                     packages_memo=?3, updated_at=?4
              WHERE name='高校数学教材・標準'
-               AND problem_template NOT LIKE '%physics%'
+               AND (problem_template NOT LIKE '%niceframe%'
+                    OR problem_template NOT LIKE '%\\usepackage{tikz}%')
                AND id NOT IN (SELECT DISTINCT template_id FROM template_versions)",
             rusqlite::params![
                 DEFAULT_PROBLEM_TEMPLATE,
                 DEFAULT_ANSWER_TEMPLATE,
-                "amsmath, amssymb, mathtools, graphicx, geometry, fancyhdr, titlesec, ascmac, multicol, tcolorbox(skins), enumitem, physics, float",
+                "niceframe, graphicx(dvipdfmx), amsmath, amssymb, mathtools, geometry, fancyhdr, titlesec, ascmac, multicol, tcolorbox, enumitem, physics, tikz(intersections, patterns, trees)",
                 now_str()
             ],
         )?;
@@ -235,10 +247,10 @@ pub fn seed_default_template(conn: &Connection) -> rusqlite::Result<()> {
          VALUES (?1, ?2, ?3, ?4, 'uplatex+dvipdfmx', ?5, ?6, ?6)",
         params![
             "高校数学教材・標準",
-            "A4・白黒印刷向けの標準教材テンプレート（ujarticle / uplatex + dvipdfmx）",
+            "A4・白黒印刷向け・TikZ図対応の標準教材テンプレート（ujarticle / uplatex + dvipdfmx）",
             DEFAULT_PROBLEM_TEMPLATE,
             DEFAULT_ANSWER_TEMPLATE,
-            "amsmath, amssymb, mathtools, graphicx, geometry, fancyhdr, titlesec, ascmac, multicol, tcolorbox(skins), enumitem, physics, float",
+            "niceframe, graphicx(dvipdfmx), amsmath, amssymb, mathtools, geometry, fancyhdr, titlesec, ascmac, multicol, tcolorbox, enumitem, physics, tikz(intersections, patterns, trees)",
             now
         ],
     )?;

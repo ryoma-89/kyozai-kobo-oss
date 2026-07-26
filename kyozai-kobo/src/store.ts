@@ -19,6 +19,7 @@ export interface RemoteBumps {
 
 export interface LastCompile extends CompileResult {
   label: string;
+  download_key: number;
 }
 
 interface ConfirmState {
@@ -31,6 +32,14 @@ export interface GraphOverlayState {
   initialGraphId?: string;
   onComplete: (result: CompleteGraphWebSessionResult) => void | Promise<void>;
   onCancel: () => void;
+}
+
+export interface ProjectReviewFix {
+  projectId: number;
+  itemId: number;
+  field: "statement" | "answer" | "explanation" | "content" | "item";
+  guidance: string;
+  action: "manual" | "ai";
 }
 
 interface AppStore {
@@ -46,6 +55,9 @@ interface AppStore {
   selectProblem: (id: number | null) => void;
   selectedProjectId: number | null;
   selectProject: (id: number | null) => void;
+  pendingProjectReviewFix: ProjectReviewFix | null;
+  openProjectReviewFix: (fix: ProjectReviewFix) => void;
+  clearProjectReviewFix: () => void;
 
   /** 保存されていない変更があるか（問題編集画面） */
   dirty: boolean;
@@ -112,6 +124,14 @@ export const useApp = create<AppStore>((set, get) => ({
   selectProblem: (id) => set({ selectedProblemId: id }),
   selectedProjectId: null,
   selectProject: (id) => set({ selectedProjectId: id }),
+  pendingProjectReviewFix: null,
+  openProjectReviewFix: (fix) =>
+    set({
+      view: "projects",
+      selectedProjectId: fix.projectId,
+      pendingProjectReviewFix: fix,
+    }),
+  clearProjectReviewFix: () => set({ pendingProjectReviewFix: null }),
 
   dirty: false,
   setDirty: (d) => set({ dirty: d }),

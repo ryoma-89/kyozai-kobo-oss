@@ -1,9 +1,10 @@
-import { lazy, Suspense, useEffect, useState } from "react";
-import { createSampleData, hasAnyData, openPath, showInFolder } from "./api";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { aiCancelJob, aiListJobs, createSampleData, hasAnyData, openPath, showInFolder } from "./api";
 import { AiJobsView } from "./components/AiJobsView";
 import { BankView } from "./components/BankView";
 import { PairingScreen } from "./components/PairingScreen";
 import { PdfCanvasViewer } from "./components/PdfCanvasViewer";
+import { PdfSaveButton } from "./components/PdfSaveButton";
 import { PartsView } from "./components/PartsView";
 import { ProjectsView } from "./components/ProjectsView";
 import { SearchView } from "./components/SearchView";
@@ -12,7 +13,14 @@ import { TemplatesView } from "./components/TemplatesView";
 import { ConfirmDialog, Modal, Toast } from "./components/ui";
 import { Icon } from "./components/Icon";
 import { useApp, type View } from "./store";
-import { authLogout, authMe, buildFileUrl, isTauri, subscribeEvents } from "./transport";
+import {
+  authLogout,
+  authMe,
+  buildFileUrl,
+  isTauri,
+  subscribeEvents,
+} from "./transport";
+import type { AiJob } from "./types";
 
 const NAV: { view: View; label: string; icon: string }[] = [
   { view: "bank", label: "問題バンク", icon: "▦" },
@@ -24,6 +32,15 @@ const NAV: { view: View; label: string; icon: string }[] = [
 ];
 
 const GraphsView = lazy(() => import("./components/GraphsView").then((module) => ({ default: module.GraphsView })));
+
+const RUNNING_AI_STATUSES = new Set([
+  "queued",
+  "preprocessing",
+  "waiting_for_codex",
+  "converting",
+  "validating",
+  "compiling",
+]);
 
 export default function App() {
   const {
@@ -37,6 +54,7 @@ export default function App() {
     logOpen,
     setLogOpen,
     bump,
+    bumps,
     connected,
     setConnected,
     confirm,
@@ -47,7 +65,49 @@ export default function App() {
   // Web版の認証状態: null=確認中
   const [authed, setAuthed] = useState<boolean | null>(isTauri ? true : null);
   const [authUnavailable, setAuthUnavailable] = useState(false);
-  const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string; zoom: number } | null>(null);
+  const [pdfViewer, setPdfViewer] = useState<{
+    title: string;
+    url: string;
+    path: string;
+    downloadKey: number;
+    zoom: number;
+  } | null>(null);
+  const [aiJobs, setAiJobs] = useState<AiJob[]>([]);
+  const [latestFinishedAiJob, setLatestFinishedAiJob] = useState<AiJob | null>(null);
+  const [hiddenAiPanelKeys, setHiddenAiPanelKeys] = useState<Set<string>>(() => new Set());
+  const aiStatusesRef = useRef<Map<number, string>>(new Map());
+  const aiActivityInitializedRef = useRef(false);
+
+  const refreshAiActivity = async () => {
+    try {
+      const jobs = await aiListJobs(30);
+      if (aiActivityInitializedRef.current) {
+        const newlyFinished = jobs
+          .filter((job) => {
+            const previous = aiStatusesRef.current.get(job.id);
+            return !!previous
+              && RUNNING_AI_STATUSES.has(previous)
+              && !RUNNING_AI_STATUSES.has(job.status);
+          })
+          .sort((a, b) => b.id - a.id)[0];
+        if (newlyFinished) setLatestFinishedAiJob(newlyFinished);
+      }
+      aiStatusesRef.current = new Map(jobs.map((job) => [job.id, job.status]));
+      aiActivityInitializedRef.current = true;
+      setAiJobs(jobs);
+    } catch {
+      /* AI機能を使っていない画面の操作は妨げない */
+    }
+  };
+
+  const runningAiJobs = aiJobs.filter((job) => RUNNING_AI_STATUSES.has(job.status));
+  const aiPanelKey = (job: AiJob) =>
+    `${job.id}:${RUNNING_AI_STATUSES.has(job.status) ? "running" : job.status}`;
+  const floatingAiJob =
+    runningAiJobs.find((job) => !hiddenAiPanelKeys.has(aiPanelKey(job)))
+    ?? (latestFinishedAiJob && !hiddenAiPanelKeys.has(aiPanelKey(latestFinishedAiJob))
+      ? latestFinishedAiJob
+      : null);
 
   const navigate = async (next: View, focusSearch = false) => {
     if (next === view) return;
@@ -57,6 +117,31 @@ export default function App() {
       requestAnimationFrame(() => {
         document.querySelector<HTMLInputElement>("[data-search-input]")?.focus();
       });
+    }
+  };
+
+  const openAiJob = (job: AiJob) => {
+    const detail = { jobId: job.id, handled: false };
+    window.dispatchEvent(new CustomEvent("kk-open-ai-job", { detail }));
+    if (!detail.handled) void navigate("ai");
+    if (!RUNNING_AI_STATUSES.has(job.status)) setLatestFinishedAiJob(null);
+  };
+
+  const hideAiPanel = (job: AiJob) => {
+    setHiddenAiPanelKeys((current) => {
+      const next = new Set(current);
+      next.add(aiPanelKey(job));
+      return next;
+    });
+  };
+
+  const cancelAiJob = async (job: AiJob) => {
+    try {
+      await aiCancelJob(job.id);
+      showToast(`AIジョブ #${job.id} をキャンセルしました`);
+      await refreshAiActivity();
+    } catch (error) {
+      showToast(String(error), "error");
     }
   };
 
@@ -114,6 +199,18 @@ export default function App() {
     );
     return unsubscribe;
   }, [authed]);
+
+  // AIジョブは画面を閉じても継続するため、アプリ全体で進捗と完了を追う。
+  useEffect(() => {
+    if (!authed) return;
+    void refreshAiActivity();
+  }, [authed, bumps.ai_job]);
+
+  useEffect(() => {
+    if (!authed || runningAiJobs.length === 0) return;
+    const timer = setInterval(() => void refreshAiActivity(), 2500);
+    return () => clearInterval(timer);
+  }, [authed, runningAiJobs.map((job) => `${job.id}:${job.status}`).join(",")]);
 
   // Web版: オフライン検知
   useEffect(() => {
@@ -202,7 +299,7 @@ export default function App() {
       {/* トップバー */}
       <header
         className="app-header flex h-10 shrink-0 items-center gap-3 border-b px-3"
-        style={{ background: "var(--panel)", borderColor: "var(--border)" }}
+        style={{ borderColor: "var(--border)" }}
       >
         <span className="text-sm font-bold tracking-wider">
           <span className="brand-mark">◆</span> 教材工房
@@ -233,6 +330,32 @@ export default function App() {
           </span>
         )}
         <span className="app-header-actions ml-auto flex min-w-0 items-center gap-1.5">
+          {runningAiJobs.length > 0 ? (
+            <button
+              onClick={() => {
+                setLatestFinishedAiJob(null);
+                openAiJob(runningAiJobs[0]);
+              }}
+              className="btn btn-sm btn-outline"
+              title="AIジョブの進捗を開く"
+            >
+              <span
+                className="h-3 w-3 animate-spin rounded-full border-2 border-t-transparent"
+                style={{ borderColor: "var(--accent)", borderTopColor: "transparent" }}
+              />
+              AI {runningAiJobs.length}件処理中
+            </button>
+          ) : latestFinishedAiJob ? (
+            <button
+              onClick={() => openAiJob(latestFinishedAiJob)}
+              className="btn btn-sm btn-outline"
+              style={latestFinishedAiJob.status === "completed" ? { color: "var(--success)" } : { color: "var(--danger)" }}
+              title="AIジョブの結果を開く"
+            >
+              {latestFinishedAiJob.status === "completed" ? "✓" : <Icon name="warning" size={14} />}
+              AI #{latestFinishedAiJob.id} {latestFinishedAiJob.status === "completed" ? "完了" : "要確認"}
+            </button>
+          ) : null}
           <button
             onClick={() => {
               void navigate("search", true);
@@ -271,23 +394,13 @@ export default function App() {
         {/* 左ナビゲーション */}
         <nav
           className="app-nav flex w-[64px] shrink-0 flex-col items-center gap-1 border-r py-2"
-          style={{ background: "var(--panel)", borderColor: "var(--border)" }}
+          style={{ borderColor: "var(--border)" }}
         >
           {NAV.map((n) => (
             <button
               key={n.view}
               onClick={() => void navigate(n.view)}
-              className="flex w-[56px] flex-col items-center rounded py-1.5 text-[9.5px] transition-colors"
-              style={
-                view === n.view
-                  ? {
-                      background: "var(--accent-dim)",
-                      color: "var(--accent)",
-                      border: "1px solid rgba(157,108,242,0.42)",
-                      fontWeight: 700,
-                    }
-                  : { color: "var(--muted)", border: "1px solid transparent" }
-              }
+              className={`app-nav-btn flex w-[56px] flex-col items-center rounded py-1.5 text-[9.5px] ${view === n.view ? "app-nav-btn-active" : ""}`}
               title={n.label}
             >
               <span className="text-base leading-6">{n.view === "ai" ? <Icon name="sparkle" size={17} /> : n.icon}</span>
@@ -312,6 +425,77 @@ export default function App() {
           {view === "settings" && <SettingsView />}
         </main>
       </div>
+
+      {floatingAiJob && (
+        <aside
+          className="ai-progress-panel fixed z-30 w-[min(22rem,calc(100vw-2rem))] rounded-md border p-3 shadow-2xl"
+          style={{ background: "var(--panel)", borderColor: "var(--border-strong)" }}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-start gap-2">
+            {RUNNING_AI_STATUSES.has(floatingAiJob.status) ? (
+              <span
+                className="mt-0.5 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-t-transparent"
+                style={{ borderColor: "var(--accent)", borderTopColor: "transparent" }}
+              />
+            ) : floatingAiJob.status === "completed" ? (
+              <span className="shrink-0" style={{ color: "var(--success)" }}>✓</span>
+            ) : (
+              <Icon name="warning" size={16} />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-semibold">
+                AIジョブ #{floatingAiJob.id}{" "}
+                {RUNNING_AI_STATUSES.has(floatingAiJob.status)
+                  ? "を実行中"
+                  : floatingAiJob.status === "completed"
+                    ? "が完了"
+                    : "を確認してください"}
+              </div>
+              <div className="mt-1 line-clamp-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                {RUNNING_AI_STATUSES.has(floatingAiJob.status)
+                  ? floatingAiJob.progressMessage || "処理を続けています..."
+                  : floatingAiJob.status === "failed"
+                    ? floatingAiJob.errorMessage || "生成に失敗しました"
+                    : "生成結果を確認できます"}
+              </div>
+              {RUNNING_AI_STATUSES.has(floatingAiJob.status) && runningAiJobs.length > 1 && (
+                <div className="mt-1 text-[10px]" style={{ color: "var(--muted)" }}>
+                  ほか {runningAiJobs.length - 1} 件を処理中
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm shrink-0"
+              onClick={() => hideAiPanel(floatingAiJob)}
+              aria-label="進捗パネルを閉じる"
+              title="パネルを閉じる（処理は継続します）"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            {RUNNING_AI_STATUSES.has(floatingAiJob.status) && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => void cancelAiJob(floatingAiJob)}
+              >
+                キャンセル
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => openAiJob(floatingAiJob)}
+            >
+              {RUNNING_AI_STATUSES.has(floatingAiJob.status) ? "進捗を開く" : "結果を確認"}
+            </button>
+          </div>
+        </aside>
+      )}
 
       {graphOverlay && (
         <div className="graph-integration-overlay">
@@ -338,10 +522,10 @@ export default function App() {
       {lastCompile && (
         <footer
           className="app-footer shrink-0 border-t"
-          style={{ background: "var(--panel)", borderColor: "var(--border)" }}
+          style={{ borderColor: "var(--border)" }}
         >
           <div
-            className="flex h-7 cursor-pointer items-center gap-2 px-3 text-xs select-none"
+            className="app-footer-summary flex h-7 cursor-pointer items-center gap-2 px-3 text-xs select-none"
             onClick={() => setLogOpen(!logOpen)}
           >
             <span style={{ color: "var(--muted)" }}>{logOpen ? "▾" : "▸"}</span>
@@ -371,6 +555,15 @@ export default function App() {
                       フォルダ
                     </button>
                   )}
+                  {!isTauri && (
+                    <PdfSaveButton
+                      className="app-footer-download btn btn-solid btn-sm"
+                      path={lastCompile.pdf_path!}
+                      cacheKey={lastCompile.download_key}
+                      compact
+                      onError={(message) => showToast(message, "error")}
+                    />
+                  )}
                   <button
                     className="btn btn-outline btn-sm"
                     onClick={() => {
@@ -380,6 +573,8 @@ export default function App() {
                         setPdfViewer({
                           title: lastCompile.label,
                           url: buildFileUrl(lastCompile.pdf_path!, Date.now()),
+                          path: lastCompile.pdf_path!,
+                          downloadKey: lastCompile.download_key,
                           zoom: 100,
                         });
                       }
@@ -420,7 +615,14 @@ export default function App() {
       <ConfirmDialog />
       {pdfViewer && (
         <Modal title={`PDFプレビュー — ${pdfViewer.title}`} onClose={() => setPdfViewer(null)} wide>
-          <div className="mb-2 flex items-center justify-end gap-1">
+          <div className="pdf-preview-toolbar mb-2 flex items-center justify-end gap-1">
+            <PdfSaveButton
+              className="pdf-download-action btn btn-solid btn-sm mr-auto"
+              path={pdfViewer.path}
+              cacheKey={pdfViewer.downloadKey}
+              compact
+              onError={(message) => showToast(message, "error")}
+            />
             <button className="btn btn-ghost btn-sm" onClick={() => setPdfViewer((v) => v ? { ...v, zoom: Math.max(50, v.zoom - 10) } : v)}>－</button>
             <button className="btn btn-ghost btn-sm w-14 justify-center" onClick={() => setPdfViewer((v) => v ? { ...v, zoom: 100 } : v)}>{pdfViewer.zoom}%</button>
             <button className="btn btn-ghost btn-sm" onClick={() => setPdfViewer((v) => v ? { ...v, zoom: Math.min(300, v.zoom + 10) } : v)}>＋</button>
@@ -433,9 +635,9 @@ export default function App() {
 
       {/* 初回起動ダイアログ */}
       {welcome && (
-        <div className="safe-area-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+        <div className="safe-area-overlay modal-scrim fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="fade-in w-full max-w-md rounded-md border p-6 shadow-2xl"
+            className="modal-panel w-full max-w-md rounded-md border p-6 shadow-2xl"
             style={{ background: "var(--panel)", borderColor: "var(--border-strong)" }}
           >
             <h2 className="mb-2 text-base font-bold">

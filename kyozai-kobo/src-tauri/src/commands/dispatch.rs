@@ -293,6 +293,12 @@ fn dispatch_inner(
             arg(args, "answer")?,
             arg(args, "explanation")?,
         )?),
+        "compile_part_preview" => ok(latex::compile_part_preview(
+            state,
+            arg(args, "partId")?,
+            arg(args, "latexSource")?,
+            arg(args, "layoutMode")?,
+        )?),
         "generate_tex" => ok(latex::generate_tex(state, arg(args, "projectId")?, arg(args, "kind")?)?),
         "export_tex" => ok(latex::export_tex(state, arg(args, "projectId")?, arg(args, "kind")?)?),
         "compile_pdf" => ok(latex::compile_pdf(state, arg(args, "projectId")?, arg(args, "kind")?)?),
@@ -469,6 +475,11 @@ fn dispatch_inner(
         "codex_login_cancel" => ok(crate::codex::login_cancel(state)?),
         "codex_logout" => ok(crate::codex::logout(state)?),
         "codex_test" => crate::codex::test_connection(state),
+        "codex_models" => crate::codex::model_settings(state),
+        "codex_set_model" => ok(crate::codex::set_model(
+            state,
+            &arg::<String>(args, "model")?,
+        )?),
         "codex_set_path" => {
             let path: String = arg(args, "path")?;
             if !path.trim().is_empty() && !std::path::Path::new(&path).exists() {
@@ -540,6 +551,16 @@ fn dispatch_inner(
             arg(args, "field")?,
             arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
         )?),
+        "ai_insert_into_target_problem" => crate::ai::insert_into_target_problem(
+            state,
+            arg(args, "jobId")?,
+            arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
+        ),
+        "ai_apply_source_revision" => crate::ai::apply_source_revision(
+            state,
+            arg(args, "jobId")?,
+            arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
+        ),
 
         _ => Err(format!("不明なコマンド: {}", cmd)),
     }

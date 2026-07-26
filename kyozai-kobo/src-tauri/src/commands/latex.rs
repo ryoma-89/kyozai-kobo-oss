@@ -69,7 +69,7 @@ fn sanitize_filename(s: &str) -> String {
 // ---- 本文生成 ----
 
 /// 縦線（罫線）付き2段組の開始・終了
-const TWO_COL_BEGIN: &str = "{\\setlength{\\columnseprule}{0.4pt}%\n\\begin{multicols}{2}\n";
+const TWO_COL_BEGIN: &str = "{\\setlength{\\columnseprule}{0.4pt}%\n\\setlength{\\emergencystretch}{1.5em}%\n\\begin{multicols}{2}\n\\raggedcolumns\n";
 const TWO_COL_END: &str = "\\end{multicols}}\n";
 
 fn difficulty_badge_lines(item: &ProjectItem, settings: &ProjectSettings) -> Vec<String> {
@@ -159,7 +159,23 @@ fn ensure_tcolorbox_support(mut doc: String, needs_tcolorbox: bool, needs_skins:
     doc
 }
 
-fn append_part_to_bodies(item: &ProjectItem, body: &mut String, answer_plain: &mut String, answer_inline: &mut String) {
+fn ensure_multicol_support(mut doc: String) -> String {
+    if !doc.contains("\\begin{multicols}") || doc.contains("\\usepackage{multicol}") {
+        return doc;
+    }
+    if let Some(pos) = doc.find("\\begin{document}") {
+        doc.insert_str(pos, "\\usepackage{multicol}\n");
+    }
+    doc
+}
+
+fn append_part_to_bodies(
+    item: &ProjectItem,
+    settings: &ProjectSettings,
+    body: &mut String,
+    answer_plain: &mut String,
+    answer_inline: &mut String,
+) {
     if item.snap_part_output_target == "none" {
         return;
     }
@@ -173,12 +189,26 @@ fn append_part_to_bodies(item: &ProjectItem, body: &mut String, answer_plain: &m
     }
     latex.push('\n');
 
+    let part_two_column = item.snap_part_layout_mode == "two_column" && item.snap_part_type != "page_break";
+    // 問題冊子全体が二段組の場合は、部品側で multicols を重ねない。
+    let body_latex = if part_two_column && !settings.problem_two_column {
+        format!("{}{}{}", TWO_COL_BEGIN, latex, TWO_COL_END)
+    } else {
+        latex.clone()
+    };
+    // 解答冊子全体が二段組の場合は、部品側で multicols を重ねない。
+    let answer_latex = if part_two_column && settings.two_column_mode != "all" {
+        format!("{}{}{}", TWO_COL_BEGIN, latex, TWO_COL_END)
+    } else {
+        latex
+    };
+
     if item.snap_part_output_target == "problems" || item.snap_part_output_target == "both" {
-        body.push_str(&latex);
+        body.push_str(&body_latex);
     }
     if item.snap_part_output_target == "answers" || item.snap_part_output_target == "both" {
-        answer_plain.push_str(&latex);
-        answer_inline.push_str(&latex);
+        answer_plain.push_str(&answer_latex);
+        answer_inline.push_str(&answer_latex);
     }
 }
 
@@ -267,9 +297,19 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                 answer_inline.push_str("\\newpage\n\n");
             }
             "part" => {
-                append_part_to_bodies(item, &mut body, &mut answer_plain, &mut answer_inline);
+                append_part_to_bodies(item, settings, &mut body, &mut answer_plain, &mut answer_inline);
             }
             "problem" => {
+                let statement_for_layout = |two_column: bool| {
+                    if two_column && !item.snap_statement_two_column.trim().is_empty() {
+                        item.snap_statement_two_column.as_str()
+                    } else {
+                        item.snap_statement.as_str()
+                    }
+                };
+                let problem_statement = statement_for_layout(settings.problem_two_column);
+                let answer_statement =
+                    statement_for_layout(settings.two_column_mode == "all");
                 n += 1;
                 let head = if settings.auto_number {
                     // 番号付き章の中では「章番号-連番」形式（例: 問題2-1）
@@ -310,7 +350,7 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                 };
 
                 body.push_str(&head);
-                body.push_str(&item.snap_statement);
+                body.push_str(problem_statement);
                 body.push_str("\n\\par\\medskip\n\n");
 
                 let has_expl = settings.include_explanation && !item.snap_explanation.trim().is_empty();
@@ -318,10 +358,10 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                 let answer_only_cols = settings.two_column_mode == "answer_only";
 
                 let ans_head = if settings.include_statement_in_answers && settings.box_statement_in_answers {
-                    answer_statement_box_tex(&head, &item.snap_statement)
+                    answer_statement_box_tex(&head, answer_statement)
                 } else if settings.include_statement_in_answers {
                     let mut plain = head.clone();
-                    plain.push_str(&item.snap_statement);
+                    plain.push_str(answer_statement);
                     plain.push_str("\n\\par\\vspace{0.5em}\n");
                     plain
                 } else {
@@ -395,6 +435,11 @@ pub fn render_document(
 ) -> String {
     let is_answers = kind == "answers";
     let is_combined = kind == "combined";
+    let problem_body = if settings.problem_two_column {
+        format!("{}{}{}", TWO_COL_BEGIN, bodies.body, TWO_COL_END)
+    } else {
+        bodies.body.clone()
+    };
 
     // 解答本文: テンプレートが {{EXPLANATION_BODY}} を持つなら解説は分離、なければインライン
     // （合本ではプレースホルダに関わらず常にインライン）
@@ -419,10 +464,10 @@ pub fn render_document(
         };
         format!(
             "{}\n\\clearpage\n{}\\begin{{center}}{{\\LARGE \\textbf{{解答}}}}\\end{{center}}\n\\par\\medskip\n\n{}",
-            bodies.body, toc_line, answer_body
+            problem_body, toc_line, answer_body
         )
     } else {
-        bodies.body.clone()
+        problem_body.clone()
     };
 
     // 目次: テンプレートに {{TOC}} があればその位置、無ければ本文の先頭に挿入
@@ -440,7 +485,7 @@ pub fn render_document(
     // {{BODY}}: 問題冊子/合本では main_body（目次込み）。解答冊子では {{ANSWER_BODY}} が
     // 無いテンプレートに限り解答本文を入れる（両方持つテンプレートでは問題本文のまま）
     let body_for_ph = if is_answers {
-        if doc.contains("{{ANSWER_BODY}}") { bodies.body.clone() } else { main_body.clone() }
+        if doc.contains("{{ANSWER_BODY}}") { problem_body } else { main_body.clone() }
     } else {
         main_body.clone()
     };
@@ -521,7 +566,8 @@ pub fn render_document(
     doc = doc.replace("{{DATE}}", &escape_latex(&settings.date_str));
     doc = doc.replace("{{NAME_FIELD}}", &name_field);
     doc = doc.replace("{{PAGE_BREAK}}", "\\newpage");
-    ensure_tcolorbox_support(doc, needs_tcolorbox, needs_tcolorbox_skins)
+    let doc = ensure_tcolorbox_support(doc, needs_tcolorbox, needs_tcolorbox_skins);
+    ensure_multicol_support(doc)
 }
 
 // ---- プロジェクトデータの読み込み ----
@@ -756,7 +802,7 @@ fn managed_graph_reference(reference: &str) -> Option<PathBuf> {
 /// 教材のLaTeXが実際に参照しているグラフ画像だけを作業・出力フォルダーへコピーする。
 /// graph_assets全体には履歴や未使用グラフも蓄積されるため、全件コピーするとPDF生成のたびに
 /// 数百ファイルのI/Oとextractbb処理が発生する。
-fn copy_graph_assets(data_dir: &Path, dest: &Path, tex: &str) {
+pub(crate) fn copy_graph_assets(data_dir: &Path, dest: &Path, tex: &str) {
     let source_root = data_dir.join("graph_assets");
     let target_root = dest.join("assets").join("graphs");
     for reference in includegraphics_references(tex) {
@@ -1264,6 +1310,7 @@ fn sample_items() -> Vec<ProjectItem> {
         part_id: None,
         snap_title: title.into(),
         snap_statement: statement.into(),
+        snap_statement_two_column: statement.into(),
         snap_answer: answer.into(),
         snap_explanation: explanation.into(),
         snap_difficulty: "標準".into(),
@@ -1275,6 +1322,7 @@ fn sample_items() -> Vec<ProjectItem> {
         snap_part_category: String::new(),
         snap_part_description: String::new(),
         snap_part_output_target: "both".into(),
+        snap_part_layout_mode: "single_column".into(),
         snap_part_attachments: vec![],
         heading_level: 1,
         heading_numbered: true,
@@ -1312,6 +1360,7 @@ fn sample_settings() -> ProjectSettings {
         auto_number: true,
         page_break_per_problem: false,
         include_explanation: true,
+        problem_two_column: false,
         two_column_mode: "none".into(),
         show_title: true,
         show_header: true,
@@ -1427,6 +1476,42 @@ pub fn build_preview_doc(effective_template: &str, statement: &str, answer: &str
     }
     doc.push_str("\\end{document}\n");
     doc
+}
+
+/// テンプレートのプリアンブルを使って、編集中の部品だけを確認する完全なLaTeX文書を作る。
+/// 二段組部品は実際の教材出力と同じmulticols環境と列間罫線で表示する。
+pub fn build_part_preview_doc(
+    effective_template: &str,
+    latex_source: &str,
+    layout_mode: &str,
+) -> String {
+    use super::templates::KNOWN_PLACEHOLDERS;
+    let preamble_src = match effective_template.find("\\begin{document}") {
+        Some(pos) => &effective_template[..pos],
+        None => {
+            let default = super::templates::DEFAULT_PROBLEM_TEMPLATE;
+            &default[..default.find("\\begin{document}").unwrap()]
+        }
+    };
+    let mut preamble = preamble_src.to_string();
+    for placeholder in KNOWN_PLACEHOLDERS {
+        preamble = preamble.replace(&format!("{{{{{}}}}}", placeholder), "");
+    }
+
+    let mut doc = preamble;
+    doc.push_str("\\pagestyle{empty}\n\\begin{document}\n");
+    if layout_mode == "two_column" {
+        doc.push_str(TWO_COL_BEGIN);
+    }
+    doc.push_str(latex_source);
+    if !latex_source.ends_with('\n') {
+        doc.push('\n');
+    }
+    if layout_mode == "two_column" {
+        doc.push_str(TWO_COL_END);
+    }
+    doc.push_str("\\end{document}\n");
+    ensure_multicol_support(doc)
 }
 
 /// プレビュー・AI試験コンパイルに使うテンプレートを解決する
@@ -1545,6 +1630,57 @@ pub fn compile_problem_preview(
     Ok(CompileResult {
         success,
         pdf_path: pdf.map(|p| p.to_string_lossy().to_string()),
+        tex_path: Some(build_dir.join("kyozai.tex").to_string_lossy().to_string()),
+        log,
+        message,
+    })
+}
+
+/// 部品1件だけをコンパイルしてプレビュー用PDFを生成する（未保存の編集内容に対応）。
+pub fn compile_part_preview(
+    state: &AppState,
+    part_id: i64,
+    latex_source: String,
+    layout_mode: String,
+) -> Result<CompileResult, String> {
+    if !matches!(layout_mode.as_str(), "single_column" | "two_column") {
+        return Err("部品の段組は single_column / two_column のいずれかです".into());
+    }
+    let conn = state.conn.lock().map_err(err_str)?;
+    let (template_id, effective_template) = resolve_preview_template(&conn);
+    let doc = build_part_preview_doc(&effective_template, &latex_source, &layout_mode);
+
+    let build_dir = std::env::temp_dir()
+        .join("kyozai-kobo-build")
+        .join(format!("part-preview-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&build_dir).map_err(err_str)?;
+
+    if let Ok(attachments) = super::parts::attachments_of(&conn, part_id) {
+        let source_dir = state.part_attachments_dir();
+        for attachment in attachments {
+            let source = source_dir.join(&attachment.stored_name);
+            if source.exists() {
+                std::fs::copy(&source, build_dir.join(&attachment.stored_name)).ok();
+            }
+        }
+    }
+    if let Some(template_id) = template_id {
+        let assets = template_assets_of(&conn, template_id);
+        copy_template_assets(&assets, &state.data_dir, &build_dir);
+    }
+    copy_graph_assets(&state.data_dir, &build_dir, &doc);
+
+    let tex_pair = resolve_tex_pair(&conn);
+    drop(conn);
+    let (success, pdf, log, message) = match &tex_pair {
+        Ok((uplatex, dvipdfmx)) => {
+            run_compile_with(uplatex, dvipdfmx, &build_dir, &doc)?
+        }
+        Err(message) => (false, None, String::new(), message.clone()),
+    };
+    Ok(CompileResult {
+        success,
+        pdf_path: pdf.map(|path| path.to_string_lossy().to_string()),
         tex_path: Some(build_dir.join("kyozai.tex").to_string_lossy().to_string()),
         log,
         message,

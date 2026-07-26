@@ -19,6 +19,8 @@ pub struct BankAttachment {
 pub struct BankProblem {
     pub title: String,
     pub statement_latex: String,
+    #[serde(default)]
+    pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
     pub difficulty: String,
@@ -68,18 +70,19 @@ pub struct ImportBankResult {
 
 fn problem_to_bank(conn: &Connection, attachments_dir: &Path, problem_id: i64) -> rusqlite::Result<BankProblem> {
     let mut p = conn.query_row(
-        "SELECT title, statement_latex, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo FROM problems WHERE id=?1",
+        "SELECT title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo FROM problems WHERE id=?1",
         params![problem_id],
         |r| {
             Ok(BankProblem {
                 title: r.get(0)?,
                 statement_latex: r.get(1)?,
-                answer_latex: r.get(2)?,
-                explanation_latex: r.get(3)?,
-                difficulty: r.get(4)?,
-                difficulty_rank: r.get(5)?,
-                is_required: r.get::<_, i64>(6)? != 0,
-                memo: r.get(7)?,
+                statement_latex_two_column: r.get(2)?,
+                answer_latex: r.get(3)?,
+                explanation_latex: r.get(4)?,
+                difficulty: r.get(5)?,
+                difficulty_rank: r.get(6)?,
+                is_required: r.get::<_, i64>(7)? != 0,
+                memo: r.get(8)?,
                 tags: vec![],
                 attachments: vec![],
             })
@@ -271,6 +274,11 @@ pub fn apply_bank_import(
                 for p in &u.problems {
                     // 添付を復元し、LaTeX中の旧ファイル名を新ファイル名へ置換
                     let mut statement = p.statement_latex.clone();
+                    let mut statement_two_column = if p.statement_latex_two_column.trim().is_empty() {
+                        p.statement_latex.clone()
+                    } else {
+                        p.statement_latex_two_column.clone()
+                    };
                     let mut answer = p.answer_latex.clone();
                     let mut explanation = p.explanation_latex.clone();
                     let mut restored: Vec<(String, String)> = vec![]; // (file_name, new_stored)
@@ -291,6 +299,8 @@ pub fn apply_bank_import(
                         std::fs::write(attachments_dir.join(&new_stored), bytes).map_err(err_str)?;
                         if !a.stored_name.is_empty() {
                             statement = statement.replace(&a.stored_name, &new_stored);
+                            statement_two_column =
+                                statement_two_column.replace(&a.stored_name, &new_stored);
                             answer = answer.replace(&a.stored_name, &new_stored);
                             explanation = explanation.replace(&a.stored_name, &new_stored);
                         }
@@ -299,9 +309,9 @@ pub fn apply_bank_import(
 
                     let rank = super::problems::normalize_rank(p.difficulty_rank.clone());
                     conn.execute(
-                        "INSERT INTO problems (unit_id, title, statement_latex, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-                        params![unit_id, p.title, statement, answer, explanation, p.difficulty, rank, p.is_required as i64, p.memo, now],
+                        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                        params![unit_id, p.title, statement, statement_two_column, answer, explanation, p.difficulty, rank, p.is_required as i64, p.memo, now],
                     )
                     .map_err(err_str)?;
                     let pid = conn.last_insert_rowid();

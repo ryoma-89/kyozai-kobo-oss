@@ -51,7 +51,10 @@ pub struct ProblemFull {
     pub id: i64,
     pub unit_id: i64,
     pub title: String,
+    /// 一段組用の問題文
     pub statement_latex: String,
+    /// 二段組の片方の列へ配置する問題文
+    pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
     pub difficulty: String,
@@ -71,7 +74,10 @@ pub struct ProblemUpdate {
     pub id: i64,
     pub unit_id: i64,
     pub title: String,
+    /// 一段組用の問題文
     pub statement_latex: String,
+    /// 二段組の片方の列へ配置する問題文
+    pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
     pub difficulty: String,
@@ -97,6 +103,7 @@ pub struct VersionFull {
     pub problem_id: i64,
     pub title: String,
     pub statement_latex: String,
+    pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
     pub difficulty: String,
@@ -161,6 +168,7 @@ pub struct ProjectItem {
     pub part_id: Option<i64>,
     pub snap_title: String,
     pub snap_statement: String,
+    pub snap_statement_two_column: String,
     pub snap_answer: String,
     pub snap_explanation: String,
     pub snap_difficulty: String,
@@ -172,6 +180,7 @@ pub struct ProjectItem {
     pub snap_part_category: String,
     pub snap_part_description: String,
     pub snap_part_output_target: String,
+    pub snap_part_layout_mode: String,
     pub snap_part_attachments: Vec<SnapAttachment>,
     /// 見出しのレベル: 1=章(section), 2=節(subsection)
     pub heading_level: i64,
@@ -199,6 +208,8 @@ pub struct ProjectItemUpdate {
     #[serde(default)]
     pub snap_statement: Option<String>,
     #[serde(default)]
+    pub snap_statement_two_column: Option<String>,
+    #[serde(default)]
     pub snap_answer: Option<String>,
     #[serde(default)]
     pub snap_explanation: Option<String>,
@@ -214,6 +225,8 @@ pub struct ProjectItemUpdate {
     pub snap_part_description: Option<String>,
     #[serde(default)]
     pub snap_part_output_target: Option<String>,
+    #[serde(default)]
+    pub snap_part_layout_mode: Option<String>,
     #[serde(default)]
     pub heading_level: Option<i64>,
     #[serde(default)]
@@ -236,6 +249,9 @@ pub struct ProjectSettings {
     pub auto_number: bool,
     pub page_break_per_problem: bool,
     pub include_explanation: bool,
+    /// 問題冊子（合本の問題編を含む）を縦線付き2段組にする
+    #[serde(default)]
+    pub problem_two_column: bool,
     /// 解答冊子の2段組: "none" | "all"（問題＋解答全体） | "answer_only"（解答部分のみ）
     pub two_column_mode: String,
     /// 教材タイトル（{{TITLE}}/{{SUBTITLE}}）を出力するか
@@ -368,6 +384,12 @@ pub struct PartAttachment {
 #[derive(Serialize)]
 pub struct PartSummary {
     pub id: i64,
+    pub unit_id: Option<i64>,
+    pub unit_name: String,
+    pub field_id: Option<i64>,
+    pub field_name: String,
+    pub subject_id: Option<i64>,
+    pub subject_name: String,
     pub title: String,
     pub part_type: String,
     pub category: String,
@@ -376,6 +398,7 @@ pub struct PartSummary {
     pub difficulty_rank: Option<String>,
     pub is_required: bool,
     pub output_target: String,
+    pub layout_mode: String,
     pub usage_count: i64,
     pub updated_at: String,
     pub version: i64,
@@ -384,6 +407,12 @@ pub struct PartSummary {
 #[derive(Serialize)]
 pub struct PartFull {
     pub id: i64,
+    pub unit_id: Option<i64>,
+    pub unit_name: String,
+    pub field_id: Option<i64>,
+    pub field_name: String,
+    pub subject_id: Option<i64>,
+    pub subject_name: String,
     pub title: String,
     pub part_type: String,
     pub category: String,
@@ -394,6 +423,7 @@ pub struct PartFull {
     pub difficulty_rank: Option<String>,
     pub is_required: bool,
     pub output_target: String,
+    pub layout_mode: String,
     pub usage_count: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -404,6 +434,8 @@ pub struct PartFull {
 #[derive(Deserialize)]
 pub struct PartUpdate {
     pub id: i64,
+    #[serde(default)]
+    pub unit_id: Option<i64>,
     pub title: String,
     pub part_type: String,
     pub category: String,
@@ -413,14 +445,23 @@ pub struct PartUpdate {
     pub difficulty_rank: Option<String>,
     pub is_required: bool,
     pub output_target: String,
+    #[serde(default = "default_part_layout_mode")]
+    pub layout_mode: String,
     /// 編集開始時のversion。指定時にサーバー側と一致しなければ競合エラー
     #[serde(default)]
     pub expected_version: Option<i64>,
 }
 
+fn default_part_layout_mode() -> String {
+    "single_column".to_string()
+}
+
 #[derive(Deserialize)]
 pub struct PartSearchQuery {
     pub text: String,
+    pub subject_id: Option<i64>,
+    pub field_id: Option<i64>,
+    pub unit_id: Option<i64>,
     pub part_type: Option<String>,
     pub category: Option<String>,
     pub tag: Option<String>,

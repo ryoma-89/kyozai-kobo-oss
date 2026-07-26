@@ -589,6 +589,7 @@ pub fn codex_status(state: &Arc<AppState>) -> Result<Value, String> {
     }
     let login = state.codex.login.lock().map_err(|e| e.to_string())?.clone();
     let last_error = state.codex.last_error.lock().map_err(|e| e.to_string())?.clone();
+    let selected_model = selected_model(state)?.unwrap_or_default();
     let log: Vec<String> = state
         .codex
         .log
@@ -605,9 +606,93 @@ pub fn codex_status(state: &Arc<AppState>) -> Result<Value, String> {
         "account": account,
         "rateLimits": rate_limits,
         "login": login,
+        "selectedModel": selected_model,
         "lastError": last_error,
         "log": log,
     }))
+}
+
+/// AI変換に使用するモデル。空欄の場合はCodex側の既定モデルを使う。
+pub fn selected_model(state: &Arc<AppState>) -> Result<Option<String>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let value = conn
+        .query_row(
+            "SELECT value FROM ai_provider_settings WHERE key='model'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+    let value = value.trim();
+    Ok((!value.is_empty()).then(|| value.to_string()))
+}
+
+fn validate_model_name(model: &str) -> Result<(), String> {
+    if model.len() > 128 {
+        return Err("モデル名が長すぎます".into());
+    }
+    if !model
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
+    {
+        return Err("モデル名に使用できない文字が含まれています".into());
+    }
+    Ok(())
+}
+
+/// ログイン中のCodexで選択可能なモデル一覧を取得する。
+pub fn model_settings(state: &Arc<AppState>) -> Result<Value, String> {
+    ensure_running(state)?;
+    let response = request(
+        state,
+        "model/list",
+        json!({"limit": 100, "includeHidden": false}),
+        30,
+    )?;
+    let models = response
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| !item.get("hidden").and_then(Value::as_bool).unwrap_or(false))
+                .filter_map(|item| {
+                    let model = item.get("model")?.as_str()?;
+                    Some(json!({
+                        "model": model,
+                        "displayName": item.get("displayName").and_then(Value::as_str).unwrap_or(model),
+                        "description": item.get("description").and_then(Value::as_str).unwrap_or(""),
+                        "isDefault": item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "selectedModel": selected_model(state)?.unwrap_or_default(),
+        "models": models,
+    }))
+}
+
+/// AI変換に使用するモデルを保存する。空文字列でCodexの既定へ戻す。
+pub fn set_model(state: &Arc<AppState>, model: &str) -> Result<(), String> {
+    let model = model.trim();
+    validate_model_name(model)?;
+    {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO ai_provider_settings (key, value) VALUES ('model', ?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            rusqlite::params![model],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    state.codex.log_line(if model.is_empty() {
+        "AI変換モデルをCodexの既定へ変更しました"
+    } else {
+        "AI変換モデルを変更しました"
+    });
+    state.emit("codex", "model_changed", json!({"model": model}));
+    Ok(())
 }
 
 /// ChatGPTログイン開始。method: "deviceCode"（推奨） | "browser"
@@ -708,6 +793,15 @@ mod tests {
     #[test]
     fn initialize_explicitly_sends_null_capabilities() {
         assert_eq!(initialize_params().get("capabilities"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn model_name_validation_accepts_catalog_ids_only() {
+        assert!(validate_model_name("").is_ok());
+        assert!(validate_model_name("gpt-5.4-mini").is_ok());
+        assert!(validate_model_name("openai/gpt-5_4:test").is_ok());
+        assert!(validate_model_name("gpt 5").is_err());
+        assert!(validate_model_name("gpt-5;rm").is_err());
     }
 
     #[test]

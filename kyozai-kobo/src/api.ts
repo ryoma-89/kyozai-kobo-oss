@@ -5,6 +5,7 @@ import type {
   Attachment,
   BookletKind,
   CodexStatus,
+  CodexModelSettings,
   CompileResult,
   GraphAssetSummary,
   GraphIntegrationPoll,
@@ -70,6 +71,7 @@ export const updateProblem = (payload: {
   unit_id: number;
   title: string;
   statement_latex: string;
+  statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
   difficulty: string;
@@ -124,6 +126,7 @@ export const updateProjectItem = (
     content?: string;
     snap_title?: string;
     snap_statement?: string;
+    snap_statement_two_column?: string;
     snap_answer?: string;
     snap_explanation?: string;
     snap_difficulty_rank?: string | null;
@@ -132,6 +135,7 @@ export const updateProjectItem = (
     snap_part_category?: string;
     snap_part_description?: string;
     snap_part_output_target?: string;
+    snap_part_layout_mode?: string;
     heading_level?: number;
     heading_numbered?: boolean;
     expected_version?: number | null;
@@ -142,6 +146,7 @@ export const updateProjectItem = (
     content: fields.content ?? null,
     snapTitle: fields.snap_title ?? null,
     snapStatement: fields.snap_statement ?? null,
+    snapStatementTwoColumn: fields.snap_statement_two_column ?? null,
     snapAnswer: fields.snap_answer ?? null,
     snapExplanation: fields.snap_explanation ?? null,
     snapDifficultyRank: fields.snap_difficulty_rank ?? null,
@@ -150,6 +155,7 @@ export const updateProjectItem = (
     snapPartCategory: fields.snap_part_category ?? null,
     snapPartDescription: fields.snap_part_description ?? null,
     snapPartOutputTarget: fields.snap_part_output_target ?? null,
+    snapPartLayoutMode: fields.snap_part_layout_mode ?? null,
     headingLevel: fields.heading_level ?? null,
     headingNumbered: fields.heading_numbered ?? null,
     expectedVersion: fields.expected_version ?? null,
@@ -265,6 +271,11 @@ export const compileProblemPreview = (
   answer: string,
   explanation: string,
 ) => invoke<CompileResult>("compile_problem_preview", { problemId, statement, answer, explanation });
+export const compilePartPreview = (
+  partId: number,
+  latexSource: string,
+  layoutMode: "single_column" | "two_column",
+) => invoke<CompileResult>("compile_part_preview", { partId, latexSource, layoutMode });
 
 // ---- 部品ライブラリ ----
 export const searchParts = (query: PartSearchQuery) =>
@@ -276,6 +287,7 @@ export const getPart = (id: number) => invoke<PartFull>("get_part", { id });
 /** 保存に成功すると新しいversionを返す。競合時は ConflictError */
 export const updatePart = (payload: {
   id: number;
+  unit_id: number | null;
   title: string;
   part_type: string;
   category: string;
@@ -285,6 +297,7 @@ export const updatePart = (payload: {
   difficulty_rank: string | null;
   is_required: boolean;
   output_target: string;
+  layout_mode: string;
   expected_version?: number | null;
 }) => invoke<number>("update_part", { payload });
 export const duplicatePart = (id: number) => invoke<number>("duplicate_part", { id });
@@ -378,6 +391,8 @@ export const codexLoginStart = (method: "deviceCode" | "browser") =>
 export const codexLoginCancel = () => invoke<void>("codex_login_cancel");
 export const codexLogout = () => invoke<void>("codex_logout");
 export const codexTest = () => invoke<{ ok: boolean }>("codex_test");
+export const codexModels = () => invoke<CodexModelSettings>("codex_models");
+export const codexSetModel = (model: string) => invoke<void>("codex_set_model", { model });
 export const codexSetPath = (path: string) => invoke<void>("codex_set_path", { path });
 
 // ---- AI変換 ----
@@ -439,3 +454,14 @@ export const aiMarkInserted = (
   field: string,
   confirmed: boolean,
 ) => invoke<void>("ai_mark_inserted", { jobId, entityType, entityId, field, confirmed });
+export const aiInsertIntoTargetProblem = (jobId: number, confirmed: boolean) =>
+  invoke<{ problemId: number; field: "answer_latex" | "explanation_latex" }>(
+    "ai_insert_into_target_problem",
+    { jobId, confirmed },
+  );
+export const aiApplySourceRevision = (jobId: number, confirmed: boolean) =>
+  invoke<{
+    entityType: "problem" | "part";
+    entityId: number;
+    field: "statement_latex" | "answer_latex" | "explanation_latex" | "latex_source";
+  }>("ai_apply_source_revision", { jobId, confirmed });

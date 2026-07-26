@@ -47,7 +47,10 @@ export interface ProblemFull {
   id: number;
   unit_id: number;
   title: string;
+  /** 一段組用の問題文 */
   statement_latex: string;
+  /** 二段組の片方の列へ配置する問題文 */
+  statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
   difficulty: string;
@@ -73,6 +76,7 @@ export interface VersionFull {
   problem_id: number;
   title: string;
   statement_latex: string;
+  statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
   difficulty: string;
@@ -127,6 +131,7 @@ export type ItemType = "problem" | "heading" | "text" | "pagebreak" | "part";
 export type DifficultyRank = "A" | "B" | "C" | "D";
 export type RequiredFilter = "all" | "required" | "not_required";
 export type PartOutputTarget = "problems" | "answers" | "both" | "none";
+export type PartLayoutMode = "single_column" | "two_column";
 
 export interface ProjectItem {
   id: number;
@@ -137,6 +142,7 @@ export interface ProjectItem {
   part_id: number | null;
   snap_title: string;
   snap_statement: string;
+  snap_statement_two_column: string;
   snap_answer: string;
   snap_explanation: string;
   snap_difficulty: string;
@@ -148,6 +154,7 @@ export interface ProjectItem {
   snap_part_category: string;
   snap_part_description: string;
   snap_part_output_target: PartOutputTarget;
+  snap_part_layout_mode: PartLayoutMode;
   snap_part_attachments: SnapAttachment[];
   /** 見出しのレベル: 1=章(section), 2=節(subsection) */
   heading_level: number;
@@ -172,6 +179,8 @@ export interface ProjectSettings {
   auto_number: boolean;
   page_break_per_problem: boolean;
   include_explanation: boolean;
+  /** 問題冊子（合本の問題編を含む）を縦線付き二段組にする */
+  problem_two_column: boolean;
   /** 解答冊子の2段組: "none" | "all"（問題＋解答全体） | "answer_only"（解答部分のみ） */
   two_column_mode: string;
   show_title: boolean;
@@ -296,6 +305,12 @@ export interface PartAttachment {
 
 export interface PartSummary {
   id: number;
+  unit_id: number | null;
+  unit_name: string;
+  field_id: number | null;
+  field_name: string;
+  subject_id: number | null;
+  subject_name: string;
   title: string;
   part_type: PartType | string;
   category: string;
@@ -304,6 +319,7 @@ export interface PartSummary {
   difficulty_rank: DifficultyRank | null;
   is_required: boolean;
   output_target: PartOutputTarget;
+  layout_mode: PartLayoutMode;
   usage_count: number;
   updated_at: string;
   version: number;
@@ -318,6 +334,9 @@ export interface PartFull extends PartSummary {
 
 export interface PartSearchQuery {
   text: string;
+  subject_id?: number | null;
+  field_id?: number | null;
+  unit_id?: number | null;
   part_type?: string | null;
   category?: string | null;
   tag?: string | null;
@@ -531,8 +550,21 @@ export interface CodexStatus {
   account: CodexAccount | null;
   rateLimits: unknown;
   login: CodexLoginState | null;
+  selectedModel: string;
   lastError: string | null;
   log: string[];
+}
+
+export interface CodexModelInfo {
+  model: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+}
+
+export interface CodexModelSettings {
+  selectedModel: string;
+  models: CodexModelInfo[];
 }
 
 // ---- AI変換 ----
@@ -568,7 +600,10 @@ export interface AiSegment {
 
 export interface AiExtractedProblem {
   title: string;
+  /** 一段組用の問題文 */
   statementLatex: string;
+  /** 二段組の片方の列用の問題文 */
+  statementLatexTwoColumn: string;
   sourceImageIndexes: number[];
 }
 

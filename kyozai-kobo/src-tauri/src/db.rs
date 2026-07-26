@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 7;
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS subjects (
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS problems (
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT '',
     statement_latex TEXT NOT NULL DEFAULT '',
+    statement_latex_two_column TEXT NOT NULL DEFAULT '',
     answer_latex TEXT NOT NULL DEFAULT '',
     explanation_latex TEXT NOT NULL DEFAULT '',
     difficulty TEXT NOT NULL DEFAULT '標準',
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT '',
     statement_latex TEXT NOT NULL DEFAULT '',
+    statement_latex_two_column TEXT NOT NULL DEFAULT '',
     answer_latex TEXT NOT NULL DEFAULT '',
     explanation_latex TEXT NOT NULL DEFAULT '',
     difficulty TEXT NOT NULL DEFAULT '標準',
@@ -82,6 +84,7 @@ CREATE TABLE IF NOT EXISTS project_items (
     part_id INTEGER REFERENCES parts(id) ON DELETE SET NULL,
     snap_title TEXT NOT NULL DEFAULT '',
     snap_statement TEXT NOT NULL DEFAULT '',
+    snap_statement_two_column TEXT NOT NULL DEFAULT '',
     snap_answer TEXT NOT NULL DEFAULT '',
     snap_explanation TEXT NOT NULL DEFAULT '',
     snap_difficulty TEXT NOT NULL DEFAULT '標準',
@@ -93,6 +96,7 @@ CREATE TABLE IF NOT EXISTS project_items (
     snap_part_category TEXT NOT NULL DEFAULT '',
     snap_part_description TEXT NOT NULL DEFAULT '',
     snap_part_output_target TEXT NOT NULL DEFAULT 'both',
+    snap_part_layout_mode TEXT NOT NULL DEFAULT 'single_column',
     snap_part_attachments TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
 );
@@ -106,6 +110,7 @@ CREATE TABLE IF NOT EXISTS project_settings (
     auto_number INTEGER NOT NULL DEFAULT 1,
     page_break_per_problem INTEGER NOT NULL DEFAULT 0,
     include_explanation INTEGER NOT NULL DEFAULT 1,
+    problem_two_column INTEGER NOT NULL DEFAULT 0,
     box_statement_in_answers INTEGER NOT NULL DEFAULT 0,
     difficulty_display TEXT NOT NULL DEFAULT 'number_side',
     required_display TEXT NOT NULL DEFAULT 'required_only'
@@ -227,6 +232,7 @@ CREATE TABLE IF NOT EXISTS template_assets (
 
 CREATE TABLE IF NOT EXISTS parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
     title TEXT NOT NULL DEFAULT '',
     part_type TEXT NOT NULL DEFAULT 'text',
     category TEXT NOT NULL DEFAULT '',
@@ -236,6 +242,7 @@ CREATE TABLE IF NOT EXISTS parts (
     difficulty_rank TEXT DEFAULT NULL,
     is_required INTEGER NOT NULL DEFAULT 0,
     output_target TEXT NOT NULL DEFAULT 'both',
+    layout_mode TEXT NOT NULL DEFAULT 'single_column',
     usage_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -259,6 +266,7 @@ CREATE TABLE IF NOT EXISTS part_attachments (
 CREATE TABLE IF NOT EXISTS part_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
+    unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
     title TEXT NOT NULL DEFAULT '',
     part_type TEXT NOT NULL DEFAULT 'text',
     category TEXT NOT NULL DEFAULT '',
@@ -269,6 +277,7 @@ CREATE TABLE IF NOT EXISTS part_versions (
     difficulty_rank TEXT DEFAULT NULL,
     is_required INTEGER NOT NULL DEFAULT 0,
     output_target TEXT NOT NULL DEFAULT 'both',
+    layout_mode TEXT NOT NULL DEFAULT 'single_column',
     version INTEGER NOT NULL DEFAULT 1,
     saved_at TEXT NOT NULL
 );
@@ -304,6 +313,44 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, ddl: &str) -> rus
 }
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    // 問題文は一段組版と二段組版を別々に保持する。既存問題は従来版を
+    // 両方へ引き継ぎ、AIまたは手編集で二段組版だけを後から最適化できる。
+    ensure_column(
+        conn,
+        "problems",
+        "statement_latex_two_column",
+        "statement_latex_two_column TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        conn,
+        "problem_versions",
+        "statement_latex_two_column",
+        "statement_latex_two_column TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        conn,
+        "project_items",
+        "snap_statement_two_column",
+        "snap_statement_two_column TEXT NOT NULL DEFAULT ''",
+    )?;
+    conn.execute(
+        "UPDATE problems
+         SET statement_latex_two_column=statement_latex
+         WHERE statement_latex_two_column=''",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE problem_versions
+         SET statement_latex_two_column=statement_latex
+         WHERE statement_latex_two_column=''",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE project_items
+         SET snap_statement_two_column=snap_statement
+         WHERE snap_statement_two_column=''",
+        [],
+    )?;
     // 問題の新難易度分類（既存 difficulty は保持）
     ensure_column(conn, "problems", "difficulty_rank", "difficulty_rank TEXT DEFAULT NULL")?;
     ensure_column(conn, "problems", "is_required", "is_required INTEGER NOT NULL DEFAULT 0")?;
@@ -325,6 +372,12 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     ensure_column(conn, "project_settings", "answers_two_column", "answers_two_column INTEGER NOT NULL DEFAULT 0")?;
     // 2段組の範囲: none / all（問題＋解答全体） / answer_only（解答部分のみ）
     ensure_column(conn, "project_settings", "two_column_mode", "two_column_mode TEXT NOT NULL DEFAULT 'none'")?;
+    ensure_column(
+        conn,
+        "project_settings",
+        "problem_two_column",
+        "problem_two_column INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(conn, "project_settings", "show_title", "show_title INTEGER NOT NULL DEFAULT 1")?;
     ensure_column(conn, "project_settings", "show_header", "show_header INTEGER NOT NULL DEFAULT 1")?;
     ensure_column(conn, "project_settings", "show_toc", "show_toc INTEGER NOT NULL DEFAULT 0")?;
@@ -377,6 +430,40 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         "snap_part_output_target TEXT NOT NULL DEFAULT 'both'",
     )?;
     ensure_column(conn, "project_items", "snap_part_attachments", "snap_part_attachments TEXT NOT NULL DEFAULT '[]'")?;
+    ensure_column(
+        conn,
+        "project_items",
+        "snap_part_layout_mode",
+        "snap_part_layout_mode TEXT NOT NULL DEFAULT 'single_column'",
+    )?;
+    ensure_column(
+        conn,
+        "parts",
+        "layout_mode",
+        "layout_mode TEXT NOT NULL DEFAULT 'single_column'",
+    )?;
+    ensure_column(
+        conn,
+        "part_versions",
+        "layout_mode",
+        "layout_mode TEXT NOT NULL DEFAULT 'single_column'",
+    )?;
+    ensure_column(
+        conn,
+        "parts",
+        "unit_id",
+        "unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        conn,
+        "part_versions",
+        "unit_id",
+        "unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL",
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_parts_unit ON parts(unit_id)",
+        [],
+    )?;
     // 旧 answers_two_column フラグを新形式へ移行（一度だけ実行される）
     conn.execute(
         "UPDATE project_settings SET two_column_mode='all', answers_two_column=0 WHERE answers_two_column=1",

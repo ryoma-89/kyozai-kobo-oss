@@ -3,13 +3,15 @@ import {
   codexLoginCancel,
   codexLoginStart,
   codexLogout,
+  codexModels,
+  codexSetModel,
   codexSetPath,
   codexStatus,
   codexTest,
 } from "../api";
 import { useApp } from "../store";
 import { isTauri } from "../transport";
-import type { CodexStatus } from "../types";
+import type { CodexModelSettings, CodexStatus } from "../types";
 
 /** Codex / ChatGPT接続設定（デスクトップ・Web共通） */
 export function CodexSettings() {
@@ -18,19 +20,38 @@ export function CodexSettings() {
   const [busy, setBusy] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [showLog, setShowLog] = useState(false);
+  const [modelSettings, setModelSettings] = useState<CodexModelSettings | null>(null);
+  const [modelError, setModelError] = useState("");
 
-  const load = async () => {
+  const loadModels = async () => {
+    try {
+      const next = await codexModels();
+      setModelSettings(next);
+      setModelError("");
+    } catch (e) {
+      setModelError(String(e));
+    }
+  };
+
+  const load = async (): Promise<CodexStatus | null> => {
     try {
       const s = await codexStatus();
       setStatus(s);
       setPathInput(s.exePath);
+      return s;
     } catch (e) {
       showToast(String(e), "error");
+      return null;
     }
   };
 
   useEffect(() => {
-    load();
+    void (async () => {
+      const nextStatus = await load();
+      if (!nextStatus?.installed) return;
+      await loadModels();
+      await load();
+    })();
   }, [bumps.codex]);
 
   // ログイン待ちの間はポーリング
@@ -64,6 +85,8 @@ export function CodexSettings() {
   const account = status.account?.account;
   const authenticated = !!account;
   const login = status.login;
+  const selectedModel = modelSettings?.selectedModel ?? status.selectedModel ?? "";
+  const selectedModelInfo = modelSettings?.models.find((item) => item.model === selectedModel);
 
   return (
     <div className="space-y-3 text-xs">
@@ -207,6 +230,58 @@ export function CodexSettings() {
         <p style={{ color: "var(--muted)" }}>
           認証情報はCodex CLI（PC側）が管理します。このアプリやブラウザにChatGPTのパスワード・トークンが保存されることはありません。
           APIキー方式は将来の選択肢として、現在はChatGPTログインのみ対応しています。
+        </p>
+      </div>
+
+      <div className="card space-y-2 p-3">
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
+          <div className="min-w-0 flex-1">
+            <label className="section-label mb-1 block">AI生成に使用するモデル</label>
+            <select
+              value={selectedModel}
+              onChange={(e) => {
+                const model = e.target.value;
+                setModelSettings((current) => ({
+                  selectedModel: model,
+                  models: current?.models ?? [],
+                }));
+                void withBusy(async () => {
+                  await codexSetModel(model);
+                  showToast(model ? `AIモデルを ${model} に変更しました` : "AIモデルをCodexの既定に戻しました");
+                });
+              }}
+              disabled={busy}
+              className="select w-full"
+            >
+              <option value="">Codexの既定モデル</option>
+              {selectedModel && !modelSettings?.models.some((item) => item.model === selectedModel) && (
+                <option value={selectedModel}>{selectedModel}</option>
+              )}
+              {modelSettings?.models.map((item) => (
+                <option key={item.model} value={item.model}>
+                  {item.displayName}{item.isDefault ? "（既定）" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={() => withBusy(loadModels)}
+            disabled={busy || !status.installed}
+            className="btn btn-ghost btn-sm w-full shrink-0 sm:w-auto"
+          >
+            一覧を更新
+          </button>
+        </div>
+        {selectedModelInfo?.description && (
+          <p style={{ color: "var(--muted)" }}>{selectedModelInfo.description}</p>
+        )}
+        {modelError && (
+          <p style={{ color: "var(--warn)" }}>
+            モデル一覧を取得できませんでした。Codexへ接続してから「一覧を更新」を押してください。
+          </p>
+        )}
+        <p style={{ color: "var(--muted)" }}>
+          次に開始する解答・解説・AI変換・グラフ生成から適用されます。未選択の場合はCodex側の既定モデルを使用します。
         </p>
       </div>
 

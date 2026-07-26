@@ -696,6 +696,62 @@ async fn file_ai_job(
 #[derive(serde::Deserialize)]
 struct BuildFileQuery {
     path: String,
+    download: Option<u8>,
+}
+
+fn rfc5987_encode_filename(name: &str) -> String {
+    name.as_bytes()
+        .iter()
+        .map(|byte| match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'&'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~' => (*byte as char).to_string(),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+fn download_disposition(path: &Path) -> String {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("kyozai.pdf");
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| ext.chars().all(|ch| ch.is_ascii_alphanumeric()))
+        .unwrap_or("pdf");
+    let ascii_stem: String = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("kyozai")
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        .take(80)
+        .collect();
+    let ascii_stem = ascii_stem.trim_matches(['-', '_']);
+    let fallback_stem = if ascii_stem.is_empty() {
+        "kyozai"
+    } else {
+        ascii_stem
+    };
+    format!(
+        "attachment; filename=\"{fallback_stem}.{extension}\"; filename*=UTF-8''{}",
+        rfc5987_encode_filename(filename)
+    )
 }
 
 fn is_safe_local_absolute(path: &Path) -> bool {
@@ -820,7 +876,23 @@ async fn file_build(
     Query(q): Query<BuildFileQuery>,
 ) -> Response {
     match resolve_compiled_file(&state, &PathBuf::from(&q.path)) {
-        Ok(canonical) => serve_file(&canonical),
+        Ok(canonical) => {
+            let mut response = serve_file(&canonical);
+            if response.status() == StatusCode::OK {
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    "private, no-store".parse().expect("static header"),
+                );
+                if q.download == Some(1) {
+                    if let Ok(value) = download_disposition(&canonical).parse() {
+                        response
+                            .headers_mut()
+                            .insert(header::CONTENT_DISPOSITION, value);
+                    }
+                }
+            }
+            response
+        }
         Err(CompiledFileError::NotFound(msg)) => err_json(StatusCode::NOT_FOUND, msg),
         Err(CompiledFileError::Forbidden(msg)) => err_json(StatusCode::FORBIDDEN, msg),
     }

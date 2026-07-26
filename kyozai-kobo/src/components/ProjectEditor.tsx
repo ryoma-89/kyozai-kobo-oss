@@ -18,6 +18,7 @@ import {
   addContentItem,
   addPartToProject,
   addProblemToProject,
+  aiCreateJob,
   compilePdf,
   createGraphWebSession,
   ensureGraphFromAsset,
@@ -39,9 +40,15 @@ import {
   updateProjectSettings,
 } from "../api";
 import { insertTextAtRange, waitForGraphIntegration } from "../graphIntegration";
-import { useApp } from "../store";
-import { buildFileUrl, ConflictError, isTauri, openCompiledFile } from "../transport";
+import { useApp, type ProjectReviewFix } from "../store";
+import {
+  buildFileUrl,
+  ConflictError,
+  isTauri,
+  openCompiledFile,
+} from "../transport";
 import type {
+  AiJob,
   BookletKind,
   CompileResult,
   GraphAssetSummary,
@@ -51,9 +58,10 @@ import type {
   TemplateSummary,
 } from "../types";
 import { LatexEditor, type LatexEditorHandle } from "./LatexEditor";
-import { AiConvertDialog } from "./AiConvertDialog";
+import { AiConvertDialog, type AiConvertPreset } from "./AiConvertDialog";
 import { LatexPreview } from "./LatexPreview";
 import { PdfCanvasViewer } from "./PdfCanvasViewer";
+import { PdfSaveButton } from "./PdfSaveButton";
 import { Icon } from "./Icon";
 import { PartPicker } from "./PartPicker";
 import { ProblemPicker } from "./ProblemPicker";
@@ -73,6 +81,62 @@ const OUTPUT_TARGET_LABEL: Record<string, string> = {
   both: "両方",
   none: "出力しない",
 };
+
+function buildProjectReviewSource(project: ProjectFull): string {
+  const lines: string[] = [
+    "【教材メタデータ】",
+    `教材ID: ${project.id}`,
+    `教材名: ${project.name}`,
+    `説明: ${project.description || "（なし）"}`,
+    `問題数: ${project.items.filter((item) => item.item_type === "problem").length}`,
+    `全項目数: ${project.items.length}`,
+    `解説を出力: ${project.settings.include_explanation ? "はい" : "いいえ"}`,
+    `問題冊子レイアウト: ${project.settings.problem_two_column ? "二段組" : "一段組"}`,
+    `解答冊子レイアウト: ${project.settings.two_column_mode === "none" ? "一段組" : "二段組"}`,
+    "",
+    "【確認対象の教材項目】",
+  ];
+
+  project.items.forEach((item, index) => {
+    lines.push("", `===== 項目 ${index + 1} / 教材項目ID ${item.id} =====`);
+    if (item.item_type === "problem") {
+      lines.push(
+        "種別: 問題",
+        `問題バンクID: ${item.problem_id ?? "（元問題削除済み）"}`,
+        `題名: ${item.snap_title || "（題名なし）"}`,
+        "【問題文（一段組用）】",
+        item.snap_statement || "（空欄）",
+        "【問題文（二段組用）】",
+        item.snap_statement_two_column || item.snap_statement || "（空欄）",
+        "【解答】",
+        item.snap_answer || "（空欄）",
+        "【解説】",
+        item.snap_explanation || "（空欄）",
+      );
+      return;
+    }
+    if (item.item_type === "part") {
+      lines.push(
+        "種別: 部品",
+        `部品ライブラリID: ${item.part_id ?? "（元部品削除済み）"}`,
+        `題名: ${item.snap_title || "（題名なし）"}`,
+        `部品種別: ${item.snap_part_type || "（未設定）"}`,
+        `出力先: ${OUTPUT_TARGET_LABEL[item.snap_part_output_target] ?? item.snap_part_output_target}`,
+        `レイアウト: ${item.snap_part_layout_mode === "two_column" ? "二段組" : "一段組"}`,
+        "【部品ソース】",
+        item.content || "（空欄）",
+      );
+      return;
+    }
+    lines.push(
+      `種別: ${ITEM_TYPE_LABEL[item.item_type] ?? item.item_type}`,
+      item.item_type === "heading" ? `見出しレベル: ${item.heading_level}` : "",
+      "【内容】",
+      item.content || (item.item_type === "pagebreak" ? "\\newpage" : "（空欄）"),
+    );
+  });
+  return lines.filter((line) => line !== "").join("\n");
+}
 
 function SortableItem({
   item,
@@ -97,22 +161,45 @@ function SortableItem({
 
 /** 教材プロジェクト編集画面 */
 export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack: () => void }) {
-  const { showToast, confirm, setContextName, setDirty, setLastCompile, setLogOpen, bumps, openGraphOverlay } = useApp();
+  const {
+    showToast,
+    confirm,
+    setContextName,
+    setDirty,
+    setLastCompile,
+    setLogOpen,
+    bumps,
+    openGraphOverlay,
+    pendingProjectReviewFix,
+    clearProjectReviewFix,
+  } = useApp();
   const [project, setProject] = useState<ProjectFull | null>(null);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [showPartPicker, setShowPartPicker] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editItem, setEditItem] = useState<ProjectItem | null>(null);
+  const [editItemInitialTab, setEditItemInitialTab] = useState<
+    "statement" | "answer" | "explanation"
+  >("statement");
+  const [editItemReviewFix, setEditItemReviewFix] = useState<{
+    field: ProjectReviewFix["field"];
+    guidance: string;
+    action: ProjectReviewFix["action"];
+  } | null>(null);
   const [previewIds, setPreviewIds] = useState<Set<number>>(new Set());
   const [texPreview, setTexPreview] = useState<{ kind: BookletKind; tex: string } | null>(null);
-  const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
+  const [compileResult, setCompileResult] = useState<
+    (CompileResult & { download_key: number }) | null
+  >(null);
   const [compilePreviewUrl, setCompilePreviewUrl] = useState<string | null>(null);
   const [compilePreviewZoom, setCompilePreviewZoom] = useState(100);
   const [compiling, setCompiling] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [graphBusy, setGraphBusy] = useState(false);
   const [graphAssets, setGraphAssets] = useState<GraphAssetSummary[] | null>(null);
+  const [projectReviewJob, setProjectReviewJob] = useState<AiJob | null>(null);
+  const [projectReviewStarting, setProjectReviewStarting] = useState(false);
   const [nameEditing, setNameEditing] = useState(false);
   const seenProjectsBumpRef = useRef(bumps.projects);
   const pendingProjectRefreshRef = useRef(false);
@@ -139,6 +226,33 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
     } catch (e) {
       if (requestId === projectLoadRequestRef.current) showToast(String(e), "error");
     }
+  };
+
+  const openReviewFix = (
+    target: Omit<ProjectReviewFix, "projectId">,
+  ) => {
+    const currentProject = project;
+    if (!currentProject) return;
+    const targetItem = currentProject.items.find((item) => item.id === target.itemId);
+    if (!targetItem) {
+      showToast(
+        "AI確認後に対象項目が削除または更新されたため、修正画面を開けませんでした",
+        "error",
+      );
+      return;
+    }
+    const problemTab =
+      target.field === "answer" || target.field === "explanation"
+        ? target.field
+        : "statement";
+    setEditItemInitialTab(problemTab);
+    setEditItemReviewFix({
+      field: target.field,
+      guidance: target.guidance,
+      action: target.action,
+    });
+    setEditItem(targetItem);
+    setProjectReviewJob(null);
   };
 
   useEffect(() => {
@@ -170,6 +284,23 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
     pendingProjectRefreshRef.current = false;
     void load(true);
   }, [nameEditing, showSettings, editItem]);
+
+  useEffect(() => {
+    if (
+      !project ||
+      !pendingProjectReviewFix ||
+      pendingProjectReviewFix.projectId !== project.id
+    ) {
+      return;
+    }
+    openReviewFix({
+      itemId: pendingProjectReviewFix.itemId,
+      field: pendingProjectReviewFix.field,
+      guidance: pendingProjectReviewFix.guidance,
+      action: pendingProjectReviewFix.action,
+    });
+    clearProjectReviewFix();
+  }, [project?.id, project?.items, pendingProjectReviewFix]);
 
   if (!project)
     return (
@@ -334,6 +465,37 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
     }
   };
 
+  const startProjectReview = async () => {
+    if (project.items.length === 0) {
+      showToast("確認する教材項目がありません", "error");
+      return;
+    }
+    setProjectReviewStarting(true);
+    try {
+      const reviewJob = await aiCreateJob({
+        sourceType: "text",
+        conversionMode: "project_review",
+        options: {
+          projectId: project.id,
+          projectName: project.name,
+          projectVersion: project.version,
+          itemCount: project.items.length,
+          problemCount: project.items.filter((item) => item.item_type === "problem").length,
+        },
+        inputText: buildProjectReviewSource(project),
+        targetEntityType: "project",
+        targetEntityId: project.id,
+        targetField: "review",
+      });
+      setProjectReviewJob(reviewJob);
+      showToast("教材全体のAI確認を開始しました。バックグラウンドでも処理を続けられます");
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setProjectReviewStarting(false);
+    }
+  };
+
   const onInsertProjectGraph = async () => {
     if (graphBusy) return;
     setGraphBusy(true);
@@ -406,7 +568,13 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
         const candidates = asset.itemId
           ? latest.items.filter((item) => item.id === asset.itemId)
           : latest.items;
-        const fields = ["content", "snap_statement", "snap_answer", "snap_explanation"] as const;
+        const fields = [
+          "content",
+          "snap_statement",
+          "snap_statement_two_column",
+          "snap_answer",
+          "snap_explanation",
+        ] as const;
         const match = candidates
           .flatMap((item) => fields.map((field) => ({ item, field, value: item[field] })))
           .find(({ value }) => !!asset.insertedLatex && value.includes(asset.insertedLatex));
@@ -512,12 +680,13 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
     setCompilePreviewZoom(100);
     try {
       const result = await compilePdf(project.id, kind);
-      setCompileResult(result);
+      const resultWithDownloadKey = { ...result, download_key: Date.now() };
+      setCompileResult(resultWithDownloadKey);
       if (!isTauri && result.success && result.pdf_path) {
         setCompilePreviewUrl(buildFileUrl(result.pdf_path, Date.now()));
       }
       setLastCompile({
-        ...result,
+        ...resultWithDownloadKey,
         label: `${project.name}（${KIND_LABEL[kind]}）`,
       });
       if (!result.success) setLogOpen(true);
@@ -662,6 +831,14 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
         <button onClick={openGraphReeditList} disabled={graphBusy} className="btn btn-ghost btn-sm">
           グラフを再編集
         </button>
+        <button
+          onClick={startProjectReview}
+          disabled={projectReviewStarting || project.items.length === 0}
+          className="btn btn-outline btn-sm"
+          title="教材内の問題文・解答・解説・部品をまとめてAIで点検"
+        >
+          {projectReviewStarting ? "AI確認を開始中..." : "教材全体をAI確認"}
+        </button>
         <span className="mx-2 h-4 w-px" style={{ background: "var(--border)" }} />
         {(["problems", "answers", "combined"] as BookletKind[]).map((k) => (
           <button
@@ -751,7 +928,8 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
                                   {item.snap_title}
                                   <span className="ml-2 text-xs font-normal" style={{ color: "var(--muted)" }}>
                                     {item.snap_part_type || "custom"} / {item.snap_part_category || "カテゴリなし"} /{" "}
-                                    {OUTPUT_TARGET_LABEL[item.snap_part_output_target] ?? item.snap_part_output_target}
+                                    {OUTPUT_TARGET_LABEL[item.snap_part_output_target] ?? item.snap_part_output_target} /{" "}
+                                    {item.snap_part_layout_mode === "two_column" ? "二段組" : "一段組"}
                                   </span>
                                 </span>
                                 <DifficultyRankBadge
@@ -816,7 +994,11 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
                               )}
                               {item.item_type !== "pagebreak" && (
                                 <button
-                                  onClick={() => setEditItem(item)}
+                                  onClick={() => {
+                                    setEditItemInitialTab("statement");
+                                    setEditItemReviewFix(null);
+                                    setEditItem(item);
+                                  }}
                                   className="btn btn-ghost btn-sm"
                                   title={item.item_type === "problem" ? "この教材内だけの内容を編集" : "編集"}
                                 >
@@ -849,7 +1031,13 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
                           {previewIds.has(item.id) && item.item_type === "problem" && (
                             <div className="mt-2 border-t pt-2 pl-8" style={{ borderColor: "var(--border)" }}>
                               <div className="paper space-y-2">
-                                <LatexPreview source={item.snap_statement} />
+                                <LatexPreview
+                                  source={
+                                    project.settings.problem_two_column
+                                      ? item.snap_statement_two_column || item.snap_statement
+                                      : item.snap_statement
+                                  }
+                                />
                                 {item.snap_answer && (
                                   <details>
                                     <summary className="cursor-pointer text-xs" style={{ color: "#555" }}>
@@ -883,6 +1071,9 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
       {/* 問題追加モーダル */}
       {showPicker && (
         <ProblemPicker
+          existingProblemIds={project.items.flatMap((item) =>
+            item.item_type === "problem" && item.problem_id != null ? [item.problem_id] : [],
+          )}
           onClose={async () => {
             setShowPicker(false);
             await load();
@@ -890,6 +1081,19 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
           onPick={async (problemId) => {
             await addProblemToProject(project.id, problemId);
           }}
+        />
+      )}
+
+      {projectReviewJob && (
+        <AiConvertDialog
+          initialJob={projectReviewJob}
+          onProjectReviewFix={(target, action) =>
+            openReviewFix({
+              ...target,
+              action,
+            })
+          }
+          onClose={() => setProjectReviewJob(null)}
         />
       )}
 
@@ -924,12 +1128,21 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
         <ItemEditModal
           projectId={project.id}
           item={editItem}
+          initialProblemTab={editItemInitialTab}
+          reviewFix={editItemReviewFix}
+          problemLayout={
+            project.settings.problem_two_column ? "two_column" : "single_column"
+          }
           solutionLayout={
             project.settings.two_column_mode === "none" ? "single_column" : "two_column"
           }
-          onClose={() => setEditItem(null)}
+          onClose={() => {
+            setEditItem(null);
+            setEditItemReviewFix(null);
+          }}
           onSaved={async () => {
             setEditItem(null);
+            setEditItemReviewFix(null);
             await load();
           }}
         />
@@ -1009,6 +1222,37 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
           }}
           wide={showLog || (!isTauri && compileResult.success)}
         >
+          <div className="pdf-result-primary-actions sticky top-0 z-10 mb-3 flex items-center justify-end gap-2 rounded-md border p-2">
+            <button onClick={() => setShowLog(!showLog)} className="btn btn-ghost">
+              {showLog ? "ログを隠す" : "ログ詳細"}
+            </button>
+            {compileResult.success && compileResult.pdf_path && (
+              <>
+                {isTauri && (
+                  <button onClick={() => showInFolder(compileResult.pdf_path!)} className="btn btn-ghost">
+                    フォルダで表示
+                  </button>
+                )}
+                {isTauri ? (
+                  <button onClick={() => openCompiledFile(compileResult.pdf_path!)} className="btn btn-solid">
+                    PDFを開く
+                  </button>
+                ) : (
+                  <PdfSaveButton
+                    path={compileResult.pdf_path}
+                    cacheKey={compileResult.download_key}
+                    className="pdf-download-action btn btn-solid"
+                    onError={(message) => showToast(message, "error")}
+                  />
+                )}
+              </>
+            )}
+          </div>
+          {!isTauri && compileResult.success && compileResult.pdf_path && (
+            <p className="standalone-save-hint mb-3 text-xs">
+              表示されたメニューから「“ファイル”に保存」を選んでください
+            </p>
+          )}
           <p
             className="mb-3 text-sm whitespace-pre-wrap"
             style={{ color: compileResult.success ? "var(--success)" : "var(--danger)" }}
@@ -1040,25 +1284,6 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
               {compileResult.log || "(ログなし)"}
             </pre>
           )}
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setShowLog(!showLog)} className="btn btn-ghost">
-              {showLog ? "ログを隠す" : "ログ詳細"}
-            </button>
-            {compileResult.success && compileResult.pdf_path && (
-              <>
-                {isTauri && (
-                  <button onClick={() => showInFolder(compileResult.pdf_path!)} className="btn btn-ghost">
-                    フォルダで表示
-                  </button>
-                )}
-                {isTauri && (
-                  <button onClick={() => openCompiledFile(compileResult.pdf_path!)} className="btn btn-solid">
-                    PDFを開く
-                  </button>
-                )}
-              </>
-            )}
-          </div>
         </Modal>
       )}
     </div>
@@ -1140,7 +1365,21 @@ function SettingsModal({
           {checkRow("解答冊子の問題文を枠で囲む", "box_statement_in_answers")}
           {checkRow("解答冊子に解説を含める", "include_explanation")}
         </div>
-        <div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="section-label mb-0.5 block">問題冊子の段組（縦線付き）</label>
+            <select
+              value={s.problem_two_column ? "two_column" : "single_column"}
+              onChange={(e) =>
+                setS({ ...s, problem_two_column: e.target.value === "two_column" })
+              }
+              className="select w-full"
+            >
+              <option value="single_column">一段組（横幅を活かす）</option>
+              <option value="two_column">二段組（問題を左右の列へ流す）</option>
+            </select>
+          </div>
+          <div>
           <label className="section-label mb-0.5 block">解答冊子の2段組（縦線付き）</label>
           <select
             value={s.two_column_mode || "none"}
@@ -1151,6 +1390,7 @@ function SettingsModal({
             <option value="all">問題＋解答全体を2段組にする</option>
             <option value="answer_only">解答部分だけを2段組にする（問題文は1段のまま）</option>
           </select>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -1206,12 +1446,22 @@ function SettingsModal({
 function ItemEditModal({
   projectId,
   item,
+  initialProblemTab,
+  reviewFix,
+  problemLayout,
   solutionLayout,
   onClose,
   onSaved,
 }: {
   projectId: number;
   item: ProjectItem;
+  initialProblemTab: "statement" | "answer" | "explanation";
+  reviewFix: {
+    field: ProjectReviewFix["field"];
+    guidance: string;
+    action: ProjectReviewFix["action"];
+  } | null;
+  problemLayout: "two_column" | "single_column";
   solutionLayout: "two_column" | "single_column";
   onClose: () => void;
   onSaved: () => Promise<void>;
@@ -1226,13 +1476,79 @@ function ItemEditModal({
   const [partCategory, setPartCategory] = useState(item.snap_part_category);
   const [partDescription, setPartDescription] = useState(item.snap_part_description);
   const [partOutputTarget, setPartOutputTarget] = useState(item.snap_part_output_target || "both");
+  const [partLayoutMode, setPartLayoutMode] = useState(item.snap_part_layout_mode || "single_column");
   const [statement, setStatement] = useState(item.snap_statement);
+  const [statementTwoColumn, setStatementTwoColumn] = useState(
+    item.snap_statement_two_column || item.snap_statement,
+  );
+  const [statementLayout, setStatementLayout] = useState<
+    "single_column" | "two_column"
+  >(problemLayout);
   const [answer, setAnswer] = useState(item.snap_answer);
   const [explanation, setExplanation] = useState(item.snap_explanation);
-  const [tab, setTab] = useState<"statement" | "answer" | "explanation">("statement");
+  const [tab, setTab] = useState<"statement" | "answer" | "explanation">(
+    initialProblemTab,
+  );
   const [graphBusy, setGraphBusy] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  const [itemAiPreset, setItemAiPreset] = useState<AiConvertPreset | null>(null);
   const editorRef = useRef<LatexEditorHandle>(null);
+
+  const reviewRevisionPreset = (): AiConvertPreset | null => {
+    if (!reviewFix || reviewFix.field === "item") return null;
+    if (item.item_type === "problem") {
+      const statementSource =
+        statementLayout === "two_column" ? statementTwoColumn : statement;
+      const target =
+        reviewFix.field === "answer" || reviewFix.field === "explanation"
+          ? reviewFix.field
+          : "statement";
+      const targetSource = {
+        statement: statementSource,
+        answer,
+        explanation,
+      }[target];
+      const text =
+        target === "statement"
+          ? targetSource
+          : `【問題文（参考）】\n${statementSource}\n\n【修正対象の${
+              target === "answer" ? "解答" : "解説"
+            }】\n${targetSource}`;
+      return {
+        sourceType: "text",
+        text,
+        mode: "revise_source",
+        title: `AI確認の指摘に基づいて${target === "statement" ? "問題文" : target === "answer" ? "解答" : "解説"}を修正`,
+        revisionTarget:
+          target === "statement" && statementLayout === "two_column"
+            ? "problem_statement_two_column"
+            : `problem_${target}`,
+        revisionSourceVersion: item.version,
+        revisionGuidance: reviewFix.guidance,
+        replaceTarget: true,
+        solutionLayout: target === "statement" ? problemLayout : solutionLayout,
+      };
+    }
+    return {
+      sourceType: "text",
+      text: content,
+      mode: "revise_source",
+      title: "AI確認の指摘に基づいて項目を修正",
+      revisionTarget: "part",
+      revisionSourceVersion: item.version,
+      revisionGuidance: reviewFix.guidance,
+      replaceTarget: true,
+      solutionLayout,
+    };
+  };
+
+  useEffect(() => {
+    if (reviewFix?.action !== "ai") return;
+    const preset = reviewRevisionPreset();
+    if (!preset) return;
+    setItemAiPreset(preset);
+    setShowAi(true);
+  }, []);
 
   const save = async () => {
     try {
@@ -1240,6 +1556,7 @@ function ItemEditModal({
         await updateProjectItem(item.id, {
           snap_title: title,
           snap_statement: statement,
+          snap_statement_two_column: statementTwoColumn,
           snap_answer: answer,
           snap_explanation: explanation,
           expected_version: item.version,
@@ -1252,6 +1569,7 @@ function ItemEditModal({
           snap_part_category: partCategory,
           snap_part_description: partDescription,
           snap_part_output_target: partOutputTarget,
+          snap_part_layout_mode: partLayoutMode,
           expected_version: item.version,
         });
       } else {
@@ -1281,6 +1599,13 @@ function ItemEditModal({
     const start = editor.selectionStart;
     const end = editor.selectionEnd;
     const activeTab = tab;
+    const activeStatementLayout = statementLayout;
+    const activeTargetField =
+      activeTab === "statement" && activeStatementLayout === "two_column"
+        ? "project_item_statement_two_column"
+        : item.item_type === "problem"
+          ? `project_item_${activeTab}`
+          : "project_item_content";
     setGraphBusy(true);
     if (!isTauri) {
       try {
@@ -1288,7 +1613,7 @@ function ItemEditModal({
           projectId,
           problemId: item.problem_id,
           itemId: item.id,
-          targetField: item.item_type === "problem" ? `project_item_${activeTab}` : "project_item_content",
+          targetField: activeTargetField,
           selectionStart: start,
           selectionEnd: end,
         });
@@ -1296,7 +1621,16 @@ function ItemEditModal({
           session,
           async (result) => {
             if (item.item_type === "problem") {
-              if (activeTab === "statement") setStatement((value) => insertTextAtRange(value, result.insertedLatex, start, end));
+              if (activeTab === "statement" && activeStatementLayout === "single_column") {
+                setStatement((value) =>
+                  insertTextAtRange(value, result.insertedLatex, start, end),
+                );
+              }
+              if (activeTab === "statement" && activeStatementLayout === "two_column") {
+                setStatementTwoColumn((value) =>
+                  insertTextAtRange(value, result.insertedLatex, start, end),
+                );
+              }
               if (activeTab === "answer") setAnswer((value) => insertTextAtRange(value, result.insertedLatex, start, end));
               if (activeTab === "explanation") setExplanation((value) => insertTextAtRange(value, result.insertedLatex, start, end));
             } else {
@@ -1329,7 +1663,7 @@ function ItemEditModal({
         projectId,
         problemId: item.problem_id,
         itemId: item.id,
-        insertTarget: item.item_type === "problem" ? `project_item_${activeTab}` : "project_item_content",
+        insertTarget: activeTargetField,
         selectionStart: start,
         selectionEnd: end,
       });
@@ -1337,7 +1671,16 @@ function ItemEditModal({
       const result = await waitForGraphIntegration(session);
       if (result.status === "completed" && result.insertedLatex) {
         if (item.item_type === "problem") {
-          if (activeTab === "statement") setStatement((v) => insertTextAtRange(v, result.insertedLatex!, start, end));
+          if (activeTab === "statement" && activeStatementLayout === "single_column") {
+            setStatement((v) =>
+              insertTextAtRange(v, result.insertedLatex!, start, end),
+            );
+          }
+          if (activeTab === "statement" && activeStatementLayout === "two_column") {
+            setStatementTwoColumn((v) =>
+              insertTextAtRange(v, result.insertedLatex!, start, end),
+            );
+          }
           if (activeTab === "answer") setAnswer((v) => insertTextAtRange(v, result.insertedLatex!, start, end));
           if (activeTab === "explanation") setExplanation((v) => insertTextAtRange(v, result.insertedLatex!, start, end));
         } else {
@@ -1361,9 +1704,39 @@ function ItemEditModal({
     }
   };
 
+  const reviewFixBanner = reviewFix && (
+    <div
+      className="mb-3 rounded border p-2 text-xs"
+      style={{ borderColor: "rgba(251,191,36,0.5)", background: "var(--warn-dim)" }}
+    >
+      <div className="flex flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="mb-1 font-semibold" style={{ color: "var(--warn)" }}>
+            教材全体のAI確認から開きました
+          </p>
+          <p className="whitespace-pre-wrap">{reviewFix.guidance}</p>
+        </div>
+        {reviewFix.field !== "item" && (
+          <button
+            onClick={() => {
+              const preset = reviewRevisionPreset();
+              if (!preset) return;
+              setItemAiPreset(preset);
+              setShowAi(true);
+            }}
+            className="btn btn-solid btn-sm"
+          >
+            <Icon name="sparkle" size={14} /> AI修正案
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
   if (item.item_type !== "problem") {
     return (
       <Modal title={`${ITEM_TYPE_LABEL[item.item_type]}を編集`} onClose={onClose}>
+        {reviewFixBanner}
         {item.item_type === "heading" && (
           <div className="mb-2 space-y-2">
             <div>
@@ -1419,6 +1792,14 @@ function ItemEditModal({
               <option value="both">両方に表示</option>
               <option value="none">出力しない</option>
             </select>
+            <select
+              value={partLayoutMode}
+              onChange={(e) => setPartLayoutMode(e.target.value as ProjectItem["snap_part_layout_mode"])}
+              className="select w-full"
+            >
+              <option value="single_column">一段組</option>
+              <option value="two_column">二段組</option>
+            </select>
             <textarea
               value={partDescription}
               onChange={(e) => setPartDescription(e.target.value)}
@@ -1433,7 +1814,13 @@ function ItemEditModal({
           </button>
         </div>
         <div className="mb-2 flex justify-end">
-          <button onClick={() => setShowAi(true)} className="btn btn-outline btn-sm">
+          <button
+            onClick={() => {
+              setItemAiPreset(null);
+              setShowAi(true);
+            }}
+            className="btn btn-outline btn-sm"
+          >
             <Icon name="sparkle" size={15} /> AI変換
           </button>
         </div>
@@ -1451,15 +1838,22 @@ function ItemEditModal({
         </div>
         {showAi && (
           <AiConvertDialog
-            onClose={() => setShowAi(false)}
-            preset={{ solutionLayout }}
+            onClose={() => {
+              setShowAi(false);
+              setItemAiPreset(null);
+            }}
+            preset={itemAiPreset ?? { solutionLayout }}
             insertTargets={[
               {
-                label: "この項目へ挿入",
+                label: itemAiPreset?.replaceTarget ? "この項目を置き換える" : "この項目へ挿入",
                 entityType: "project_item",
                 entityId: item.id,
                 field: "content",
                 insert: (latex) => {
+                  if (itemAiPreset?.replaceTarget) {
+                    setContent(latex);
+                    return;
+                  }
                   const editor = editorRef.current;
                   const start = editor?.selectionStart ?? content.length;
                   const end = editor?.selectionEnd ?? start;
@@ -1474,11 +1868,29 @@ function ItemEditModal({
   }
 
   const tabs = { statement: "問題文", answer: "解答", explanation: "解説" } as const;
-  const values = { statement, answer, explanation };
-  const setters = { statement: setStatement, answer: setAnswer, explanation: setExplanation };
+  const activeStatement =
+    statementLayout === "two_column" ? statementTwoColumn : statement;
+  const setActiveStatement =
+    statementLayout === "two_column" ? setStatementTwoColumn : setStatement;
+  const values = { statement: activeStatement, answer, explanation };
+  const setters = {
+    statement: setActiveStatement,
+    answer: setAnswer,
+    explanation: setExplanation,
+  };
+  const aiProblemTab =
+    itemAiPreset?.revisionTarget === "problem_statement" ||
+    itemAiPreset?.revisionTarget === "problem_statement_two_column"
+      ? "statement"
+      : itemAiPreset?.revisionTarget === "problem_answer"
+        ? "answer"
+        : itemAiPreset?.revisionTarget === "problem_explanation"
+          ? "explanation"
+          : tab;
 
   return (
     <Modal title="この教材内だけの内容を編集（問題バンクには影響しません）" onClose={onClose} wide>
+      {reviewFixBanner}
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
@@ -1492,18 +1904,96 @@ function ItemEditModal({
           </button>
         ))}
       </div>
+      {tab === "statement" && (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold" style={{ color: "var(--muted)" }}>
+            表示形式
+          </span>
+          <button
+            type="button"
+            onClick={() => setStatementLayout("single_column")}
+            className={`btn btn-sm ${
+              statementLayout === "single_column" ? "btn-solid" : "btn-outline"
+            }`}
+          >
+            一段組用
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatementLayout("two_column")}
+            className={`btn btn-sm ${
+              statementLayout === "two_column" ? "btn-solid" : "btn-outline"
+            }`}
+          >
+            二段組用
+          </button>
+          <span className="text-xs" style={{ color: "var(--muted)" }}>
+            冊子の段組に応じて自動選択されます
+          </span>
+        </div>
+      )}
       <div className="mb-2 flex justify-end">
         <button onClick={onInsertGraphInItem} disabled={graphBusy} className="btn btn-outline btn-sm">
           {graphBusy ? "グラフ連携中..." : "グラフを挿入"}
         </button>
       </div>
-      <div className="mb-2 flex justify-end">
-        <button onClick={() => setShowAi(true)} className="btn btn-outline btn-sm">
+      <div className="mb-2 flex flex-wrap justify-end gap-2">
+        {tab === "statement" && (
+          <>
+            <button
+              onClick={() => {
+                const isTwoColumn = statementLayout === "two_column";
+                const layoutName = isTwoColumn ? "二段組の片方の列" : "一段組";
+                setItemAiPreset({
+                  sourceType: "text",
+                  text: activeStatement,
+                  mode: "revise_source",
+                  title: `問題文を${isTwoColumn ? "二段組" : "一段組"}向けに整形`,
+                  revisionTarget: isTwoColumn
+                    ? "problem_statement_two_column"
+                    : "problem_statement",
+                  revisionSourceVersion: item.version,
+                  revisionGuidance: `問題の条件、数値、記号、点名、小問番号、選択肢、図表との対応を一切変えず、${layoutName}の\\linewidthで読みやすくなるよう、文章と長い数式の改行だけを調整してください。外側の段組環境は追加しないでください。`,
+                  replaceTarget: true,
+                  solutionLayout: statementLayout,
+                });
+                setShowAi(true);
+              }}
+              disabled={!activeStatement.trim()}
+              className="btn btn-outline btn-sm"
+            >
+              <Icon name="sparkle" size={15} /> この表示形式を整形
+            </button>
+            <button
+              onClick={() => {
+                setItemAiPreset({
+                  sourceType: "text",
+                  text: statement.trim() || statementTwoColumn.trim(),
+                  mode: "generate_problem_layouts",
+                  title: "問題文の一段組用・二段組用を生成",
+                  solutionLayout: "single_column",
+                });
+                setShowAi(true);
+              }}
+              disabled={!statement.trim() && !statementTwoColumn.trim()}
+              className="btn btn-outline btn-sm"
+            >
+              <Icon name="sparkle" size={15} /> 両方の表示形式を生成
+            </button>
+          </>
+        )}
+        <button
+          onClick={() => {
+            setItemAiPreset(null);
+            setShowAi(true);
+          }}
+          className="btn btn-outline btn-sm"
+        >
           <Icon name="sparkle" size={15} /> AI変換
         </button>
       </div>
       <LatexEditor
-        key={`item-${item.id}-${tab}`}
+        key={`item-${item.id}-${tab}-${statementLayout}`}
         ref={editorRef}
         value={values[tab]}
         onChange={setters[tab]}
@@ -1516,20 +2006,45 @@ function ItemEditModal({
       </div>
       {showAi && (
         <AiConvertDialog
-          onClose={() => setShowAi(false)}
-          preset={{ solutionLayout }}
+          onClose={() => {
+            setShowAi(false);
+            setItemAiPreset(null);
+          }}
+          preset={itemAiPreset ?? {
+            solutionLayout: tab === "statement" ? statementLayout : solutionLayout,
+          }}
+          onUseProblemLayouts={
+            itemAiPreset?.mode === "generate_problem_layouts"
+              ? (layouts) => {
+                  setStatement(layouts.statementLatex);
+                  setStatementTwoColumn(layouts.statementLatexTwoColumn);
+                  setStatementLayout("single_column");
+                  setTab("statement");
+                }
+              : undefined
+          }
           insertTargets={[
             {
-              label: `${tabs[tab]}へ挿入`,
+              label: itemAiPreset?.replaceTarget
+                ? `${tabs[aiProblemTab]}を置き換える`
+                : `${tabs[aiProblemTab]}へ挿入`,
               entityType: "project_item",
               entityId: item.id,
-              field: `snap_${tab}`,
+              field:
+                aiProblemTab === "statement" && statementLayout === "two_column"
+                  ? "snap_statement_two_column"
+                  : `snap_${aiProblemTab}`,
               insert: (latex) => {
+                if (itemAiPreset?.replaceTarget) {
+                  setters[aiProblemTab](latex);
+                  setTab(aiProblemTab);
+                  return;
+                }
                 const editor = editorRef.current;
-                const value = values[tab];
+                const value = values[aiProblemTab];
                 const start = editor?.selectionStart ?? value.length;
                 const end = editor?.selectionEnd ?? start;
-                setters[tab]((current) => insertTextAtRange(current, latex, start, end));
+                setters[aiProblemTab]((current) => insertTextAtRange(current, latex, start, end));
               },
             },
           ]}

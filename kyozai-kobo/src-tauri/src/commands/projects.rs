@@ -174,15 +174,15 @@ pub fn duplicate_project(state: &AppState, id: i64) -> Result<i64, String> {
     .map_err(err_str)?;
     let new_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO project_settings (project_id, booklet_title, subtitle, target, date_str, header_left, header_right, number_format, show_name_field, auto_number, page_break_per_problem, include_explanation, two_column_mode, show_title, show_header, show_toc, number_headings, include_statement_in_answers, box_statement_in_answers, reset_numbering_per_chapter, difficulty_display, required_display)
-         SELECT ?2, booklet_title, subtitle, target, date_str, header_left, header_right, number_format, show_name_field, auto_number, page_break_per_problem, include_explanation, two_column_mode, show_title, show_header, show_toc, number_headings, include_statement_in_answers, box_statement_in_answers, reset_numbering_per_chapter, difficulty_display, required_display
+        "INSERT INTO project_settings (project_id, booklet_title, subtitle, target, date_str, header_left, header_right, number_format, show_name_field, auto_number, page_break_per_problem, include_explanation, problem_two_column, two_column_mode, show_title, show_header, show_toc, number_headings, include_statement_in_answers, box_statement_in_answers, reset_numbering_per_chapter, difficulty_display, required_display)
+         SELECT ?2, booklet_title, subtitle, target, date_str, header_left, header_right, number_format, show_name_field, auto_number, page_break_per_problem, include_explanation, problem_two_column, two_column_mode, show_title, show_header, show_toc, number_headings, include_statement_in_answers, box_statement_in_answers, reset_numbering_per_chapter, difficulty_display, required_display
          FROM project_settings WHERE project_id=?1",
         params![id, new_id],
     )
     .map_err(err_str)?;
     conn.execute(
-        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_attachments, heading_level, heading_numbered, created_at)
-         SELECT ?2, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_attachments, heading_level, heading_numbered, ?3
+        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, heading_level, heading_numbered, created_at)
+         SELECT ?2, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, heading_level, heading_numbered, ?3
          FROM project_items WHERE project_id=?1",
         params![id, new_id, now],
     )
@@ -194,7 +194,7 @@ pub fn settings_of(conn: &Connection, project_id: i64) -> rusqlite::Result<Proje
     conn.query_row(
         "SELECT booklet_title, subtitle, target, date_str, header_left, header_right, number_format,
                 show_name_field, auto_number, page_break_per_problem, include_explanation,
-                two_column_mode, show_title, show_header, show_toc, number_headings, include_statement_in_answers,
+                problem_two_column, two_column_mode, show_title, show_header, show_toc, number_headings, include_statement_in_answers,
                 box_statement_in_answers, reset_numbering_per_chapter, difficulty_display, required_display
          FROM project_settings WHERE project_id=?1",
         params![project_id],
@@ -211,16 +211,17 @@ pub fn settings_of(conn: &Connection, project_id: i64) -> rusqlite::Result<Proje
                 auto_number: r.get::<_, i64>(8)? != 0,
                 page_break_per_problem: r.get::<_, i64>(9)? != 0,
                 include_explanation: r.get::<_, i64>(10)? != 0,
-                two_column_mode: r.get(11)?,
-                show_title: r.get::<_, i64>(12)? != 0,
-                show_header: r.get::<_, i64>(13)? != 0,
-                show_toc: r.get::<_, i64>(14)? != 0,
-                number_headings: r.get::<_, i64>(15)? != 0,
-                include_statement_in_answers: r.get::<_, i64>(16)? != 0,
-                box_statement_in_answers: r.get::<_, i64>(17)? != 0,
-                reset_numbering_per_chapter: r.get::<_, i64>(18)? != 0,
-                difficulty_display: r.get(19)?,
-                required_display: r.get(20)?,
+                problem_two_column: r.get::<_, i64>(11)? != 0,
+                two_column_mode: r.get(12)?,
+                show_title: r.get::<_, i64>(13)? != 0,
+                show_header: r.get::<_, i64>(14)? != 0,
+                show_toc: r.get::<_, i64>(15)? != 0,
+                number_headings: r.get::<_, i64>(16)? != 0,
+                include_statement_in_answers: r.get::<_, i64>(17)? != 0,
+                box_statement_in_answers: r.get::<_, i64>(18)? != 0,
+                reset_numbering_per_chapter: r.get::<_, i64>(19)? != 0,
+                difficulty_display: r.get(20)?,
+                required_display: r.get(21)?,
             })
         },
     )
@@ -230,17 +231,17 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
     let mut stmt = conn
         .prepare(
             "SELECT i.id, i.project_id, i.item_type, i.sort_order, i.problem_id, i.part_id,
-                    i.snap_title, i.snap_statement, i.snap_answer, i.snap_explanation,
+                    i.snap_title, i.snap_statement, i.snap_statement_two_column, i.snap_answer, i.snap_explanation,
                     i.snap_difficulty, i.snap_difficulty_rank, i.snap_is_required, i.snap_attachments, i.content,
                     i.snap_part_type, i.snap_part_category, i.snap_part_description, i.snap_part_output_target,
                     i.snap_part_attachments, i.heading_level, i.heading_numbered,
                     p.id IS NOT NULL,
-                    COALESCE(p.title, ''), COALESCE(p.statement_latex, ''), COALESCE(p.answer_latex, ''),
+                    COALESCE(p.title, ''), COALESCE(p.statement_latex, ''), COALESCE(p.statement_latex_two_column, ''), COALESCE(p.answer_latex, ''),
                     COALESCE(p.explanation_latex, ''), COALESCE(p.difficulty, ''), p.difficulty_rank, COALESCE(p.is_required, 0),
                     pr.id IS NOT NULL,
                     COALESCE(pr.title, ''), COALESCE(pr.latex_source, ''), COALESCE(pr.part_type, ''),
                     COALESCE(pr.category, ''), COALESCE(pr.description, ''), COALESCE(pr.output_target, 'both'),
-                    i.version
+                    i.version, i.snap_part_layout_mode, COALESCE(pr.layout_mode, 'single_column')
              FROM project_items i
              LEFT JOIN problems p ON p.id = i.problem_id
              LEFT JOIN parts pr ON pr.id = i.part_id
@@ -250,39 +251,44 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
     let rows = stmt
         .query_map(params![project_id], |r| {
             let item_type: String = r.get(2)?;
-            let snap_attachments_json: String = r.get(13)?;
-            let snap_part_attachments_json: String = r.get(19)?;
-            let problem_exists: bool = r.get(22)?;
-            let bank_title: String = r.get(23)?;
-            let bank_statement: String = r.get(24)?;
-            let bank_answer: String = r.get(25)?;
-            let bank_explanation: String = r.get(26)?;
-            let bank_difficulty: String = r.get(27)?;
-            let bank_rank: Option<String> = r.get(28)?;
-            let bank_required: bool = r.get::<_, i64>(29)? != 0;
-            let part_exists: bool = r.get(30)?;
-            let part_title: String = r.get(31)?;
-            let part_latex: String = r.get(32)?;
-            let part_type: String = r.get(33)?;
-            let part_category: String = r.get(34)?;
-            let part_description: String = r.get(35)?;
-            let part_output_target: String = r.get(36)?;
+            let snap_attachments_json: String = r.get(14)?;
+            let snap_part_attachments_json: String = r.get(20)?;
+            let problem_exists: bool = r.get(23)?;
+            let bank_title: String = r.get(24)?;
+            let bank_statement: String = r.get(25)?;
+            let bank_statement_two_column: String = r.get(26)?;
+            let bank_answer: String = r.get(27)?;
+            let bank_explanation: String = r.get(28)?;
+            let bank_difficulty: String = r.get(29)?;
+            let bank_rank: Option<String> = r.get(30)?;
+            let bank_required: bool = r.get::<_, i64>(31)? != 0;
+            let part_exists: bool = r.get(32)?;
+            let part_title: String = r.get(33)?;
+            let part_latex: String = r.get(34)?;
+            let part_type: String = r.get(35)?;
+            let part_category: String = r.get(36)?;
+            let part_description: String = r.get(37)?;
+            let part_output_target: String = r.get(38)?;
+            let snap_part_layout_mode: String = r.get(40)?;
+            let part_layout_mode: String = r.get(41)?;
             let snap_title: String = r.get(6)?;
             let snap_statement: String = r.get(7)?;
-            let snap_answer: String = r.get(8)?;
-            let snap_explanation: String = r.get(9)?;
-            let snap_difficulty: String = r.get(10)?;
-            let snap_difficulty_rank: Option<String> = r.get(11)?;
-            let snap_is_required = r.get::<_, i64>(12)? != 0;
-            let content: String = r.get(14)?;
-            let snap_part_type: String = r.get(15)?;
-            let snap_part_category: String = r.get(16)?;
-            let snap_part_description: String = r.get(17)?;
-            let snap_part_output_target: String = r.get(18)?;
+            let snap_statement_two_column: String = r.get(8)?;
+            let snap_answer: String = r.get(9)?;
+            let snap_explanation: String = r.get(10)?;
+            let snap_difficulty: String = r.get(11)?;
+            let snap_difficulty_rank: Option<String> = r.get(12)?;
+            let snap_is_required = r.get::<_, i64>(13)? != 0;
+            let content: String = r.get(15)?;
+            let snap_part_type: String = r.get(16)?;
+            let snap_part_category: String = r.get(17)?;
+            let snap_part_description: String = r.get(18)?;
+            let snap_part_output_target: String = r.get(19)?;
             let bank_updated = item_type == "problem"
                 && problem_exists
                 && (bank_title != snap_title
                     || bank_statement != snap_statement
+                    || bank_statement_two_column != snap_statement_two_column
                     || bank_answer != snap_answer
                     || bank_explanation != snap_explanation
                     || bank_difficulty != snap_difficulty
@@ -295,7 +301,8 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
                     || part_type != snap_part_type
                     || part_category != snap_part_category
                     || part_description != snap_part_description
-                    || part_output_target != snap_part_output_target);
+                    || part_output_target != snap_part_output_target
+                    || part_layout_mode != snap_part_layout_mode);
             let source_exists = if item_type == "problem" {
                 problem_exists
             } else if item_type == "part" {
@@ -312,6 +319,7 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
                 part_id: r.get(5)?,
                 snap_title,
                 snap_statement,
+                snap_statement_two_column,
                 snap_answer,
                 snap_explanation,
                 snap_difficulty,
@@ -323,13 +331,14 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
                 snap_part_category,
                 snap_part_description,
                 snap_part_output_target,
+                snap_part_layout_mode,
                 snap_part_attachments: serde_json::from_str(&snap_part_attachments_json).unwrap_or_default(),
-                heading_level: r.get(20)?,
-                heading_numbered: r.get::<_, i64>(21)? != 0,
+                heading_level: r.get(21)?,
+                heading_numbered: r.get::<_, i64>(22)? != 0,
                 bank_updated,
                 source_exists,
                 part_updated,
-                version: r.get(37)?,
+                version: r.get(39)?,
             })
         })
         .map_err(err_str)?
@@ -425,8 +434,8 @@ pub fn add_problem_to_project(state: &AppState, project_id: i64, problem_id: i64
     let snap_json = serde_json::to_string(&snap).map_err(err_str)?;
     let order = next_sort_order(&conn, project_id).map_err(err_str)?;
     conn.execute(
-        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, snap_title, snap_statement, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, created_at)
-         SELECT ?1, 'problem', ?2, id, title, statement_latex, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, ?3, ?4
+        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, created_at)
+         SELECT ?1, 'problem', ?2, id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, ?3, ?4
          FROM problems WHERE id=?5",
         params![project_id, order, snap_json, now_str(), problem_id],
     )
@@ -455,10 +464,10 @@ pub fn add_part_to_project(state: &AppState, project_id: i64, part_id: i64) -> R
         "INSERT INTO project_items (
             project_id, item_type, sort_order, part_id, snap_title, content,
             snap_difficulty_rank, snap_is_required, snap_part_type, snap_part_category,
-            snap_part_description, snap_part_output_target, snap_part_attachments, created_at
+            snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, created_at
          )
          SELECT ?1, 'part', ?2, id, title, latex_source, difficulty_rank, is_required, part_type,
-                category, description, output_target, ?3, ?4
+                category, description, output_target, layout_mode, ?3, ?4
          FROM parts WHERE id=?5",
         params![project_id, order, snap_json, now_str(), part_id],
     )
@@ -502,6 +511,7 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         content,
         snap_title,
         snap_statement,
+        snap_statement_two_column,
         snap_answer,
         snap_explanation,
         snap_difficulty_rank,
@@ -510,6 +520,7 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         snap_part_category,
         snap_part_description,
         snap_part_output_target,
+        snap_part_layout_mode,
         heading_level,
         heading_numbered,
         expected_version,
@@ -545,6 +556,13 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
     if let Some(v) = snap_statement {
         conn.execute("UPDATE project_items SET snap_statement=?1 WHERE id=?2", params![v, item_id])
             .map_err(err_str)?;
+    }
+    if let Some(v) = snap_statement_two_column {
+        conn.execute(
+            "UPDATE project_items SET snap_statement_two_column=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_answer {
         conn.execute("UPDATE project_items SET snap_answer=?1 WHERE id=?2", params![v, item_id])
@@ -582,6 +600,13 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         )
         .map_err(err_str)?;
     }
+    if let Some(v) = snap_part_layout_mode {
+        conn.execute(
+            "UPDATE project_items SET snap_part_layout_mode=?1 WHERE id=?2",
+            params![super::parts::normalize_layout_mode(&v), item_id],
+        )
+        .map_err(err_str)?;
+    }
     conn.execute("UPDATE project_items SET version=version+1 WHERE id=?1", params![item_id])
         .map_err(err_str)?;
     let project_id: i64 = conn
@@ -611,6 +636,7 @@ pub fn refresh_item_from_bank(state: &AppState, item_id: i64) -> Result<(), Stri
         "UPDATE project_items SET
             snap_title=(SELECT title FROM problems WHERE id=?1),
             snap_statement=(SELECT statement_latex FROM problems WHERE id=?1),
+            snap_statement_two_column=(SELECT statement_latex_two_column FROM problems WHERE id=?1),
             snap_answer=(SELECT answer_latex FROM problems WHERE id=?1),
             snap_explanation=(SELECT explanation_latex FROM problems WHERE id=?1),
             snap_difficulty=(SELECT difficulty FROM problems WHERE id=?1),
@@ -655,6 +681,7 @@ pub fn refresh_part_item_from_library(state: &AppState, item_id: i64) -> Result<
             snap_part_category=(SELECT category FROM parts WHERE id=?1),
             snap_part_description=(SELECT description FROM parts WHERE id=?1),
             snap_part_output_target=(SELECT output_target FROM parts WHERE id=?1),
+            snap_part_layout_mode=(SELECT layout_mode FROM parts WHERE id=?1),
             snap_part_attachments=?2,
             version=version+1
          WHERE id=?3",
@@ -711,10 +738,10 @@ pub fn update_project_settings(
     tx.execute(
         "UPDATE project_settings SET booklet_title=?1, subtitle=?2, target=?3, date_str=?4, header_left=?5, header_right=?6, number_format=?7,
                 show_name_field=?8, auto_number=?9, page_break_per_problem=?10, include_explanation=?11,
-                two_column_mode=?12, show_title=?13, show_header=?14, show_toc=?15, number_headings=?16,
-                include_statement_in_answers=?17, box_statement_in_answers=?18, reset_numbering_per_chapter=?19,
-                difficulty_display=?20, required_display=?21
-         WHERE project_id=?22",
+                problem_two_column=?12, two_column_mode=?13, show_title=?14, show_header=?15, show_toc=?16, number_headings=?17,
+                include_statement_in_answers=?18, box_statement_in_answers=?19, reset_numbering_per_chapter=?20,
+                difficulty_display=?21, required_display=?22
+         WHERE project_id=?23",
         params![
             settings.booklet_title,
             settings.subtitle,
@@ -727,6 +754,7 @@ pub fn update_project_settings(
             settings.auto_number as i64,
             settings.page_break_per_problem as i64,
             settings.include_explanation as i64,
+            settings.problem_two_column as i64,
             settings.two_column_mode,
             settings.show_title as i64,
             settings.show_header as i64,

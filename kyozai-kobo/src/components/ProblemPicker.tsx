@@ -8,9 +8,12 @@ import { DIFFICULTY_RANKS, DifficultyBadge, DifficultyRankBadge, Modal } from ".
 export function ProblemPicker({
   onPick,
   onClose,
+  existingProblemIds = [],
 }: {
   onPick: (problemId: number) => Promise<void>;
   onClose: () => void;
+  /** この教材へ問題バンクから追加済みの問題ID。 */
+  existingProblemIds?: number[];
 }) {
   const { tree, refreshTree, showToast } = useApp();
   const [text, setText] = useState("");
@@ -21,6 +24,10 @@ export function ProblemPicker({
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("all");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [addedIds, setAddedIds] = useState<number[]>([]);
+  const existingProblemIdSet = useMemo(
+    () => new Set(existingProblemIds),
+    [existingProblemIds],
+  );
 
   useEffect(() => {
     refreshTree();
@@ -147,37 +154,49 @@ export function ProblemPicker({
           </p>
         ) : (
           <ul className="space-y-1">
-            {results.map((r) => (
-              <li key={r.id} className="card flex items-center gap-2 px-3 py-1.5 text-sm">
-                <span className="min-w-0 flex-1 truncate">
-                  <span className="font-medium">{r.title}</span>
-                  <span className="ml-2 text-xs" style={{ color: "var(--muted)" }}>
-                    {r.subject_name}/{r.field_name}/{r.unit_name}
+            {results.map((r) => {
+              const isAdded = existingProblemIdSet.has(r.id) || addedIds.includes(r.id);
+              return (
+                <li key={r.id} className="card flex items-center gap-2 px-3 py-1.5 text-sm">
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="font-medium">{r.title}</span>
+                    <span className="ml-2 text-xs" style={{ color: "var(--muted)" }}>
+                      {r.subject_name}/{r.field_name}/{r.unit_name}
+                    </span>
                   </span>
-                </span>
-                <DifficultyBadge value={r.difficulty} />
-                <DifficultyRankBadge rank={r.difficulty_rank} required={r.is_required} />
-                <button
-                  onClick={async () => {
-                    await onPick(r.id);
-                    setAddedIds((ids) => [...ids, r.id]);
-                  }}
-                  className="btn btn-outline btn-sm"
-                >
-                  {addedIds.includes(r.id) ? "再追加" : "追加"}
-                </button>
-                {addedIds.includes(r.id) && (
-                  <span className="text-xs" style={{ color: "var(--success)" }}>
-                    ✓済
-                  </span>
-                )}
-              </li>
-            ))}
+                  <DifficultyBadge value={r.difficulty} />
+                  <DifficultyRankBadge rank={r.difficulty_rank} required={r.is_required} />
+                  {isAdded ? (
+                    <span
+                      className="badge shrink-0"
+                      style={{
+                        color: "var(--success)",
+                        borderColor: "rgba(197,183,223,0.4)",
+                        background: "var(--success-dim)",
+                      }}
+                      title="この教材には追加済みです"
+                    >
+                      ✓ 追加済
+                    </span>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        await onPick(r.id);
+                        setAddedIds((ids) => [...ids, r.id]);
+                      }}
+                      className="btn btn-outline btn-sm"
+                    >
+                      追加
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
       <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
-        同じ問題を複数回追加することもできます。追加した時点の内容がスナップショットとして保存されます。
+        この教材に入っている問題は「追加済」と表示され、重複して追加されません。追加時点の内容がスナップショットとして保存されます。
       </p>
     </Modal>
   );

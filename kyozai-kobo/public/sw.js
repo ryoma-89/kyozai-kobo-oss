@@ -1,5 +1,5 @@
 /* 教材工房 PWA service worker. API responses are never cached. */
-const CACHE = "kyozai-kobo-shell-v13";
+const CACHE = "kyozai-kobo-shell-v14";
 const CORE = [
   "/",
   "/manifest.webmanifest",

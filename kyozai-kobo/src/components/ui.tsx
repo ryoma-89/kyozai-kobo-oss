@@ -1,6 +1,24 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import type { DifficultyRank } from "../types";
+
+/** 閉じる操作を退場アニメーション付きにする（アニメーション後に本来のクローズを呼ぶ） */
+function useDismiss(onClose: () => void, durationMs = 160) {
+  const [closing, setClosing] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const dismiss = () => {
+    if (closing) return;
+    setClosing(true);
+    timer.current = window.setTimeout(onClose, durationMs);
+  };
+  return { closing, dismiss };
+}
 
 export function Modal({
   title,
@@ -13,15 +31,16 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
+  const { closing, dismiss } = useDismiss(onClose);
   return (
     <div
-      className="safe-area-overlay fixed inset-0 z-40 flex items-center justify-center bg-black/60"
+      className={`safe-area-overlay modal-scrim ${closing ? "modal-scrim-out" : ""} fixed inset-0 z-40 flex items-center justify-center`}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) dismiss();
       }}
     >
       <div
-        className={`fade-in flex max-h-[90vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} flex-col rounded-md border shadow-2xl`}
+        className={`modal-panel ${closing ? "modal-panel-out" : ""} flex max-h-[90vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} flex-col rounded-md border shadow-2xl`}
         style={{ background: "var(--panel)", borderColor: "var(--border-strong)" }}
       >
         <div
@@ -32,7 +51,7 @@ export function Modal({
             <span className="brand-mark mr-1.5">▸</span>
             {title}
           </h2>
-          <button onClick={onClose} className="btn btn-ghost btn-sm" title="閉じる">
+          <button onClick={dismiss} className="btn btn-ghost btn-sm" title="閉じる">
             ✕
           </button>
         </div>
@@ -47,7 +66,7 @@ export function Toast() {
   if (!toast) return null;
   return (
     <div
-      className="safe-area-toast fade-in fixed bottom-10 left-1/2 z-50 -translate-x-1/2 rounded border px-4 py-2 text-sm whitespace-pre-wrap shadow-xl"
+      className="safe-area-toast toast-in fixed bottom-10 left-1/2 z-50 -translate-x-1/2 rounded border px-4 py-2 text-sm whitespace-pre-wrap shadow-xl"
       style={
         toastKind === "error"
           ? { background: "#2a1418", borderColor: "rgba(241,106,117,0.5)", color: "var(--danger)" }
@@ -61,22 +80,39 @@ export function Toast() {
 
 export function ConfirmDialog() {
   const { confirmState, resolveConfirm } = useApp();
+  const [closing, setClosing] = useState(false);
+  const timer = useRef<number | null>(null);
+  // 常時マウントされるため、新しい確認が来たら閉じ状態をリセットする
+  useEffect(() => {
+    if (confirmState) setClosing(false);
+  }, [confirmState]);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
   if (!confirmState) return null;
+  const finish = (value: boolean) => {
+    if (closing) return;
+    setClosing(true);
+    timer.current = window.setTimeout(() => resolveConfirm(value), 140);
+  };
   return (
-    <div className="safe-area-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className={`safe-area-overlay modal-scrim ${closing ? "modal-scrim-out" : ""} fixed inset-0 z-50 flex items-center justify-center`}>
       <div
-        className="fade-in w-full max-w-md rounded-md border p-5 shadow-2xl"
+        className={`modal-panel ${closing ? "modal-panel-out" : ""} w-full max-w-md rounded-md border p-5 shadow-2xl`}
         style={{ background: "var(--panel)", borderColor: "rgba(241,106,117,0.35)" }}
       >
         <p className="mb-5 text-sm whitespace-pre-wrap" style={{ color: "var(--text)" }}>
           {confirmState.message}
         </p>
         <div className="flex justify-end gap-2">
-          <button onClick={() => resolveConfirm(false)} className="btn btn-ghost">
+          <button onClick={() => finish(false)} className="btn btn-ghost">
             キャンセル
           </button>
           <button
-            onClick={() => resolveConfirm(true)}
+            onClick={() => finish(true)}
             className="btn"
             style={{ background: "var(--danger)", color: "#1b0c0e", fontWeight: 700 }}
           >

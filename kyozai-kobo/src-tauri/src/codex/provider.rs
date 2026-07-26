@@ -20,6 +20,21 @@ fn turn_interrupt_params(thread_id: &str, turn_id: &str) -> Value {
     json!({"threadId": thread_id, "turnId": turn_id})
 }
 
+fn thread_start_params(req: &ConversionRequest, selected_model: Option<&str>) -> Value {
+    let mut params = json!({
+        "ephemeral": true,
+        "cwd": req.work_dir.to_string_lossy(),
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "developerInstructions": req.developer_instructions,
+    });
+    if let Some(model) = selected_model {
+        params["model"] = json!(model);
+        params["allowProviderModelFallback"] = json!(false);
+    }
+    params
+}
+
 fn should_emit_delta_progress(
     received_chars: usize,
     last_reported_chars: usize,
@@ -100,16 +115,11 @@ impl LatexConversionProvider for CodexAppServerProvider {
             .ok_or("通知チャネルを取得できません")?;
 
         progress("converting", "スレッドを準備しています…");
+        let selected_model = super::selected_model(state)?;
         let thread = super::request(
             state,
             "thread/start",
-            json!({
-                "ephemeral": true,
-                "cwd": req.work_dir.to_string_lossy(),
-                "sandbox": "read-only",
-                "approvalPolicy": "never",
-                "developerInstructions": req.developer_instructions,
-            }),
+            thread_start_params(req, selected_model.as_deref()),
             60,
         )?;
         let thread_id = thread
@@ -294,6 +304,27 @@ mod tests {
             turn_interrupt_params("thread-1", "turn-2"),
             json!({"threadId": "thread-1", "turnId": "turn-2"})
         );
+    }
+
+    #[test]
+    fn thread_start_uses_selected_model_and_default_when_empty() {
+        let req = ConversionRequest {
+            work_dir: PathBuf::from("C:/temp/ai-job"),
+            developer_instructions: "instructions".into(),
+            prompt_text: "problem".into(),
+            image_paths: vec![],
+            output_schema: json!({}),
+        };
+        let selected = thread_start_params(&req, Some("gpt-5.4-mini"));
+        assert_eq!(selected.get("model"), Some(&json!("gpt-5.4-mini")));
+        assert_eq!(
+            selected.get("allowProviderModelFallback"),
+            Some(&json!(false))
+        );
+
+        let default = thread_start_params(&req, None);
+        assert!(default.get("model").is_none());
+        assert!(default.get("allowProviderModelFallback").is_none());
     }
 
     #[test]

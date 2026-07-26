@@ -32,6 +32,7 @@ import { UnitPicker } from "./ProblemList";
 import { DIFFICULTY_RANKS, DifficultyRankBadge, Modal } from "./ui";
 
 type Tab = "statement" | "answer" | "explanation";
+type StatementLayout = "single_column" | "two_column";
 
 const TAB_LABELS: Record<Tab, string> = {
   statement: "問題文",
@@ -96,6 +97,21 @@ function clearProblemDraft(problemId: number): void {
   }
 }
 
+function editableProblemSignature(problem: ProblemFull): string {
+  return JSON.stringify({
+    title: problem.title,
+    statement_latex: problem.statement_latex,
+    statement_latex_two_column: problem.statement_latex_two_column,
+    answer_latex: problem.answer_latex,
+    explanation_latex: problem.explanation_latex,
+    difficulty: problem.difficulty,
+    difficulty_rank: problem.difficulty_rank,
+    is_required: problem.is_required,
+    memo: problem.memo,
+    tags: problem.tags,
+  });
+}
+
 /** 問題編集画面（中央エディタ + 右プレビュー） */
 export function ProblemEditor() {
   const {
@@ -114,6 +130,8 @@ export function ProblemEditor() {
 
   const [problem, setProblem] = useState<ProblemFull | null>(null);
   const [tab, setTab] = useState<Tab>("statement");
+  const [statementLayout, setStatementLayout] =
+    useState<StatementLayout>("single_column");
   const [tagInput, setTagInput] = useState("");
   const [versions, setVersions] = useState<VersionSummary[] | null>(null);
   const [versionView, setVersionView] = useState<VersionFull | null>(null);
@@ -151,6 +169,7 @@ export function ProblemEditor() {
   }, [problem != null]);
   const textareaRef = useRef<LatexEditorHandle>(null);
   const problemRef = useRef<ProblemFull | null>(null);
+  const savedProblemRef = useRef<ProblemFull | null>(null);
   problemRef.current = problem;
   const seenProblemsBumpRef = useRef(bumps.problems);
   const pendingProblemsRefreshRef = useRef(false);
@@ -158,6 +177,17 @@ export function ProblemEditor() {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   const savingRef = useRef(false);
+
+  // 未保存表示は「最後に保存・読込した内容」と現在値の差分から決める。
+  // CodeMirrorの再描画や表示形式の切替だけでは未保存にしない。
+  useEffect(() => {
+    if (!problem) return;
+    const saved = savedProblemRef.current;
+    setDirty(
+      !saved ||
+        editableProblemSignature(problem) !== editableProblemSignature(saved),
+    );
+  }, [problem]);
 
   // アンマウント時（別画面・別問題への遷移後）に未保存バッジが残らないようにする
   useEffect(() => {
@@ -174,9 +204,11 @@ export function ProblemEditor() {
         pendingProblemsRefreshRef.current = true;
         return;
       }
+      savedProblemRef.current = p;
       setProblem(p);
       setDirty(false);
       setTab("statement");
+      setStatementLayout("single_column");
       setPdfSrc((prev) => {
         revokeIfBlobUrl(prev);
         return null;
@@ -198,8 +230,11 @@ export function ProblemEditor() {
             // ドラフトが作られた時点のversionを維持する。ここをサーバー最新版へ
             // 差し替えると、復元後の保存が他端末の変更を競合なしで上書きしてしまう。
             const draftVersion = Number.isFinite(draft.problem.version) ? draft.problem.version : -1;
-            setProblem({ ...draft.problem, version: draftVersion });
-            setDirty(true);
+            const restored = { ...draft.problem, version: draftVersion };
+            setProblem(restored);
+            setDirty(
+              editableProblemSignature(restored) !== editableProblemSignature(p),
+            );
           } else {
             clearProblemDraft(p.id);
           }
@@ -220,11 +255,17 @@ export function ProblemEditor() {
     try {
       const result = await compileProblemPreview(
         p.id,
-        p.statement_latex,
+        statementLayout === "two_column"
+          ? p.statement_latex_two_column
+          : p.statement_latex,
         p.answer_latex,
         p.explanation_latex,
       );
-      setLastCompile({ ...result, label: `問題プレビュー「${p.title}」` });
+      setLastCompile({
+        ...result,
+        label: `問題プレビュー「${p.title}」`,
+        download_key: Date.now(),
+      });
       if (result.success && result.pdf_path) {
         const url = await compiledPdfUrl(result.pdf_path, Date.now());
         setPdfSrc((prev) => {
@@ -265,8 +306,7 @@ export function ProblemEditor() {
   }, [dirty]);
 
   const patch = (fields: Partial<ProblemFull>) => {
-    setProblem((p) => (p ? { ...p, ...fields } : p));
-    setDirty(true);
+    setProblem((current) => (current ? { ...current, ...fields } : current));
   };
 
   /** expectedVersion=undefined なら現在のversionで競合チェック、nullなら強制上書き */
@@ -283,6 +323,7 @@ export function ProblemEditor() {
         unit_id: p.unit_id,
         title: p.title,
         statement_latex: p.statement_latex,
+        statement_latex_two_column: p.statement_latex_two_column,
         answer_latex: p.answer_latex,
         explanation_latex: p.explanation_latex,
         difficulty: p.difficulty,
@@ -292,8 +333,14 @@ export function ProblemEditor() {
         tags: p.tags,
         expected_version: forceOverwrite ? null : p.version,
       });
+      const saved = { ...p, version: newVersion };
+      savedProblemRef.current = saved;
+      const latest = problemRef.current;
       setProblem((prev) => (prev ? { ...prev, version: newVersion } : prev));
-      setDirty(false);
+      setDirty(
+        !!latest &&
+          editableProblemSignature(latest) !== editableProblemSignature(saved),
+      );
       clearProblemDraft(p.id);
       showToast("保存しました");
     } catch (e) {
@@ -329,6 +376,7 @@ export function ProblemEditor() {
     setConflict(null);
     if (!server || !mine) return;
     if (choice === "server") {
+      savedProblemRef.current = server;
       setProblem(server);
       setDirty(false);
       clearProblemDraft(mine.id);
@@ -344,6 +392,7 @@ export function ProblemEditor() {
           unit_id: mine.unit_id,
           title: `${mine.title} (競合コピー)`,
           statement_latex: mine.statement_latex,
+          statement_latex_two_column: mine.statement_latex_two_column,
           answer_latex: mine.answer_latex,
           explanation_latex: mine.explanation_latex,
           difficulty: mine.difficulty,
@@ -353,6 +402,7 @@ export function ProblemEditor() {
           tags: mine.tags,
         });
         await refreshTree();
+        savedProblemRef.current = server;
         setProblem(server);
         setDirty(false);
         clearProblemDraft(mine.id);
@@ -377,12 +427,38 @@ export function ProblemEditor() {
 
   if (selectedProblemId == null || problem == null) return null;
 
-  const fieldKey: Record<Tab, "statement_latex" | "answer_latex" | "explanation_latex"> = {
-    statement: "statement_latex",
+  const statementField =
+    statementLayout === "two_column"
+      ? "statement_latex_two_column"
+      : "statement_latex";
+  const fieldKey: Record<
+    Tab,
+    | "statement_latex"
+    | "statement_latex_two_column"
+    | "answer_latex"
+    | "explanation_latex"
+  > = {
+    statement: statementField,
     answer: "answer_latex",
     explanation: "explanation_latex",
   };
   const currentText = problem[fieldKey[tab]];
+
+  const sourceRevisionInput = (targetTab: Tab): string => {
+    const blocks: string[] = [];
+    if (targetTab !== "statement") {
+      blocks.push("【問題文（参照用）】", problem.statement_latex.trim());
+    }
+    if (targetTab === "explanation") {
+      blocks.push("", "【解答（参照用）】", problem.answer_latex.trim());
+    }
+    blocks.push(
+      "",
+      `【修正対象の${TAB_LABELS[targetTab]}LaTeX】`,
+      problem[fieldKey[targetTab]].trim(),
+    );
+    return blocks.join("\n").trim();
+  };
 
   const insertSnippet = (text: string, cursorOffset?: number) => {
     const ta = textareaRef.current;
@@ -410,7 +486,10 @@ export function ProblemEditor() {
     try {
       const session = await createGraphWebSession({
         problemId: p.id,
-        targetField: `problem_${targetTab}`,
+        targetField:
+          targetField === "statement_latex_two_column"
+            ? "problem_statement_two_column"
+            : `problem_${targetTab}`,
         selectionStart: start,
         selectionEnd: end,
       });
@@ -455,7 +534,12 @@ export function ProblemEditor() {
   const onReeditGraph = async (asset: GraphAssetSummary) => {
     const latest = problemRef.current;
     if (!latest || graphBusy || !asset.insertedLatex) return;
-    const fields = ["statement_latex", "answer_latex", "explanation_latex"] as const;
+    const fields = [
+      "statement_latex",
+      "statement_latex_two_column",
+      "answer_latex",
+      "explanation_latex",
+    ] as const;
     const target = fields.find((field) => latest[field].includes(asset.insertedLatex));
     if (!target) {
       showToast("問題内の挿入位置を特定できません。グラフ一覧から複製して挿入してください。", "error");
@@ -463,13 +547,21 @@ export function ProblemEditor() {
     }
     const start = latest[target].indexOf(asset.insertedLatex);
     const end = start + asset.insertedLatex.length;
-    const targetTab = target.replace("_latex", "") as Tab;
+    const targetTab: Tab =
+      target === "statement_latex" || target === "statement_latex_two_column"
+        ? "statement"
+        : target === "answer_latex"
+          ? "answer"
+          : "explanation";
     setGraphBusy(true);
     try {
       const graphId = await ensureGraphFromAsset(asset.assetId);
       const session = await createGraphWebSession({
         problemId: latest.id,
-        targetField: `problem_${targetTab}`,
+        targetField:
+          target === "statement_latex_two_column"
+            ? "problem_statement_two_column"
+            : `problem_${targetTab}`,
         selectionStart: start,
         selectionEnd: end,
       });
@@ -480,6 +572,11 @@ export function ProblemEditor() {
           if (current) {
             patch({ [target]: insertTextAtRange(current[target], result.insertedLatex, start, end) } as Partial<ProblemFull>);
             setTab(targetTab);
+            if (target === "statement_latex_two_column") {
+              setStatementLayout("two_column");
+            } else if (target === "statement_latex") {
+              setStatementLayout("single_column");
+            }
           }
           setGraphAssets(null);
           setGraphBusy(false);
@@ -728,6 +825,37 @@ export function ProblemEditor() {
             </button>
           ))}
         </div>
+        {tab === "statement" && (
+          <div
+            className="flex items-center gap-1 border-b px-2 py-1"
+            style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+          >
+            <span className="mr-1 text-[11px]" style={{ color: "var(--muted)" }}>
+              表示形式
+            </span>
+            <button
+              type="button"
+              onClick={() => setStatementLayout("single_column")}
+              className={`btn btn-sm ${
+                statementLayout === "single_column" ? "btn-outline" : "btn-ghost"
+              }`}
+            >
+              一段組用
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatementLayout("two_column")}
+              className={`btn btn-sm ${
+                statementLayout === "two_column" ? "btn-outline" : "btn-ghost"
+              }`}
+            >
+              二段組用
+            </button>
+            <span className="ml-auto text-[11px]" style={{ color: "var(--muted)" }}>
+              教材出力時に冊子の段組へ合わせて自動選択
+            </span>
+          </div>
+        )}
 
         {/* 挿入補助 */}
         <div
@@ -764,6 +892,67 @@ export function ProblemEditor() {
           >
             <Icon name="sparkle" size={15} /> AI変換
           </button>
+          <button
+            onClick={() => {
+              const targetTab = tab;
+              setAiPreset({
+                sourceType: "text",
+                text: sourceRevisionInput(targetTab),
+                mode: "revise_source",
+                title:
+                  targetTab === "statement"
+                    ? `AIで問題文（${
+                        statementLayout === "two_column" ? "二段組用" : "一段組用"
+                      }）のソースを修正`
+                    : `AIで${TAB_LABELS[targetTab]}のソースを修正`,
+                revisionTarget:
+                  targetTab === "statement" &&
+                  statementLayout === "two_column"
+                    ? "problem_statement_two_column"
+                    : (`problem_${targetTab}` as
+                        | "problem_statement"
+                        | "problem_answer"
+                        | "problem_explanation"),
+                revisionSourceVersion: problem.version,
+                replaceTarget: true,
+                targetTab,
+                solutionLayout:
+                  targetTab === "statement"
+                    ? statementLayout
+                    : undefined,
+              });
+              setShowAi(true);
+            }}
+            disabled={!currentText.trim()}
+            className="btn btn-outline btn-sm"
+            title={`現在の${TAB_LABELS[tab]}ソースと修正指示をAIへ渡し、確認後に全体を置き換えます`}
+          >
+            <Icon name="sparkle" size={15} /> AIで修正
+          </button>
+          {tab === "statement" && (
+            <button
+              onClick={() => {
+                setAiPreset({
+                  sourceType: "text",
+                  text:
+                    problem.statement_latex.trim() ||
+                    problem.statement_latex_two_column.trim(),
+                  mode: "generate_problem_layouts",
+                  title: "問題文の一段組版・二段組版をAI生成",
+                  targetTab: "statement",
+                });
+                setShowAi(true);
+              }}
+              disabled={
+                !problem.statement_latex.trim() &&
+                !problem.statement_latex_two_column.trim()
+              }
+              className="btn btn-outline btn-sm"
+              title="問題の内容を変えず、一段組用と二段組用の問題文を同時に生成します"
+            >
+              <Icon name="sparkle" size={15} /> 両方の表示形式を生成
+            </button>
+          )}
           <button
             onClick={() => {
               setAiPreset({
@@ -972,6 +1161,19 @@ export function ProblemEditor() {
             setAiPreset(null);
           }}
           preset={aiPreset ?? undefined}
+          onUseProblemLayouts={
+            aiPreset?.mode === "generate_problem_layouts"
+              ? (layouts) => {
+                  patch({
+                    statement_latex: layouts.statementLatex,
+                    statement_latex_two_column:
+                      layouts.statementLatexTwoColumn,
+                  });
+                  setTab("statement");
+                  setStatementLayout("single_column");
+                }
+              : undefined
+          }
           insertTargets={(["statement", "answer", "explanation"] as Tab[]).filter(
             (t) => !aiPreset?.targetTab || aiPreset.targetTab === t,
           ).map((t) => ({
@@ -983,6 +1185,11 @@ export function ProblemEditor() {
               const latest = problemRef.current;
               if (!latest) return;
               const key = fieldKey[t];
+              if (aiPreset?.replaceTarget) {
+                patch({ [key]: latexText } as Partial<ProblemFull>);
+                setTab(t);
+                return;
+              }
               if (t === tab && textareaRef.current) {
                 // 現在表示中のタブならカーソル位置へ挿入
                 const ta = textareaRef.current;
@@ -1027,7 +1234,16 @@ export function ProblemEditor() {
         <ConflictDialog
           title={`問題「${problem.title}」`}
           fields={[
-            { label: "問題文", mine: problem.statement_latex, server: conflict.statement_latex },
+            {
+              label: "問題文（一段組用）",
+              mine: problem.statement_latex,
+              server: conflict.statement_latex,
+            },
+            {
+              label: "問題文（二段組用）",
+              mine: problem.statement_latex_two_column,
+              server: conflict.statement_latex_two_column,
+            },
             { label: "解答", mine: problem.answer_latex, server: conflict.answer_latex },
             { label: "解説", mine: problem.explanation_latex, server: conflict.explanation_latex },
             { label: "タイトル", mine: problem.title, server: conflict.title },
@@ -1095,12 +1311,19 @@ export function ProblemEditor() {
                     </button>
                   </div>
                   <div className="max-h-[55vh] space-y-2 overflow-y-auto text-xs">
-                    <p className="section-label">問題文</p>
+                    <p className="section-label">問題文（一段組用）</p>
                     <pre
                       className="rounded p-2 font-mono whitespace-pre-wrap"
                       style={{ background: "var(--panel-2)" }}
                     >
                       {versionView.statement_latex}
+                    </pre>
+                    <p className="section-label">問題文（二段組用）</p>
+                    <pre
+                      className="rounded p-2 font-mono whitespace-pre-wrap"
+                      style={{ background: "var(--panel-2)" }}
+                    >
+                      {versionView.statement_latex_two_column}
                     </pre>
                     <p className="section-label">解答</p>
                     <pre

@@ -56,6 +56,11 @@ body {
   }
 }
 
+.standalone-save-hint {
+  display: none;
+  color: var(--muted);
+}
+
 /* iOSホーム画面版ではdvhがブラウザ用ツールバー分だけ短く返る場合がある。 */
 @media (display-mode: standalone) {
   #root {
@@ -63,6 +68,9 @@ body {
        上余白を足し戻し、固定ナビが実画面の下端まで届くようにする。 */
     height: calc(100vh + env(safe-area-inset-top, 0px));
     min-height: calc(100vh + env(safe-area-inset-top, 0px));
+  }
+  .standalone-save-hint {
+    display: block;
   }
 }
 
@@ -80,6 +88,12 @@ body {
 
 .safe-area-toast {
   bottom: calc(2.5rem + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+/* AI進捗はiPhoneのホームインジケータより上へ置く。 */
+.ai-progress-panel {
+  right: max(1rem, env(safe-area-inset-right, 0px));
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
 }
 
 .problem-list-mobile {
@@ -105,7 +119,9 @@ body {
   padding: 3px 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: rgba(16, 21, 31, 0.92);
+  background: rgba(16, 21, 31, 0.75);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   color: var(--muted);
   font-size: 11px;
 }
@@ -150,7 +166,11 @@ body {
   font-family: "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
-  font-size: 13.5px;
+  /* remベースにしてOS/ブラウザの文字サイズ設定に追従させる（13.5px相当） */
+  font-size: 0.84375rem;
+  /* チェックボックス等をテーマ色に。タップ時の灰色ハイライトは自前の:activeで代替 */
+  accent-color: var(--accent);
+  -webkit-tap-highlight-color: transparent;
 }
 
 ::selection {
@@ -196,10 +216,15 @@ body {
     background 0.12s ease,
     border-color 0.12s ease,
     box-shadow 0.12s ease,
-    color 0.12s ease;
+    color 0.12s ease,
+    transform 0.1s ease-out;
   user-select: none;
   background: transparent;
   color: var(--text);
+}
+/* 押した瞬間（pointer-down）に反応する。リリース待ちにしない */
+.btn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .btn:disabled {
   opacity: 0.45;
@@ -321,10 +346,14 @@ textarea::placeholder {
   color: var(--muted);
   border-bottom: 2px solid transparent;
   cursor: pointer;
-  transition: color 0.12s ease;
+  transition: color 0.12s ease, transform 0.1s ease-out;
 }
 .tab:hover {
   color: var(--text);
+}
+.tab:active {
+  color: var(--text);
+  transform: scale(0.97);
 }
 .tab-active {
   color: var(--accent);
@@ -439,10 +468,51 @@ textarea::placeholder {
   background: var(--panel-3);
 }
 
+.pdf-result-primary-actions {
+  border-color: var(--border);
+  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
 /* ---- タイトルバー ---- */
 .brand-mark {
   color: var(--accent);
   text-shadow: none;
+}
+
+/* ---- クローム（ヘッダー・ナビ・フッター）: 半透明の浮遊レイヤー ---- */
+.app-header,
+.app-nav,
+.app-footer {
+  background: rgba(15, 15, 20, 0.8);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app-header,
+  .app-footer {
+    background: var(--panel);
+  }
+  .app-nav {
+    background: var(--panel) !important;
+  }
+}
+
+.app-nav-btn {
+  color: var(--muted);
+  border: 1px solid transparent;
+  transition: color 0.12s ease, background 0.12s ease, transform 0.1s ease-out;
+}
+.app-nav-btn:active {
+  transform: scale(0.93);
+}
+.app-nav-btn-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: rgba(157, 108, 242, 0.42);
+  font-weight: 700;
 }
 
 /* ---- アニメーション（控えめ） ---- */
@@ -458,6 +528,66 @@ textarea::placeholder {
 }
 .fade-in {
   animation: fadeIn 0.14s ease;
+}
+
+/* ---- モーダル・トースト: 素材として到着する（blur+scaleを同時に動かす） ---- */
+@keyframes modalPanelIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(10px);
+    filter: blur(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+@keyframes modalPanelOut {
+  to {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+    filter: blur(4px);
+  }
+}
+.modal-panel {
+  animation: modalPanelIn 0.22s cubic-bezier(0.3, 1.1, 0.4, 1);
+}
+.modal-panel-out {
+  animation: modalPanelOut 0.16s ease forwards;
+}
+
+@keyframes scrimIn {
+  from {
+    opacity: 0;
+    -webkit-backdrop-filter: blur(0px);
+    backdrop-filter: blur(0px);
+  }
+}
+.modal-scrim {
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: scrimIn 0.2s ease;
+  transition: opacity 0.16s ease;
+}
+.modal-scrim-out {
+  opacity: 0;
+}
+
+/* トーストは画面下端から現れる（出た場所へ戻る前提の経路） */
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+.toast-in {
+  animation: toastIn 0.28s cubic-bezier(0.34, 1.3, 0.5, 1);
 }
 
 /* ==== レスポンシブ / タッチ対応（Web版・iPad・スマートフォン） ==== */
@@ -479,6 +609,27 @@ textarea::placeholder {
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
+  }
+  /* チェックボックスは指で確実に押せる大きさに */
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 1.15rem;
+    height: 1.15rem;
+    flex-shrink: 0;
+  }
+  /* ツリーの行操作ボタンはhoverが無いタッチでは常時表示する */
+  .tree-actions {
+    display: flex !important;
+    gap: 2px;
+  }
+  .tree-actions button {
+    padding: 0.3rem 0.5rem;
+    font-size: 12.5px;
+  }
+  /* ツリー行そのものも指向けに高く */
+  .tree-scroll .group {
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
   }
 }
 
@@ -514,7 +665,7 @@ textarea::placeholder {
     border-top: 1px solid var(--border);
     padding: 2px 0 min(env(safe-area-inset-bottom, 0px), 34px) !important;
     scrollbar-width: none;
-    background: var(--bg) !important;
+    background: rgba(8, 8, 11, 0.85) !important;
     transform: translateZ(0);
     will-change: transform;
     touch-action: manipulation;
@@ -581,14 +732,80 @@ textarea::placeholder {
     max-height: 42vh;
     border-top: 1px solid var(--border);
   }
-  .parts-split {
-    flex-direction: column !important;
+  /* 部品画面（モバイルは一覧⇄編集の1ペイン切替。PartsView側でnarrow判定） */
+  .parts-list-scroll {
+    padding-bottom: 116px !important;
+    scroll-padding-bottom: 116px;
+    overscroll-behavior-y: contain;
   }
-  .parts-list-pane {
-    width: 100% !important;
-    max-height: 38vh;
+  .has-compile-log .parts-list-scroll {
+    padding-bottom: 150px !important;
+  }
+  .parts-editor-scroll {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 116px;
+  }
+  .has-compile-log .parts-editor-scroll {
+    padding-bottom: 150px;
+  }
+  .parts-editor-scroll > section {
+    flex: 0 0 auto !important;
     border-right: none !important;
-    border-bottom: 1px solid var(--border);
+  }
+  .parts-editor-code {
+    min-height: 280px;
+  }
+  .parts-editor-scroll .editor-preview-pane {
+    max-height: none;
+    min-height: 320px;
+    flex: 0 0 auto;
+  }
+
+  /* 問題一覧・単元ツリーの下端が固定ナビに隠れないようスクロール余白を確保 */
+  .problem-list-scroll,
+  .tree-scroll {
+    padding-bottom: 116px !important;
+    scroll-padding-bottom: 116px;
+    overscroll-behavior-y: contain;
+  }
+  .has-compile-log .problem-list-scroll,
+  .has-compile-log .tree-scroll {
+    padding-bottom: 150px !important;
+  }
+
+  /* トーストは固定ナビ・ログバーの上に出す */
+  .safe-area-toast {
+    bottom: calc(82px + min(env(safe-area-inset-bottom, 0px), 34px)) !important;
+  }
+  .has-compile-log .safe-area-toast {
+    bottom: calc(114px + min(env(safe-area-inset-bottom, 0px), 34px)) !important;
+  }
+
+  /* 固定ボトムナビ（66px）とコンパイルログの上へ進捗パネルを逃がす。 */
+  .ai-progress-panel {
+    right: max(8px, env(safe-area-inset-right, 0px));
+    bottom: calc(82px + min(env(safe-area-inset-bottom, 0px), 34px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    width: auto !important;
+    max-width: 22rem;
+    margin-left: auto;
+  }
+  .has-compile-log .ai-progress-panel {
+    bottom: calc(114px + min(env(safe-area-inset-bottom, 0px), 34px));
+  }
+
+  /* ボトムナビ: 枠付きピルではなく色＋光で選択を示す（iOSタブバー風） */
+  .app-nav-btn {
+    border: none;
+    font-size: 10px;
+    gap: 1px;
+  }
+  .app-nav-btn-active {
+    background: transparent;
+    border: none;
+    text-shadow: 0 0 14px var(--accent-glow);
   }
   .template-split {
     flex-direction: column !important;
@@ -646,7 +863,7 @@ textarea::placeholder {
 
 @media (max-width: 600px) {
   body {
-    font-size: 14px;
+    font-size: 0.875rem;
   }
   .app-header > span:first-child {
     font-size: 12.5px;
@@ -655,6 +872,39 @@ textarea::placeholder {
   .app-header-actions .btn {
     padding-right: 0.4rem;
     padding-left: 0.4rem;
+  }
+  .app-footer-summary {
+    min-height: 42px;
+    height: auto !important;
+  }
+  .app-footer-summary > .section-label,
+  .app-footer-summary > .badge,
+  .app-footer-summary > .truncate {
+    display: none;
+  }
+  .app-footer-summary > span:last-child {
+    margin-left: auto;
+  }
+  .app-footer-download {
+    min-height: 34px;
+    white-space: nowrap;
+  }
+  .pdf-result-primary-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .pdf-result-primary-actions .btn,
+  .pdf-download-action {
+    min-height: 44px;
+    width: 100%;
+    justify-content: center;
+  }
+  .pdf-preview-toolbar {
+    flex-wrap: wrap;
+  }
+  .pdf-preview-toolbar .pdf-download-action {
+    margin-right: 0 !important;
+    flex-basis: 100%;
   }
   .input,
   .select,
@@ -675,6 +925,26 @@ textarea::placeholder {
   .problem-editor {
     overflow-x: hidden;
     overflow-y: auto;
+    padding-bottom: 116px;
+  }
+  .has-compile-log .problem-editor {
+    padding-bottom: 150px;
+  }
+  /* 部品エディタのメタ情報（種類/カテゴリ/出力先）は縦積みに */
+  .parts-meta-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* 指向けにやや大きい角丸（iOS風の柔らかさ） */
+  .card {
+    border-radius: 10px;
+  }
+  .btn {
+    border-radius: 8px;
+  }
+  .input,
+  .select,
+  textarea.input-area {
+    border-radius: 8px;
   }
   .problem-editor > :first-child {
     min-height: 620px;
@@ -778,4 +1048,71 @@ textarea::placeholder {
 /* PDFプレビューのiframeはブラウザ標準のピンチズームに任せる */
 iframe[title*="PDF"] {
   touch-action: auto;
+}
+
+/* ==== アクセシビリティ設定への追従 ==== */
+
+/* 動きを減らす: スライド/スケール/ブラーは使わず、短いフェードだけ残す */
+@keyframes fadeOnlyIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes fadeOnlyOut {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .modal-panel,
+  .toast-in {
+    animation: fadeOnlyIn 0.15s ease;
+  }
+  .modal-panel-out {
+    animation: fadeOnlyOut 0.12s ease forwards;
+  }
+  .modal-scrim {
+    animation: fadeOnlyIn 0.15s ease;
+  }
+  .btn:active:not(:disabled),
+  .app-nav > button:active,
+  .tab:active {
+    transform: none;
+  }
+}
+
+/* 透明度を減らす: 半透明レイヤーを不透明に */
+@media (prefers-reduced-transparency: reduce) {
+  .app-header,
+  .app-footer,
+  .pdf-canvas-status,
+  .modal-scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .app-header,
+  .app-footer {
+    background: var(--panel);
+  }
+  .app-nav {
+    background: var(--panel) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  .pdf-canvas-status {
+    background: #10151f;
+  }
+  .modal-scrim {
+    background: rgba(0, 0, 0, 0.72);
+  }
+}
+
+/* コントラストを上げる: 境界を明確に */
+@media (prefers-contrast: more) {
+  :root {
+    --border: #4a4658;
+    --border-strong: #6d5a86;
+    --muted: #c0bbc9;
+  }
 }

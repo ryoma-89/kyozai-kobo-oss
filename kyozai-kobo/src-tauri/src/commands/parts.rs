@@ -37,7 +37,14 @@ pub fn normalize_output_target(target: &str) -> String {
     }
 }
 
-fn plain_preview(source: &str) -> String {
+pub fn normalize_layout_mode(layout_mode: &str) -> String {
+    match layout_mode.trim() {
+        "two_column" => "two_column".to_string(),
+        _ => "single_column".to_string(),
+    }
+}
+
+pub(crate) fn plain_preview(source: &str) -> String {
     source
         .lines()
         .map(str::trim)
@@ -87,16 +94,16 @@ fn set_tags(conn: &Connection, part_id: i64, tags: &[String]) -> rusqlite::Resul
     Ok(())
 }
 
-fn save_version(conn: &Connection, part_id: i64) -> rusqlite::Result<()> {
+pub(crate) fn save_version(conn: &Connection, part_id: i64) -> rusqlite::Result<()> {
     let tags = tags_of(conn, part_id).unwrap_or_default();
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         "INSERT INTO part_versions (
-            part_id, title, part_type, category, tags_json, latex_source, plain_text_preview,
-            description, difficulty_rank, is_required, output_target, version, saved_at
+            part_id, unit_id, title, part_type, category, tags_json, latex_source, plain_text_preview,
+            description, difficulty_rank, is_required, output_target, layout_mode, version, saved_at
          )
-         SELECT id, title, part_type, category, ?2, latex_source, plain_text_preview,
-                description, difficulty_rank, is_required, output_target, version, ?3
+         SELECT id, unit_id, title, part_type, category, ?2, latex_source, plain_text_preview,
+                description, difficulty_rank, is_required, output_target, layout_mode, version, ?3
          FROM parts WHERE id=?1",
         params![part_id, tags_json, now_str()],
     )?;
@@ -111,9 +118,14 @@ fn save_version(conn: &Connection, part_id: i64) -> rusqlite::Result<()> {
 pub fn search_parts(state: &AppState, query: PartSearchQuery) -> Result<Vec<PartSummary>, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut sql = String::from(
-        "SELECT DISTINCT p.id, p.title, p.part_type, p.category, p.plain_text_preview,
-                p.difficulty_rank, p.is_required, p.output_target, p.usage_count, p.updated_at, p.version
+        "SELECT DISTINCT p.id, p.unit_id, COALESCE(u.name,''), f.id, COALESCE(f.name,''),
+                s.id, COALESCE(s.name,''), p.title, p.part_type, p.category, p.plain_text_preview,
+                p.difficulty_rank, p.is_required, p.output_target, p.layout_mode,
+                p.usage_count, p.updated_at, p.version
          FROM parts p
+         LEFT JOIN units u ON u.id=p.unit_id
+         LEFT JOIN fields f ON f.id=u.field_id
+         LEFT JOIN subjects s ON s.id=f.subject_id
          WHERE 1=1",
     );
     let mut args: Vec<Value> = vec![];
@@ -123,10 +135,22 @@ pub fn search_parts(state: &AppState, query: PartSearchQuery) -> Result<Vec<Part
         let idx = args.len();
         sql.push_str(&format!(
             " AND (p.title LIKE ?{0} OR p.latex_source LIKE ?{0} OR p.description LIKE ?{0}
-               OR p.category LIKE ?{0}
+               OR p.category LIKE ?{0} OR u.name LIKE ?{0} OR f.name LIKE ?{0} OR s.name LIKE ?{0}
                OR EXISTS (SELECT 1 FROM part_tags pt WHERE pt.part_id=p.id AND pt.tag LIKE ?{0}))",
             idx
         ));
+    }
+    if let Some(subject_id) = query.subject_id {
+        args.push(Value::Integer(subject_id));
+        sql.push_str(&format!(" AND s.id = ?{}", args.len()));
+    }
+    if let Some(field_id) = query.field_id {
+        args.push(Value::Integer(field_id));
+        sql.push_str(&format!(" AND f.id = ?{}", args.len()));
+    }
+    if let Some(unit_id) = query.unit_id {
+        args.push(Value::Integer(unit_id));
+        sql.push_str(&format!(" AND p.unit_id = ?{}", args.len()));
     }
     if let Some(part_type) = query.part_type.filter(|v| !v.is_empty()) {
         args.push(Value::Text(part_type));
@@ -177,22 +201,30 @@ pub fn search_parts(state: &AppState, query: PartSearchQuery) -> Result<Vec<Part
     }
     sql.push_str(" ORDER BY p.updated_at DESC LIMIT 500");
 
-    let rows: Vec<(i64, String, String, String, String, Option<String>, bool, String, i64, String, i64)> = {
+    let mut rows: Vec<PartSummary> = {
         let mut stmt = conn.prepare(&sql).map_err(err_str)?;
         let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get::<_, i64>(6)? != 0,
-                r.get(7)?,
-                r.get(8)?,
-                r.get(9)?,
-                r.get(10)?,
-            ))
+            Ok(PartSummary {
+                id: r.get(0)?,
+                unit_id: r.get(1)?,
+                unit_name: r.get(2)?,
+                field_id: r.get(3)?,
+                field_name: r.get(4)?,
+                subject_id: r.get(5)?,
+                subject_name: r.get(6)?,
+                title: r.get(7)?,
+                part_type: r.get(8)?,
+                category: r.get(9)?,
+                tags: vec![],
+                plain_text_preview: r.get(10)?,
+                difficulty_rank: r.get(11)?,
+                is_required: r.get::<_, i64>(12)? != 0,
+                output_target: r.get(13)?,
+                layout_mode: r.get(14)?,
+                usage_count: r.get(15)?,
+                updated_at: r.get(16)?,
+                version: r.get(17)?,
+            })
         })
         .map_err(err_str)?
         .collect::<Result<_, _>>()
@@ -200,24 +232,10 @@ pub fn search_parts(state: &AppState, query: PartSearchQuery) -> Result<Vec<Part
         rows
     };
 
-    let mut out = vec![];
-    for (id, title, part_type, category, plain_text_preview, difficulty_rank, is_required, output_target, usage_count, updated_at, version) in rows {
-        out.push(PartSummary {
-            id,
-            title,
-            part_type,
-            category,
-            tags: tags_of(&conn, id).map_err(err_str)?,
-            plain_text_preview,
-            difficulty_rank,
-            is_required,
-            output_target,
-            usage_count,
-            updated_at,
-            version,
-        });
+    for part in &mut rows {
+        part.tags = tags_of(&conn, part.id).map_err(err_str)?;
     }
-    Ok(out)
+    Ok(rows)
 }
 
 pub fn list_all_part_tags(state: &AppState) -> Result<Vec<String>, String> {
@@ -265,27 +283,41 @@ pub fn get_part(state: &AppState, id: i64) -> Result<PartFull, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut part = conn
         .query_row(
-            "SELECT id, title, part_type, category, latex_source, plain_text_preview, description,
-                    difficulty_rank, is_required, output_target, usage_count, created_at, updated_at, version
-             FROM parts WHERE id=?1",
+            "SELECT p.id, p.unit_id, COALESCE(u.name,''), f.id, COALESCE(f.name,''),
+                    s.id, COALESCE(s.name,''), p.title, p.part_type, p.category,
+                    p.latex_source, p.plain_text_preview, p.description, p.difficulty_rank,
+                    p.is_required, p.output_target, p.layout_mode, p.usage_count,
+                    p.created_at, p.updated_at, p.version
+             FROM parts p
+             LEFT JOIN units u ON u.id=p.unit_id
+             LEFT JOIN fields f ON f.id=u.field_id
+             LEFT JOIN subjects s ON s.id=f.subject_id
+             WHERE p.id=?1",
             params![id],
             |r| {
                 Ok(PartFull {
                     id: r.get(0)?,
-                    title: r.get(1)?,
-                    part_type: r.get(2)?,
-                    category: r.get(3)?,
+                    unit_id: r.get(1)?,
+                    unit_name: r.get(2)?,
+                    field_id: r.get(3)?,
+                    field_name: r.get(4)?,
+                    subject_id: r.get(5)?,
+                    subject_name: r.get(6)?,
+                    title: r.get(7)?,
+                    part_type: r.get(8)?,
+                    category: r.get(9)?,
                     tags: vec![],
-                    latex_source: r.get(4)?,
-                    plain_text_preview: r.get(5)?,
-                    description: r.get(6)?,
-                    difficulty_rank: r.get(7)?,
-                    is_required: r.get::<_, i64>(8)? != 0,
-                    output_target: r.get(9)?,
-                    usage_count: r.get(10)?,
-                    created_at: r.get(11)?,
-                    updated_at: r.get(12)?,
-                    version: r.get(13)?,
+                    latex_source: r.get(10)?,
+                    plain_text_preview: r.get(11)?,
+                    description: r.get(12)?,
+                    difficulty_rank: r.get(13)?,
+                    is_required: r.get::<_, i64>(14)? != 0,
+                    output_target: r.get(15)?,
+                    layout_mode: r.get(16)?,
+                    usage_count: r.get(17)?,
+                    created_at: r.get(18)?,
+                    updated_at: r.get(19)?,
+                    version: r.get(20)?,
                     attachments: vec![],
                 })
             },
@@ -299,6 +331,18 @@ pub fn get_part(state: &AppState, id: i64) -> Result<PartFull, String> {
 /// 部品を更新して新しいversionを返す。競合時は "CONFLICT:<サーバー側version>"
 pub fn update_part(state: &AppState, payload: PartUpdate) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
+    if let Some(unit_id) = payload.unit_id {
+        let unit_exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM units WHERE id=?1)",
+                params![unit_id],
+                |r| r.get(0),
+            )
+            .map_err(err_str)?;
+        if unit_exists == 0 {
+            return Err("指定された単元が見つかりません".to_string());
+        }
+    }
     let current: i64 = conn
         .query_row("SELECT version FROM parts WHERE id=?1", params![payload.id], |r| r.get(0))
         .map_err(err_str)?;
@@ -310,14 +354,16 @@ pub fn update_part(state: &AppState, payload: PartUpdate) -> Result<i64, String>
     save_version(&conn, payload.id).map_err(err_str)?;
     let part_type = normalize_part_type(&payload.part_type);
     let output_target = normalize_output_target(&payload.output_target);
+    let layout_mode = normalize_layout_mode(&payload.layout_mode);
     let preview = plain_preview(&payload.latex_source);
     let rank = super::problems::normalize_rank(payload.difficulty_rank);
     conn.execute(
-        "UPDATE parts SET title=?1, part_type=?2, category=?3, latex_source=?4,
-                plain_text_preview=?5, description=?6, difficulty_rank=?7, is_required=?8,
-                output_target=?9, updated_at=?10, version=version+1
-         WHERE id=?11",
+        "UPDATE parts SET unit_id=?1, title=?2, part_type=?3, category=?4, latex_source=?5,
+                plain_text_preview=?6, description=?7, difficulty_rank=?8, is_required=?9,
+                output_target=?10, layout_mode=?11, updated_at=?12, version=version+1
+         WHERE id=?13",
         params![
+            payload.unit_id,
             payload.title.trim(),
             part_type,
             payload.category.trim(),
@@ -327,6 +373,7 @@ pub fn update_part(state: &AppState, payload: PartUpdate) -> Result<i64, String>
             rank,
             payload.is_required as i64,
             output_target,
+            layout_mode,
             now_str(),
             payload.id
         ],
@@ -340,10 +387,10 @@ pub fn duplicate_part(state: &AppState, id: i64) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let now = now_str();
     conn.execute(
-        "INSERT INTO parts (title, part_type, category, latex_source, plain_text_preview, description,
-                difficulty_rank, is_required, output_target, usage_count, created_at, updated_at, version)
-         SELECT title || ' (コピー)', part_type, category, latex_source, plain_text_preview, description,
-                difficulty_rank, is_required, output_target, 0, ?2, ?2, 1
+        "INSERT INTO parts (unit_id, title, part_type, category, latex_source, plain_text_preview, description,
+                difficulty_rank, is_required, output_target, layout_mode, usage_count, created_at, updated_at, version)
+         SELECT unit_id, title || ' (コピー)', part_type, category, latex_source, plain_text_preview, description,
+                difficulty_rank, is_required, output_target, layout_mode, 0, ?2, ?2, 1
          FROM parts WHERE id=?1",
         params![id, now],
     )

@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { aiCancelJob, aiDeleteJob, aiGetJob, aiListJobs, aiRetryJob } from "../api";
+import {
+  aiApplySourceRevision,
+  aiCancelJob,
+  aiDeleteJob,
+  aiGetJob,
+  aiInsertIntoTargetProblem,
+  aiListJobs,
+  aiRetryJob,
+} from "../api";
 import { useApp } from "../store";
 import type { AiJob, AiJobStatus } from "../types";
 import { AiConvertDialog, AiJobReviewModal } from "./AiConvertDialog";
@@ -25,6 +33,11 @@ const RUNNING: AiJobStatus[] = [
   "compiling",
 ];
 
+function jobModeLabel(job: AiJob): string | null {
+  if (job.conversionMode === "project_review") return "教材全体のAI確認";
+  return null;
+}
+
 function StatusBadge({ status }: { status: AiJobStatus }) {
   const style =
     status === "completed"
@@ -41,12 +54,47 @@ function StatusBadge({ status }: { status: AiJobStatus }) {
   );
 }
 
+function directInsertLabel(job: AiJob): "解答" | "解説" | null {
+  if (
+    job.conversionMode === "revise_source"
+    || job.status !== "completed"
+    || job.compileStatus !== "ok"
+    || job.targetEntityType !== "problem"
+    || job.targetEntityId === null
+  ) {
+    return null;
+  }
+  if (job.targetField === "answer_latex") return "解答";
+  if (job.targetField === "explanation_latex") return "解説";
+  return null;
+}
+
+function sourceRevisionLabel(job: AiJob): "問題文" | "解答" | "解説" | "部品" | null {
+  if (
+    job.conversionMode !== "revise_source"
+    || job.status !== "completed"
+    || job.compileStatus !== "ok"
+    || job.targetEntityId === null
+    || typeof job.options.revisionSourceVersion !== "number"
+    || job.options.revisionApplied === true
+  ) {
+    return null;
+  }
+  if (job.targetEntityType === "part" && job.targetField === "latex_source") return "部品";
+  if (job.targetEntityType !== "problem") return null;
+  if (job.targetField === "statement_latex") return "問題文";
+  if (job.targetField === "answer_latex") return "解答";
+  if (job.targetField === "explanation_latex") return "解説";
+  return null;
+}
+
 /** AI変換のジョブ履歴・新規変換 */
 export function AiJobsView() {
   const { showToast, confirm, bumps } = useApp();
   const [jobs, setJobs] = useState<AiJob[]>([]);
   const [openNew, setOpenNew] = useState(false);
   const [reviewJob, setReviewJob] = useState<AiJob | null>(null);
+  const [insertingJobId, setInsertingJobId] = useState<number | null>(null);
 
   const load = async () => {
     try {
@@ -104,6 +152,51 @@ export function AiJobsView() {
     }
   };
 
+  const onDirectInsert = async (job: AiJob) => {
+    const label = directInsertLabel(job);
+    if (!label || job.targetEntityId === null) return;
+    const hasReviewItems = job.warnings.length > 0 || job.uncertainFragments.length > 0;
+    const accepted = await confirm(
+      `問題 #${job.targetEntityId} の${label}へ生成結果を挿入しますか？\n`
+      + "既存の内容がある場合は末尾へ追記します。"
+      + (hasReviewItems ? "\n警告・要確認箇所があるため、内容を確認してから実行してください。" : ""),
+    );
+    if (!accepted) return;
+    setInsertingJobId(job.id);
+    try {
+      await aiInsertIntoTargetProblem(job.id, true);
+      showToast(`問題 #${job.targetEntityId} の${label}へ挿入しました`);
+      await load();
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setInsertingJobId(null);
+    }
+  };
+
+  const onApplyRevision = async (job: AiJob) => {
+    const label = sourceRevisionLabel(job);
+    if (!label || job.targetEntityId === null) return;
+    const targetName = job.targetEntityType === "part" ? "部品" : `問題 #${job.targetEntityId}`;
+    const hasReviewItems = job.warnings.length > 0 || job.uncertainFragments.length > 0;
+    const accepted = await confirm(
+      `${targetName}の${label}をAIの修正結果で置き換えますか？\n`
+      + "AI修正の開始後に対象が更新されている場合は、安全のため適用を中止します。"
+      + (hasReviewItems ? "\n警告・要確認箇所があるため、内容を確認してから実行してください。" : ""),
+    );
+    if (!accepted) return;
+    setInsertingJobId(job.id);
+    try {
+      await aiApplySourceRevision(job.id, true);
+      showToast(`${targetName}の${label}をAIの修正結果で置き換えました`);
+      await load();
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setInsertingJobId(null);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-2" style={{ borderColor: "var(--border)" }}>
@@ -137,6 +230,21 @@ export function AiJobsView() {
                 <span className="badge badge-muted">
                   {job.sourceType === "image" ? `画像${job.inputAssetPaths.length}枚` : "テキスト"}
                 </span>
+                {jobModeLabel(job) && (
+                  <span className="badge badge-muted">{jobModeLabel(job)}</span>
+                )}
+                {directInsertLabel(job) && (
+                  <span className="badge badge-muted">
+                    問題 #{job.targetEntityId}・{directInsertLabel(job)}
+                  </span>
+                )}
+                {sourceRevisionLabel(job) && (
+                  <span className="badge badge-muted">
+                    {job.targetEntityType === "part"
+                      ? `部品 #${job.targetEntityId}・ソース修正`
+                      : `問題 #${job.targetEntityId}・${sourceRevisionLabel(job)}修正`}
+                  </span>
+                )}
                 <span className="min-w-0 flex-1 truncate text-xs">
                   {job.status === "failed"
                     ? job.errorMessage
@@ -154,11 +262,36 @@ export function AiJobsView() {
                 </span>
                 <span className="flex gap-1">
                   {RUNNING.includes(job.status) ? (
-                    <button onClick={() => onCancel(job)} className="btn btn-ghost btn-sm">
-                      キャンセル
-                    </button>
+                    <>
+                      <button onClick={() => onOpen(job)} className="btn btn-outline btn-sm">
+                        進捗
+                      </button>
+                      <button onClick={() => onCancel(job)} className="btn btn-ghost btn-sm">
+                        キャンセル
+                      </button>
+                    </>
                   ) : (
                     <>
+                      {sourceRevisionLabel(job) && (
+                        <button
+                          onClick={() => void onApplyRevision(job)}
+                          disabled={insertingJobId !== null}
+                          className="btn btn-solid btn-sm"
+                        >
+                          {insertingJobId === job.id
+                            ? "適用中..."
+                            : `${sourceRevisionLabel(job)}を置き換え`}
+                        </button>
+                      )}
+                      {directInsertLabel(job) && (
+                        <button
+                          onClick={() => void onDirectInsert(job)}
+                          disabled={insertingJobId !== null}
+                          className="btn btn-solid btn-sm"
+                        >
+                          {insertingJobId === job.id ? "挿入中..." : `${directInsertLabel(job)}へ挿入`}
+                        </button>
+                      )}
                       <button onClick={() => onOpen(job)} className="btn btn-outline btn-sm">
                         開く
                       </button>

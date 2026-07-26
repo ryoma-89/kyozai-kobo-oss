@@ -146,7 +146,7 @@ export function TreePanel() {
 
   const actBtn = "rounded px-1 text-[11px] transition-colors";
   const rowActions = (kind: NodeKind, id: number, name: string, addChild?: { kind: NodeKind; label: string }) => (
-    <span className="ml-auto hidden shrink-0 gap-0.5 group-hover:flex">
+    <span className="tree-actions ml-auto hidden shrink-0 gap-0.5 group-hover:flex">
       {addChild && (
         <button
           title={`${addChild.label}を追加`}
@@ -244,7 +244,7 @@ export function TreePanel() {
           </button>
         </span>
       </div>
-      <div className="flex-1 overflow-y-auto px-2 py-1">
+      <div className="tree-scroll flex-1 overflow-y-auto px-2 py-1">
         {tree.length === 0 && (
           <p className="px-2 py-4 text-xs" style={{ color: "var(--muted)" }}>
             科目がありません。「＋科目」から作成するか、設定画面からサンプルデータを追加できます。

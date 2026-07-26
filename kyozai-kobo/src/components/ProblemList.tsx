@@ -236,7 +236,7 @@ export function ProblemList() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="problem-list-scroll flex-1 overflow-y-auto">
         {loading ? (
           <p className="p-4 text-sm" style={{ color: "var(--muted)" }}>
             読み込み中...

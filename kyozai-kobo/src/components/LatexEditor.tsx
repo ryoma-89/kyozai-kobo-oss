@@ -10,7 +10,13 @@ import {
 } from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { searchKeymap } from "@codemirror/search";
-import { EditorSelection, EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
+import {
+  Annotation,
+  EditorSelection,
+  EditorState,
+  RangeSetBuilder,
+  type Extension,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -73,6 +79,13 @@ interface MarkCandidate {
   priority: number;
   deco: Decoration;
 }
+
+/**
+ * React側のvalueをCodeMirrorへ反映するための変更であることを示す。
+ * この変更を通常入力としてonChangeへ戻すと、表示形式の切替や保存後の再読込だけで
+ * 編集済み扱いになるため、ユーザー入力と明確に区別する。
+ */
+const externalValueSync = Annotation.define<boolean>();
 
 function isEscaped(text: string, index: number): boolean {
   let count = 0;
@@ -323,7 +336,10 @@ export const LatexEditor = forwardRef<LatexEditorHandle, Props>(function LatexEd
       EditorView.lineWrapping,
       cmPlaceholder(placeholder ?? ""),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
+        const isExternalValueSync = update.transactions.some(
+          (transaction) => transaction.annotation(externalValueSync) === true,
+        );
+        if (update.docChanged && !isExternalValueSync) {
           onChangeRef.current(update.state.doc.toString());
         }
       }),
@@ -362,6 +378,7 @@ export const LatexEditor = forwardRef<LatexEditorHandle, Props>(function LatexEd
     view.dispatch({
       changes: { from: 0, to: current.length, insert: value },
       selection,
+      annotations: externalValueSync.of(true),
     });
   }, [value]);
 

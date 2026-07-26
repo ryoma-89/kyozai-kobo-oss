@@ -80,6 +80,17 @@ export function buildFileUrl(absPath: string, cacheBust?: string | number): stri
 }
 
 /**
+ * コンパイル成果物を端末へ保存するURL。
+ * WebではContent-Disposition: attachmentを返す専用指定を付けるため、
+ * iPhone等でもPDFプレビューではなくブラウザのダウンロードとして扱われる。
+ */
+export function buildFileDownloadUrl(absPath: string, cacheBust?: string | number): string {
+  if (isTauri) return buildFileUrl(absPath, cacheBust);
+  const url = `${API_BASE}/api/files/build?path=${encodeURIComponent(absPath)}&download=1`;
+  return cacheBust == null ? url : `${url}&t=${encodeURIComponent(String(cacheBust))}`;
+}
+
+/**
  * PDFプレビュー用の成果物URL。
  * デスクトップ: asset protocol（asset.localhost）へのfetchはクロスオリジンで
  * CORSに阻まれるため、IPCでバイト列を取得してblob URLを返す。

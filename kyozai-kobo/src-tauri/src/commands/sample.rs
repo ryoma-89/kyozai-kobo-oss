@@ -14,8 +14,8 @@ fn insert_problem(
 ) -> rusqlite::Result<()> {
     let now = now_str();
     conn.execute(
-        "INSERT INTO problems (unit_id, title, statement_latex, answer_latex, explanation_latex, difficulty, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?7)",
         params![unit_id, title, statement, answer, explanation, difficulty, now],
     )?;
     let pid = conn.last_insert_rowid();

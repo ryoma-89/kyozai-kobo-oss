@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  aiApplySourceRevision,
   aiCancelJob,
   aiCreateJob,
   aiGetJob,
@@ -13,7 +14,7 @@ import {
   aiUpdateJobLatex,
   getSettings,
 } from "../api";
-import { useApp } from "../store";
+import { useApp, type ProjectReviewFix } from "../store";
 import { buildFileUrl, isTauri } from "../transport";
 import type { AiExtractedProblem, AiJob } from "../types";
 import { LatexEditor } from "./LatexEditor";
@@ -27,15 +28,17 @@ const MODES: { value: string; label: string; experimental?: boolean }[] = [
   { value: "math_only", label: "数式のみ" },
   { value: "problem", label: "問題文" },
   { value: "problem_with_subquestions", label: "問題文＋小問" },
+  { value: "generate_problem_layouts", label: "問題文の一段組・二段組版を生成" },
   { value: "answer_explanation", label: "解答・解説" },
   { value: "generate_answer", label: "解答を生成（高校範囲）" },
   { value: "generate_explanation", label: "解説を生成（高校範囲）" },
   { value: "generate_topic_guide", label: "分野・解法の解説部品を生成" },
+  { value: "revise_source", label: "既存ソースを修正" },
   { value: "table", label: "表" },
   { value: "matrix", label: "行列" },
   { value: "cases", label: "場合分け" },
   { value: "part", label: "教材部品" },
-  { value: "tikz", label: "TikZ候補（実験的）", experimental: true },
+  { value: "tikz", label: "TikZ図" },
   { value: "verbatim", label: "原文を整形せず転記" },
 ];
 
@@ -97,13 +100,42 @@ export interface AiConvertPreset {
   solutionLayout?: "two_column" | "single_column";
   solutionDetail?: "standard" | "beginner";
   explanationGuidance?: string;
+  revisionGuidance?: string;
+  revisionTarget?:
+    | "problem_statement"
+    | "problem_statement_two_column"
+    | "problem_answer"
+    | "problem_explanation"
+    | "part";
+  revisionSourceVersion?: number;
+  replaceTarget?: boolean;
 }
 
 function extractedProblemsOf(job?: AiJob | null): AiExtractedProblem[] {
   return (job?.structuredResult?.problems ?? []).map((problem) => ({
     ...problem,
+    statementLatexTwoColumn:
+      problem.statementLatexTwoColumn || problem.statementLatex,
     sourceImageIndexes: [...problem.sourceImageIndexes],
   }));
+}
+
+type ProjectReviewFixTarget = Omit<ProjectReviewFix, "projectId" | "action">;
+
+function projectReviewTarget(code: string): ProjectReviewFixTarget | null {
+  const match = code.match(
+    /^(.*?)@ITEM:(\d+)@FIELD:(statement|answer|explanation|content|item)$/,
+  );
+  if (!match) return null;
+  return {
+    itemId: Number(match[2]),
+    field: match[3] as ProjectReviewFixTarget["field"],
+    guidance: "",
+  };
+}
+
+function projectReviewCodeLabel(code: string): string {
+  return code.split("@ITEM:", 1)[0] || code;
 }
 
 /** 画像ファイル → 向き補正・縮小済みのJPEG/PNG DataURL */
@@ -154,13 +186,21 @@ export function AiConvertDialog({
   insertTargets,
   initialJob,
   preset,
+  onProjectReviewFix,
+  onUseProblemLayouts,
 }: {
   onClose: () => void;
   insertTargets?: InsertTarget[];
   initialJob?: AiJob | null;
   preset?: AiConvertPreset;
+  onProjectReviewFix?: (
+    target: ProjectReviewFixTarget,
+    action: ProjectReviewFix["action"],
+  ) => void;
+  /** 既存問題の一段組版・二段組版へ、確認済みの1組を読み込む */
+  onUseProblemLayouts?: (problem: AiExtractedProblem) => void;
 }) {
-  const { showToast, confirm, bumps } = useApp();
+  const { showToast, confirm, bumps, openProjectReviewFix } = useApp();
   const [step, setStep] = useState<"input" | "running" | "review">(
     initialJob ? (RUNNING_STATUSES.includes(initialJob.status) ? "running" : "review") : "input",
   );
@@ -190,6 +230,36 @@ export function AiConvertDialog({
       preset?.explanationGuidance ?? "",
     ),
   );
+  const [revisionGuidance, setRevisionGuidance] = useState(() =>
+    stringOption(
+      initialJob?.options,
+      "revisionGuidance",
+      preset?.revisionGuidance ?? "",
+    ),
+  );
+  const [revisionTarget, setRevisionTarget] = useState<
+    | "problem_statement"
+    | "problem_statement_two_column"
+    | "problem_answer"
+    | "problem_explanation"
+    | "part"
+  >(() => {
+    const value = stringOption(
+      initialJob?.options,
+      "revisionTarget",
+      preset?.revisionTarget ?? "part",
+    );
+    return value === "problem_statement" ||
+      value === "problem_statement_two_column" ||
+      value === "problem_answer" ||
+      value === "problem_explanation"
+      ? value
+      : "part";
+  });
+  const revisionSourceVersion =
+    typeof initialJob?.options.revisionSourceVersion === "number"
+      ? initialJob.options.revisionSourceVersion
+      : preset?.revisionSourceVersion;
   const [solutionLayout, setSolutionLayout] = useState<"two_column" | "single_column">(() =>
     stringOption(
       initialJob?.options,
@@ -209,6 +279,7 @@ export function AiConvertDialog({
       : "standard",
   );
   const [busy, setBusy] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const [job, setJob] = useState<AiJob | null>(initialJob ?? null);
   const [latex, setLatex] = useState(initialJob?.outputLatex ?? "");
   const [confirmedUncertain, setConfirmedUncertain] = useState<Record<string, boolean>>({});
@@ -259,8 +330,10 @@ export function AiConvertDialog({
             setProblemDrafts(extracted);
             setReviewPane(extracted.length > 0 ? "problems" : "latex");
             setStep("review");
+            showToast(`AIジョブ #${j.id} が完了しました`);
           } else if (j.status === "failed") {
             setStep("review");
+            showToast(j.errorMessage || `AIジョブ #${j.id} に失敗しました`, "error");
           } else {
             onClose();
           }
@@ -360,8 +433,13 @@ export function AiConvertDialog({
   };
 
   const run = async () => {
+    if (mode === "revise_source" && !revisionGuidance.trim()) {
+      showToast("どこをどう直すか、ソースの修正指示を入力してください", "error");
+      return;
+    }
     setBusy(true);
     try {
+      const persistentTarget = insertTargets?.length === 1 ? insertTargets[0] : undefined;
       const j = await aiCreateJob({
         sourceType,
         conversionMode: mode,
@@ -378,6 +456,10 @@ export function AiConvertDialog({
               : "",
           explanationGuidance:
             mode === "generate_explanation" ? explanationGuidance.trim() : "",
+          revisionGuidance: mode === "revise_source" ? revisionGuidance.trim() : "",
+          revisionTarget: mode === "revise_source" ? revisionTarget : "",
+          revisionSourceVersion:
+            mode === "revise_source" ? revisionSourceVersion ?? null : null,
           solutionLayout,
           solutionDetail:
             mode === "generate_answer" || mode === "generate_topic_guide"
@@ -386,11 +468,16 @@ export function AiConvertDialog({
         },
         inputText: text,
         inputNames: sourceType === "image" ? images.map((i) => i.name) : [],
+        targetEntityType: persistentTarget?.entityType,
+        targetEntityId: persistentTarget?.entityId,
+        targetField: persistentTarget?.field,
       });
       setJob(j);
       setConfirmedUncertain({});
       setOverrideUncertain(false);
       setStep("running");
+      setMinimized(true);
+      showToast(`AIジョブ #${j.id} を開始しました。待っている間も編集を続けられます`);
     } catch (e) {
       showToast(String(e), "error");
     } finally {
@@ -406,6 +493,13 @@ export function AiConvertDialog({
       onClose();
     } catch (e) {
       showToast(String(e), "error");
+    }
+  };
+
+  const continueInBackground = () => {
+    setMinimized(true);
+    if (job) {
+      showToast(`AIジョブ #${job.id} はバックグラウンドで続行します`);
     }
   };
 
@@ -442,6 +536,10 @@ export function AiConvertDialog({
             : "",
         explanationGuidance:
           mode === "generate_explanation" ? explanationGuidance.trim() : "",
+        revisionGuidance: mode === "revise_source" ? revisionGuidance.trim() : "",
+        revisionTarget: mode === "revise_source" ? revisionTarget : "",
+        revisionSourceVersion:
+          mode === "revise_source" ? revisionSourceVersion ?? null : null,
         solutionLayout,
         solutionDetail:
           mode === "generate_answer" || mode === "generate_topic_guide"
@@ -451,6 +549,8 @@ export function AiConvertDialog({
       setJob(j);
       setProblemDrafts([]);
       setStep("running");
+      setMinimized(true);
+      showToast(`AIジョブ #${j.id} を再実行しました。待っている間も編集を続けられます`);
     } catch (e) {
       showToast(String(e), "error");
     } finally {
@@ -472,12 +572,31 @@ export function AiConvertDialog({
     );
   };
 
+  const prepareCurrentLatexForInsert = async (): Promise<AiJob> => {
+    if (!job) throw new Error("AI変換ジョブが見つかりません");
+    const latexChanged = latex !== job.outputLatex;
+    if (latexChanged) {
+      await aiUpdateJobLatex(job.id, latex);
+    }
+    if (latexChanged || job.compileStatus !== "ok") {
+      const checkedJob = await aiRecompileJob(job.id);
+      setJob(checkedJob);
+      if (checkedJob.compileStatus !== "ok") {
+        throw new Error(
+          "現在のLaTeXをコンパイルできませんでした。内容を確認してください。",
+        );
+      }
+      return checkedJob;
+    }
+    return job;
+  };
+
   const doInsert = async (target: InsertTarget) => {
     if (!job) return;
     const confirmed = await guardInsert();
     if (!confirmed) return;
     try {
-      await aiUpdateJobLatex(job.id, latex);
+      await prepareCurrentLatexForInsert();
       await aiMarkInserted(
         job.id,
         target.entityType,
@@ -486,7 +605,11 @@ export function AiConvertDialog({
         confirmed,
       );
       target.insert(latex);
-      showToast(`${target.label}へ挿入しました（Ctrl+Sで保存してください）`);
+      showToast(
+        mode === "revise_source"
+          ? `${target.label}をAIの修正案で置き換えました（Ctrl+Sで保存してください）`
+          : `${target.label}へ挿入しました（Ctrl+Sで保存してください）`,
+      );
       onClose();
     } catch (e) {
       showToast(String(e), "error");
@@ -509,7 +632,7 @@ export function AiConvertDialog({
     const title = window.prompt("部品のタイトル", defaultTitle);
     if (title == null) return;
     try {
-      await aiUpdateJobLatex(job.id, latex);
+      await prepareCurrentLatexForInsert();
       const id = await aiSaveAsPart(job.id, title, undefined, confirmed);
       showToast(`部品として保存しました (ID: ${id})`);
       onClose();
@@ -541,13 +664,81 @@ export function AiConvertDialog({
 
       const title = window.prompt("問題のタイトル", "AI変換問題");
       if (title == null) return;
-      await aiUpdateJobLatex(job.id, latex);
+      await prepareCurrentLatexForInsert();
       const id = await aiSaveAsProblem(job.id, unitId, title, confirmed);
       showToast(`新規問題として保存しました (ID: ${id})`);
       setShowUnitPicker(false);
       onClose();
     } catch (e) {
       showToast(String(e), "error");
+    }
+  };
+
+  const useProblemLayouts = async () => {
+    if (!job || !onUseProblemLayouts || problemDrafts.length !== 1) return;
+    const confirmed = await guardInsert();
+    if (!confirmed) return;
+    const problem = problemDrafts[0];
+    if (
+      !problem.statementLatex.trim() ||
+      !problem.statementLatexTwoColumn.trim()
+    ) {
+      showToast("一段組版と二段組版の両方を確認してください", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await prepareCurrentLatexForInsert();
+      onUseProblemLayouts(problem);
+      showToast("一段組版と二段組版を問題編集画面へ読み込みました");
+      onClose();
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const persistentRevisionLabel = (): string | null => {
+    if (
+      mode !== "revise_source"
+      || !job
+      || job.targetEntityId === null
+      || typeof job.options.revisionSourceVersion !== "number"
+      || job.options.revisionApplied === true
+    ) {
+      return null;
+    }
+    if (job.targetEntityType === "part" && job.targetField === "latex_source") {
+      return `部品 #${job.targetEntityId}`;
+    }
+    if (job.targetEntityType !== "problem") return null;
+    if (job.targetField === "statement_latex") return `問題 #${job.targetEntityId} の問題文`;
+    if (job.targetField === "statement_latex_two_column") {
+      return `問題 #${job.targetEntityId} の二段組用問題文`;
+    }
+    if (job.targetField === "answer_latex") return `問題 #${job.targetEntityId} の解答`;
+    if (job.targetField === "explanation_latex") return `問題 #${job.targetEntityId} の解説`;
+    return null;
+  };
+
+  const applyPersistentRevision = async () => {
+    if (!job) return;
+    const label = persistentRevisionLabel();
+    if (!label) return;
+    const confirmed = await guardInsert();
+    if (!confirmed) return;
+    if (!(await confirm(`${label}を、表示中のAI修正結果で置き換えますか？`))) return;
+    setBusy(true);
+    try {
+      await prepareCurrentLatexForInsert();
+      await aiApplySourceRevision(job.id, confirmed);
+      showToast(`${label}をAI修正結果で置き換えました`);
+      onClose();
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -566,7 +757,30 @@ export function AiConvertDialog({
   const isTopicGuideMode = mode === "generate_topic_guide";
   const isGenerationMode =
     mode === "generate_answer" || mode === "generate_explanation" || isTopicGuideMode;
+  const isRevisionMode = mode === "revise_source";
+  const revisesSolution =
+    isRevisionMode &&
+    (revisionTarget === "problem_answer" || revisionTarget === "problem_explanation");
   const isProblemImportMode = mode === "problem_bank_import";
+  const formatsProblemStatement =
+    mode === "problem" ||
+    mode === "problem_with_subquestions" ||
+    mode === "generate_problem_layouts" ||
+    isProblemImportMode ||
+    (isRevisionMode &&
+      (revisionTarget === "problem_statement" ||
+        revisionTarget === "problem_statement_two_column"));
+  const outputsBothProblemLayouts = [
+    "problem",
+    "problem_with_subquestions",
+    "problem_bank_import",
+    "generate_problem_layouts",
+  ].includes(mode);
+  const usesLayoutSelector =
+    isGenerationMode ||
+    revisesSolution ||
+    (formatsProblemStatement && !outputsBothProblemLayouts);
+  const isProjectReviewMode = mode === "project_review";
 
   // ---- 入力ステップ ----
   const renderInput = () => (
@@ -574,7 +788,9 @@ export function AiConvertDialog({
       <div className="flex gap-1">
         <button
           onClick={() => setSourceType("image")}
+          disabled={isRevisionMode}
           className={`btn ${sourceType === "image" ? "btn-outline" : "btn-ghost"}`}
+          title={isRevisionMode ? "既存ソースの修正はテキスト入力を使用します" : undefined}
         >
           📷 写真・画像
         </button>
@@ -689,7 +905,9 @@ export function AiConvertDialog({
           placeholder={
             isTopicGuideMode
               ? "詳しく解説する分野・単元・公式・解法を入力してください\n例：2次関数の最大・最小／置換積分の考え方と使い分け"
-              : mode === "generate_explanation"
+              : isRevisionMode
+                ? "修正対象の既存LaTeXソースを入力してください"
+                : mode === "generate_explanation"
               ? "【問題文】と【参照する解答】を貼り付けてください"
               : "変換したい文章・数式を貼り付けてください（Word・PDFからのコピー等）"
           }
@@ -702,7 +920,10 @@ export function AiConvertDialog({
           {MODES.map((m) => (
             <button
               key={m.value}
-              onClick={() => setMode(m.value)}
+              onClick={() => {
+                setMode(m.value);
+                if (m.value === "revise_source") setSourceType("text");
+              }}
               className={`btn btn-sm ${mode === m.value ? "btn-outline" : "btn-ghost"}`}
               title={m.experimental ? "実験的機能: 結果は自動挿入されません" : undefined}
             >
@@ -711,15 +932,21 @@ export function AiConvertDialog({
           ))}
         </div>
         {mode === "tikz" && (
-          <p className="mt-1 text-[11px]" style={{ color: "var(--warn)" }}>
-            TikZ候補は実験的機能です。生成されたコードは必ず内容を確認してから使用してください。
-            関数グラフの場合は、教材編集画面の「グラフを挿入」（グラフ作成アプリ連携）の方が正確です。
+          <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
+            標準テンプレートのTikZ設定を使い、編集可能なtikzpictureを生成します。
+            写真から取り込む場合は位置関係やラベルを確認してください。関数グラフは「グラフを挿入」を使うと数式から正確に作成できます。
           </p>
         )}
         {mode === "problem_bank_import" && (
           <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
             1枚・複数枚の画像から独立した問題をすべて分離します。不要な大問番号・下線・採点欄は除去し、
             小問番号や選択肢など解答に必要な記号は残します。
+          </p>
+        )}
+        {isRevisionMode && (
+          <p className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>
+            現在のLaTeXソースへ指定した修正だけを反映し、確認後に元の欄全体を置き換えます。
+            指定していない箇所は維持します。
           </p>
         )}
         {isGenerationMode && (
@@ -744,9 +971,52 @@ export function AiConvertDialog({
         )}
       </div>
 
-      {isGenerationMode && (
+      {isRevisionMode && (
+        <div className="space-y-3 rounded border p-3" style={{ borderColor: "var(--border)" }}>
+          <div>
+            <label className="section-label mb-1 block">修正するソース</label>
+            <select
+              value={revisionTarget}
+              onChange={(event) =>
+                setRevisionTarget(
+                  event.target.value as
+                    | "problem_statement"
+                    | "problem_statement_two_column"
+                    | "problem_answer"
+                    | "problem_explanation"
+                    | "part",
+                )
+              }
+              disabled={Boolean(preset?.revisionTarget)}
+              className="select w-full sm:max-w-md"
+            >
+              <option value="problem_statement">問題文</option>
+              <option value="problem_statement_two_column">問題文（二段組用）</option>
+              <option value="problem_answer">解答</option>
+              <option value="problem_explanation">解説</option>
+              <option value="part">部品</option>
+            </select>
+          </div>
+          <div>
+            <label className="section-label mb-1 block">ソースの修正指示（必須）</label>
+            <textarea
+              value={revisionGuidance}
+              onChange={(event) => setRevisionGuidance(event.target.value.slice(0, 1000))}
+              className="input-area min-h-24 w-full resize-y text-xs"
+              placeholder="例：2段目の式変形を省略せずに補う／誤っている符号だけを直す／TikZ図のラベルの重なりを直す"
+            />
+            <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+              修正する箇所、直し方、維持したい表現を具体的に指定してください。結果は保存前に比較・編集できます。
+            </p>
+          </div>
+        </div>
+      )}
+
+      {usesLayoutSelector && (
         <div>
-          <label className="section-label mb-1 block">想定する出力レイアウト</label>
+          <label className="section-label mb-1 block">
+            {formatsProblemStatement ? "問題文を配置するレイアウト" : "想定する出力レイアウト"}
+          </label>
           <select
             value={solutionLayout}
             onChange={(event) =>
@@ -758,9 +1028,13 @@ export function AiConvertDialog({
             <option value="single_column">一段組（横幅を活かす）</option>
           </select>
           <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
-            {solutionLayout === "two_column"
-              ? "長い式を早めに改行し、狭い列からはみ出さない構成にします。"
-              : "短い計算は読みやすくまとめ、横幅を超えそうな式だけを意味の区切りで改行します。"}
+            {formatsProblemStatement
+              ? solutionLayout === "two_column"
+                ? "条件・数式を意味の区切りで早めに改行し、問題文を狭い列幅へ収めます。内容や小問番号は変更しません。"
+                : "短い条件は横幅を活かしてまとめ、長い数式だけを自然な位置で改行します。"
+              : solutionLayout === "two_column"
+                ? "長い式を早めに改行し、狭い列からはみ出さない構成にします。"
+                : "短い計算は読みやすくまとめ、横幅を超えそうな式だけを意味の区切りで改行します。"}
           </p>
         </div>
       )}
@@ -834,7 +1108,7 @@ export function AiConvertDialog({
       )}
 
       <div className="grid gap-1 text-xs sm:grid-cols-2" style={{ color: "var(--text)" }}>
-        {!isGenerationMode && (
+        {!isGenerationMode && !isRevisionMode && (
           <>
             <label className="flex items-center gap-1.5">
               <input type="checkbox" checked={!reformat} onChange={(e) => setReformat(!e.target.checked)} />
@@ -864,7 +1138,9 @@ export function AiConvertDialog({
         </label>
       </div>
       <p className="text-[11px]" style={{ color: "var(--muted)" }}>
-        {isGenerationMode
+        {isRevisionMode
+          ? "指定した修正だけを反映したソース全体を生成します。結果を確認してから元の欄を置き換えます。"
+          : isGenerationMode
           ? isTopicGuideMode
             ? "単一問題の答案ではなく、他の教材でも再利用できる分野・解法の解説として生成し、そのまま部品保存できます。"
             : mode === "generate_explanation"
@@ -881,10 +1157,14 @@ export function AiConvertDialog({
         </button>
         <button
           onClick={run}
-          disabled={busy || (sourceType === "image" ? images.length === 0 : !text.trim())}
+          disabled={
+            busy ||
+            (sourceType === "image" ? images.length === 0 : !text.trim()) ||
+            (isRevisionMode && !revisionGuidance.trim())
+          }
           className="btn btn-solid"
         >
-          {busy ? "準備中..." : <><Icon name="play" size={15} /> {isGenerationMode ? "生成する" : isProblemImportMode ? "問題文を抽出" : "LaTeXへ変換"}</>}
+          {busy ? "準備中..." : <><Icon name="play" size={15} /> {isRevisionMode ? "修正案を生成" : isGenerationMode ? "生成する" : isProblemImportMode ? "問題文を抽出" : "LaTeXへ変換"}</>}
         </button>
       </div>
     </div>
@@ -898,9 +1178,17 @@ export function AiConvertDialog({
       <p className="text-xs" style={{ color: "var(--muted)" }}>
         状態: {job?.status}　（Codexの利用状況によって数十秒〜数分かかることがあります）
       </p>
-      <button onClick={cancel} className="btn btn-ghost">
-        キャンセル
-      </button>
+      <p className="text-[11px]" style={{ color: "var(--muted)" }}>
+        バックグラウンドへ移しても処理は続き、完了後にこの画面から結果を確認できます。
+      </p>
+      <div className="flex justify-center gap-2">
+        <button onClick={cancel} className="btn btn-ghost">
+          キャンセル
+        </button>
+        <button onClick={continueInBackground} className="btn btn-solid">
+          バックグラウンドで続ける
+        </button>
+      </div>
     </div>
   );
 
@@ -946,11 +1234,37 @@ export function AiConvertDialog({
           </p>
         </div>
       )}
-      {job && ["generate_answer", "generate_explanation", "generate_topic_guide"].includes(job.conversionMode) && (
+      {job && (
+        [
+          "problem",
+          "problem_with_subquestions",
+          "problem_bank_import",
+          "generate_problem_layouts",
+          "generate_answer",
+          "generate_explanation",
+          "generate_topic_guide",
+        ].includes(job.conversionMode) ||
+        (job.conversionMode === "revise_source" &&
+          [
+            "problem_statement",
+            "problem_statement_two_column",
+            "problem_answer",
+            "problem_explanation",
+          ].includes(
+            stringOption(job.options, "revisionTarget"),
+          ))
+      ) && (
         <div className="mt-2 rounded border p-2 text-xs" style={{ borderColor: "var(--border)" }}>
           <p className="section-label mb-1">想定レイアウト</p>
           <p>
-            {stringOption(job.options, "solutionLayout", "two_column") === "single_column"
+            {[
+              "problem",
+              "problem_with_subquestions",
+              "problem_bank_import",
+              "generate_problem_layouts",
+            ].includes(job.conversionMode)
+              ? "一段組版・二段組版を同時生成"
+              : stringOption(job.options, "solutionLayout", "two_column") === "single_column"
               ? "一段組"
               : "二段組"}
           </p>
@@ -1009,7 +1323,11 @@ export function AiConvertDialog({
         </p>
       )}
       {(job?.warnings ?? []).length === 0 && uncertainList.length === 0 && job?.status !== "failed" && (
-        <p style={{ color: "var(--success)" }}>警告はありません。</p>
+        <p style={{ color: "var(--success)" }}>
+          {isProjectReviewMode
+            ? "AIが指摘した誤り・要確認事項はありません。"
+            : "警告はありません。"}
+        </p>
       )}
       {(job?.warnings ?? []).map((w, i) => (
         <div key={i} className="rounded border px-2 py-1" style={{ borderColor: "var(--border)" }}>
@@ -1098,7 +1416,7 @@ export function AiConvertDialog({
     <div className="min-h-0 flex-1 overflow-y-auto rounded border p-2" style={{ borderColor: "var(--border)" }}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-xs" style={{ color: "var(--muted)" }}>
-          抽出した{problemDrafts.length}件を別々の問題として保存します。タイトル・問題文を修正でき、不要な問題は除外できます。
+          抽出した{problemDrafts.length}件について、一段組版と二段組版を確認できます。問題バンクへ保存する場合は各問題を別々に登録します。
         </p>
         <span className="badge badge-muted shrink-0">{problemDrafts.length}件</span>
       </div>
@@ -1133,25 +1451,196 @@ export function AiConvertDialog({
                 )
               }
             />
-            <textarea
-              className="input min-h-28 w-full resize-y font-mono text-xs"
-              value={problem.statementLatex}
-              aria-label={`問題${index + 1}の問題文`}
-              onChange={(event) =>
-                syncProblemDrafts(
-                  problemDrafts.map((item, current) =>
-                    current === index ? { ...item, statementLatex: event.target.value } : item,
-                  ),
-                )
-              }
-            />
+            <div className="grid gap-2 lg:grid-cols-2">
+              <label className="block">
+                <span className="section-label mb-1 block">一段組用</span>
+                <textarea
+                  className="input min-h-32 w-full resize-y font-mono text-xs"
+                  value={problem.statementLatex}
+                  aria-label={`問題${index + 1}の一段組用問題文`}
+                  onChange={(event) =>
+                    syncProblemDrafts(
+                      problemDrafts.map((item, current) =>
+                        current === index
+                          ? { ...item, statementLatex: event.target.value }
+                          : item,
+                      ),
+                    )
+                  }
+                />
+              </label>
+              <label className="block">
+                <span className="section-label mb-1 block">二段組用</span>
+                <textarea
+                  className="input min-h-32 w-full resize-y font-mono text-xs"
+                  value={problem.statementLatexTwoColumn}
+                  aria-label={`問題${index + 1}の二段組用問題文`}
+                  onChange={(event) =>
+                    syncProblemDrafts(
+                      problemDrafts.map((item, current) =>
+                        current === index
+                          ? {
+                              ...item,
+                              statementLatexTwoColumn: event.target.value,
+                            }
+                          : item,
+                      ),
+                    )
+                  }
+                />
+              </label>
+            </div>
           </section>
         ))}
       </div>
     </div>
   );
 
-  const renderReview = () => (
+  const openProjectReviewTarget = (
+    target: ProjectReviewFixTarget,
+    action: ProjectReviewFix["action"],
+  ) => {
+    const guidance = target.guidance.trim();
+    const next = { ...target, guidance };
+    if (onProjectReviewFix) {
+      onProjectReviewFix(next, action);
+      return;
+    }
+    if (job?.targetEntityType === "project" && job.targetEntityId !== null) {
+      openProjectReviewFix({
+        projectId: job.targetEntityId,
+        ...next,
+        action,
+      });
+      onClose();
+      return;
+    }
+    showToast("修正対象の教材を特定できませんでした", "error");
+  };
+
+  const renderProjectReviewResult = () => {
+    const report =
+      job?.structuredResult?.plainText?.trim() ||
+      job?.outputLatex?.trim() ||
+      "確認レポートを取得できませんでした。";
+    const findings = job?.warnings ?? [];
+    const errorCount = findings.filter((warning) => warning.severity === "error").length;
+    const warningCount = findings.filter((warning) => warning.severity === "warning").length;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="badge badge-muted">指摘 {findings.length}件</span>
+          {errorCount > 0 && (
+            <span className="badge" style={{ color: "var(--danger)", borderColor: "rgba(241,106,117,0.45)" }}>
+              誤り {errorCount}件
+            </span>
+          )}
+          {warningCount > 0 && (
+            <span className="badge badge-warn">要確認 {warningCount}件</span>
+          )}
+          <span className="ml-auto text-[11px]" style={{ color: "var(--muted)" }}>
+            PDFは生成せず、確認結果をそのまま表示しています
+          </span>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+          {job?.status === "failed" && (
+            <section
+              className="rounded border p-3 text-sm whitespace-pre-wrap"
+              style={{
+                color: "var(--danger)",
+                borderColor: "rgba(241,106,117,0.45)",
+                background: "var(--danger-dim)",
+              }}
+            >
+              教材全体のAI確認に失敗しました
+              {job.errorMessage ? `\n${job.errorMessage}` : ""}
+            </section>
+          )}
+          <section className="card p-3">
+            <h3 className="mb-2 text-sm font-bold">確認レポート</h3>
+            <pre className="whitespace-pre-wrap font-sans text-xs leading-6">{report}</pre>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-sm font-bold">修正候補</h3>
+            {findings.length === 0 ? (
+              <div
+                className="rounded border p-3 text-sm"
+                style={{
+                  color: "var(--success)",
+                  borderColor: "rgba(197,183,223,0.4)",
+                  background: "var(--success-dim)",
+                }}
+              >
+                AIが指摘した誤り・要確認事項はありません。
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {findings.map((warning, index) => {
+                  const parsed = projectReviewTarget(warning.code);
+                  const target = parsed ? { ...parsed, guidance: warning.message } : null;
+                  return (
+                    <article
+                      key={`${warning.code}-${index}`}
+                      className="card border-l-4 p-3"
+                      style={{ borderLeftColor: severityColor(warning.severity) }}
+                    >
+                      <div className="flex flex-wrap items-start gap-2">
+                        <span
+                          className="badge badge-muted font-mono text-[10px]"
+                          style={{ color: severityColor(warning.severity) }}
+                        >
+                          {projectReviewCodeLabel(warning.code)}
+                        </span>
+                        <p className="min-w-0 flex-1 text-sm whitespace-pre-wrap">
+                          {warning.message}
+                        </p>
+                      </div>
+                      {target && (
+                        <div className="mt-2 flex flex-wrap justify-end gap-1.5">
+                          <button
+                            onClick={() => openProjectReviewTarget(target, "manual")}
+                            className="btn btn-outline btn-sm"
+                          >
+                            対象を手動で編集
+                          </button>
+                          {target.field !== "item" && (
+                            <button
+                              onClick={() => openProjectReviewTarget(target, "ai")}
+                              className="btn btn-solid btn-sm"
+                            >
+                              <Icon name="sparkle" size={14} /> AI修正案を作る
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+
+        <div
+          className="flex shrink-0 justify-end gap-2 border-t pt-2"
+          style={{ borderColor: "var(--border)" }}
+        >
+          <button onClick={retry} disabled={busy} className="btn btn-ghost btn-sm">
+            再確認
+          </button>
+          <button onClick={onClose} className="btn btn-solid btn-sm">
+            閉じる
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderReview = () => {
+    if (isProjectReviewMode) return renderProjectReviewResult();
+    return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
       {isNarrow ? (
         <>
@@ -1166,10 +1655,10 @@ export function AiConvertDialog({
             )}
             {(
               [
-                ["source", "元画像・原文"],
+                ["source", isProjectReviewMode ? "確認対象" : "元画像・原文"],
                 ["preview", "プレビュー"],
-                ["latex", "LaTeX"],
-                ["warnings", `警告${uncertainList.length > 0 ? `(${uncertainList.length})` : ""}`],
+                ["latex", isProjectReviewMode ? "確認レポート" : "LaTeX"],
+                ["warnings", `${isProjectReviewMode ? "指摘" : "警告"}${uncertainList.length > 0 ? `(${uncertainList.length})` : ""}`],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -1193,7 +1682,9 @@ export function AiConvertDialog({
         <>
           <div className="grid min-h-[180px] flex-1 grid-cols-2 gap-2 overflow-hidden">
             <div className="flex min-h-0 flex-col">
-              <p className="section-label mb-1">元画像・入力文</p>
+              <p className="section-label mb-1">
+                {isProjectReviewMode ? "確認対象の教材データ" : "元画像・入力文"}
+              </p>
               {renderSourcePane()}
             </div>
             <div className="flex min-h-0 flex-col">
@@ -1203,7 +1694,11 @@ export function AiConvertDialog({
           </div>
           <div className="flex min-h-[160px] flex-[0_0_34%] flex-col overflow-hidden">
             <p className="section-label mb-1">
-              {problemDrafts.length > 0 ? `抽出した問題（${problemDrafts.length}件・編集可能）` : "LaTeXソース（編集可能）"}
+              {problemDrafts.length > 0
+                ? `抽出した問題（${problemDrafts.length}件・編集可能）`
+                : isProjectReviewMode
+                  ? "AI確認レポート"
+                  : "LaTeXソース（編集可能）"}
             </p>
             {problemDrafts.length > 0 ? renderProblemsPane() : renderLatexPane()}
           </div>
@@ -1219,10 +1714,35 @@ export function AiConvertDialog({
           再変換
         </button>
         <span className="mx-1 h-4 w-px" style={{ background: "var(--border)" }} />
-        {problemDrafts.length > 0 ? (
+        {isProjectReviewMode ? null : problemDrafts.length > 0 && onUseProblemLayouts ? (
+          <button
+            onClick={useProblemLayouts}
+            disabled={
+              busy ||
+              hasBlockingWarnings ||
+              problemDrafts.length !== 1 ||
+              !problemDrafts[0]?.statementLatex.trim() ||
+              !problemDrafts[0]?.statementLatexTwoColumn.trim() ||
+              job?.status === "failed"
+            }
+            className="btn btn-solid btn-sm"
+          >
+            一段組版・二段組版をこの問題へ反映
+          </button>
+        ) : problemDrafts.length > 0 ? (
           <button
             onClick={() => setShowUnitPicker(true)}
-            disabled={busy || hasBlockingWarnings || problemDrafts.some((problem) => !problem.title.trim() || !problem.statementLatex.trim()) || job?.status === "failed"}
+            disabled={
+              busy ||
+              hasBlockingWarnings ||
+              problemDrafts.some(
+                (problem) =>
+                  !problem.title.trim() ||
+                  !problem.statementLatex.trim() ||
+                  !problem.statementLatexTwoColumn.trim(),
+              ) ||
+              job?.status === "failed"
+            }
             className="btn btn-solid btn-sm"
           >
             {problemDrafts.length}件を問題バンクへ一括保存
@@ -1236,9 +1756,18 @@ export function AiConvertDialog({
                 disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
                 className="btn btn-solid btn-sm"
               >
-                {t.label}へ挿入
+                {mode === "revise_source" ? `${t.label}を置き換える` : `${t.label}へ挿入`}
               </button>
             ))}
+            {(insertTargets ?? []).length === 0 && persistentRevisionLabel() && (
+              <button
+                onClick={applyPersistentRevision}
+                disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+                className="btn btn-solid btn-sm"
+              >
+                {persistentRevisionLabel()}を置き換える
+              </button>
+            )}
             <button
               onClick={saveAsPart}
               disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
@@ -1260,32 +1789,51 @@ export function AiConvertDialog({
         </button>
       </div>
     </div>
-  );
+    );
+  };
+
+  useEffect(() => {
+    if (!job) return;
+    const openThisJob = (event: Event) => {
+      const detail = (event as CustomEvent<{ jobId: number; handled: boolean }>).detail;
+      if (!detail || detail.jobId !== job.id) return;
+      detail.handled = true;
+      setMinimized(false);
+    };
+    window.addEventListener("kk-open-ai-job", openThisJob);
+    return () => window.removeEventListener("kk-open-ai-job", openThisJob);
+  }, [job?.id]);
+
+  if (minimized && job) return null;
 
   return (
     <div
-      className="safe-area-overlay fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-2"
+      className="safe-area-overlay modal-scrim fixed inset-0 z-40 flex items-center justify-center p-2"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && step !== "running") onClose();
+        if (e.target !== e.currentTarget) return;
+        if (step === "running") continueInBackground();
+        else onClose();
       }}
     >
       <div
-        className="fade-in flex h-[95dvh] max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border shadow-2xl"
+        className="modal-panel flex h-[95dvh] max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border shadow-2xl"
         style={{ background: "var(--panel)", borderColor: "var(--border-strong)" }}
       >
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5" style={{ borderColor: "var(--border)" }}>
           <h2 className="text-sm font-bold">
             <span className="brand-mark mr-1.5">▸</span>
-            {preset?.title ?? (isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
+            {preset?.title ?? (isProjectReviewMode ? "教材全体のAI確認" : isRevisionMode ? "AIで既存ソースを修正" : isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
             {job && (
               <span className="badge badge-muted ml-2">ジョブ #{job.id}</span>
             )}
           </h2>
-          {step !== "running" && (
-            <button onClick={onClose} className="btn btn-ghost btn-sm">
-              ✕
-            </button>
-          )}
+          <button
+            onClick={step === "running" ? continueInBackground : onClose}
+            className="btn btn-ghost btn-sm"
+            title={step === "running" ? "バックグラウンドで続ける" : "閉じる"}
+          >
+            {step === "running" ? "—" : "✕"}
+          </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
           {step === "input" && renderInput()}

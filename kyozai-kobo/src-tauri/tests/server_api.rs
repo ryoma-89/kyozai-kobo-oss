@@ -202,6 +202,7 @@ async fn paired_session_can_crud_and_detect_conflicts() {
             "unit_id": unit_id,
             "title": "テスト問題",
             "statement_latex": "端末Aの本文",
+            "statement_latex_two_column": "端末Aの二段組本文",
             "answer_latex": "",
             "explanation_latex": "",
             "difficulty": "標準",
@@ -219,6 +220,21 @@ async fn paired_session_can_crud_and_detect_conflicts() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(body_json(res).await.as_i64(), Some(2));
+    let res = router
+        .clone()
+        .oneshot(post_json(
+            "/api/invoke/get_problem",
+            json!({"id": problem_id}),
+            Some(&cookie),
+            true,
+        ))
+        .await
+        .unwrap();
+    let updated_problem = body_json(res).await;
+    assert_eq!(
+        updated_problem["statement_latex_two_column"],
+        json!("端末Aの二段組本文")
+    );
 
     // 同じ expected_version=1 で再保存 → 409 CONFLICT
     let res = router
@@ -303,6 +319,48 @@ async fn web_blocked_commands_and_traversal_are_rejected() {
         res.headers().get(header::CONTENT_TYPE).unwrap(),
         "application/pdf"
     );
+    assert!(
+        res.headers().get(header::CONTENT_DISPOSITION).is_none(),
+        "プレビュー表示ではattachmentを付けないこと"
+    );
+
+    // スマホ向けの直接ダウンロードではattachmentとUTF-8ファイル名を返す。
+    let download_pdf = preview_dir.path().join("数学教材_解答.pdf");
+    std::fs::write(&download_pdf, b"%PDF-1.4\n%%EOF\n").unwrap();
+    let download_uri = format!(
+        "/api/files/build?path={}&download=1",
+        query_encode(&download_pdf.to_string_lossy())
+    );
+    let res = router
+        .clone()
+        .oneshot(
+            Request::get(download_uri)
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/pdf"
+    );
+    let disposition = res
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(disposition.starts_with("attachment;"));
+    assert!(disposition.contains("filename=\"kyozai.pdf\""));
+    assert!(disposition.contains(
+        "filename*=UTF-8''%E6%95%B0%E5%AD%A6%E6%95%99%E6%9D%90_%E8%A7%A3%E7%AD%94.pdf"
+    ));
+    assert_eq!(
+        res.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-store"
+    );
 
     // UNCはcanonicalize等でネットワークへ触れる前に拒否
     let res = router
@@ -335,6 +393,48 @@ async fn web_blocked_commands_and_traversal_are_rejected() {
     // Web向け設定取得にはローカルdata_dirを含めない
     let web_settings = dispatch(&state, "get_settings", json!({}), Origin::Web).unwrap();
     assert!(web_settings.get("data_dir").is_none());
+}
+
+#[test]
+fn ai_model_setting_is_validated_persisted_and_available_from_web() {
+    let (_dir, state) = make_state();
+
+    dispatch(
+        &state,
+        "codex_set_model",
+        json!({"model": "gpt-5.4-mini"}),
+        Origin::Web,
+    )
+    .expect("ブラウザから安全なモデル選択を保存できること");
+    assert_eq!(
+        kyozai_kobo_lib::codex::selected_model(&state).unwrap(),
+        Some("gpt-5.4-mini".into())
+    );
+
+    let invalid = dispatch(
+        &state,
+        "codex_set_model",
+        json!({"model": "gpt-5.4; unsafe"}),
+        Origin::Web,
+    );
+    assert!(invalid.is_err(), "不正なモデル名を拒否すること");
+    assert_eq!(
+        kyozai_kobo_lib::codex::selected_model(&state).unwrap(),
+        Some("gpt-5.4-mini".into()),
+        "不正入力で保存済み設定を変更しないこと"
+    );
+
+    dispatch(
+        &state,
+        "codex_set_model",
+        json!({"model": ""}),
+        Origin::Desktop,
+    )
+    .expect("空欄でCodexの既定モデルへ戻せること");
+    assert_eq!(
+        kyozai_kobo_lib::codex::selected_model(&state).unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -447,8 +547,9 @@ fn dispatch_emits_change_events() {
 #[test]
 fn ai_output_validation() {
     use kyozai_kobo_lib::ai::{
-        scan_explanation_structure, scan_latex_security, scan_solution_layout,
-        scan_solution_notation, validate_output,
+        scan_explanation_structure, scan_latex_security, scan_limit_formula_structure,
+        scan_solution_layout, scan_solution_notation, scan_tikz_monochrome, validate_output,
+        SOLUTION_FIXED_INSTRUCTIONS,
     };
 
     let valid = json!({
@@ -511,6 +612,50 @@ fn ai_output_validation() {
         .iter()
         .any(|warning| warning.code == "FIGURE_SIZE"));
 
+    let wide_equivalence = r#"\begin{aligned}
+C(x,y)\in R
+&\Longleftrightarrow
+\begin{gathered}
+\text{「点 }A(a,0),B(0,b)\text{ が条件を満たし，}\\
+\text{実数 }a,b\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow \frac{x^2}{16}+\frac{y^2}{4}=1
+\end{aligned}"#;
+    assert!(scan_solution_layout(wide_equivalence, "two_column")
+        .iter()
+        .any(|warning| warning.code == "TWO_COLUMN_EQUIVALENCE_WIDTH"));
+    assert!(!scan_solution_layout(wide_equivalence, "single_column")
+        .iter()
+        .any(|warning| warning.code == "TWO_COLUMN_EQUIVALENCE_WIDTH"));
+
+    let wrapped_equivalence = r#"\begin{aligned}
+&C(x,y)\in R\\
+&\Longleftrightarrow
+\begin{gathered}
+\text{「点 }A(a,0),B(0,b)\text{ が条件を満たし，}\\
+\text{実数 }a,b\text{ が存在する」}
+\end{gathered}\\
+&\Longleftrightarrow \frac{x^2}{16}+\frac{y^2}{4}=1
+\end{aligned}"#;
+    assert!(!scan_solution_layout(wrapped_equivalence, "two_column")
+        .iter()
+        .any(|warning| warning.code == "TWO_COLUMN_EQUIVALENCE_WIDTH"));
+
+    let monochrome_tikz = r#"\begin{tikzpicture}
+  \fill[gray!15] (0,0)--(1,0)--(0,1)--cycle;
+  \draw[thick,solid] (0,0)--(1,1);
+  \draw[thick,densely dashed] (0,1)--(1,0);
+\end{tikzpicture}"#;
+    assert!(scan_tikz_monochrome(monochrome_tikz).is_empty());
+    assert!(scan_solution_layout(monochrome_tikz, "two_column").is_empty());
+    let colored_tikz = monochrome_tikz.replace("thick,solid", "thick,red");
+    assert!(scan_tikz_monochrome(&colored_tikz)
+        .iter()
+        .any(|warning| warning.code == "TIKZ_COLOR_NOT_MONOCHROME"));
+    assert!(scan_solution_layout(&colored_tikz, "two_column")
+        .iter()
+        .any(|warning| warning.code == "TIKZ_COLOR_NOT_MONOCHROME"));
+
     let unexplained_notation = scan_solution_notation("$a\\mid b$, $\\max\\{a,b\\}$");
     assert_eq!(unexplained_notation.len(), 2);
     assert!(unexplained_notation
@@ -524,6 +669,26 @@ fn ai_output_validation() {
         "$a\\equiv b\\pmod m$は、$a,b$を$m$で割った余りが等しいことを表す。"
     )
     .is_empty());
+    for non_high_school_term in [
+        "この2次方程式は異なる2実根をもつ。",
+        "方程式の根は$x=1$である。",
+        "この方程式の2つの根を求める。",
+        "解の公式により重根をもつ。",
+        "根と係数の関係を用いる。",
+        "関数$f$の零点を求める。",
+    ] {
+        let warnings = scan_solution_notation(non_high_school_term);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "NON_HIGH_SCHOOL_SOLUTION_TERM" && warning.severity == "error"
+        }));
+    }
+    for standard_term in [
+        "この2次方程式は異なる2つの実数解をもつ。",
+        "解の公式と解と係数の関係を用いる。",
+        "平方根を求め、根号を外す根拠を示す。",
+    ] {
+        assert!(scan_solution_notation(standard_term).is_empty());
+    }
     let inverse_trig = scan_solution_notation("$y=\\arcsin x$");
     assert!(inverse_trig.iter().any(|warning| {
         warning.code == "OUT_OF_SCOPE_INVERSE_TRIG" && warning.severity == "error"
@@ -607,6 +772,32 @@ fn ai_output_validation() {
     assert!(scan_solution_notation(derivative_range_without_table)
         .iter()
         .any(|warning| warning.code == "MISSING_VARIATION_TABLE"));
+    let differentiated_piecewise_quadratic = r#"
+最大値を求めるため
+\[
+G(y)=\begin{cases}
+y^2+4y & (0\leqq y\leqq1)\\
+y^2-8y+12 & (1\leqq y\leqq2)
+\end{cases}
+\]
+とおく。$0\leqq y\leqq1$では$G'(y)=2y+4>0$であり、
+$1\leqq y\leqq2$では$G'(y)=2y-8<0$である。"#;
+    let differentiated_quadratic_warnings =
+        scan_solution_notation(differentiated_piecewise_quadratic);
+    assert!(differentiated_quadratic_warnings.iter().any(|warning| {
+        warning.code == "UNNECESSARY_QUADRATIC_DIFFERENTIATION"
+            && warning.severity == "error"
+    }));
+    assert!(differentiated_quadratic_warnings
+        .iter()
+        .all(|warning| warning.code != "MISSING_VARIATION_TABLE"));
+    let completed_square_quadratic = r#"
+最大値を求める。$0\leqq y\leqq1$では
+$y^2+4y=(y+2)^2-4$であり、軸$y=-2$は区間の外にあるから端点を比べる。
+$1\leqq y\leqq2$では$y^2-8y+12=(y-4)^2-4$であり、軸$y=4$は区間の外にあるから端点を比べる。"#;
+    assert!(scan_solution_notation(completed_square_quadratic)
+        .iter()
+        .all(|warning| warning.code != "UNNECESSARY_QUADRATIC_DIFFERENTIATION"));
     let incomplete_variation_table = r#"$f'(x)=x-1$の正負から値域を求める。
 \[\begin{array}{c|ccc}x&0&1&2\\ \hline f'(x)&-&0&+\end{array}\]"#;
     assert!(scan_solution_notation(incomplete_variation_table)
@@ -639,6 +830,360 @@ fn ai_output_validation() {
         warning.code == "MISSING_STANDARD_METHOD" && warning.severity == "error"
     }));
     assert!(scan_solution_notation("$x^2+1=0$").is_empty());
+
+    let piecewise_differentiable_problem = r#"関数
+\[
+f(x)=
+\begin{cases}
+x^3+\alpha x & (x\geqq2)\\
+\beta x^2-\alpha x & (x<2)
+\end{cases}
+\]
+が$x=2$で微分可能となるように定数$\alpha,\beta$を定めよ。"#;
+    let omitted_limit_answer = r#"微分可能であるためには連続でなければならないので、左右の値から
+\[
+4\beta-2\alpha=8+2\alpha
+\]
+また、左右の微分係数が等しいことから
+\[
+4\beta-\alpha=12+\alpha
+\]"#;
+    let omitted_limit_warnings =
+        scan_limit_formula_structure(piecewise_differentiable_problem, omitted_limit_answer);
+    assert!(omitted_limit_warnings
+        .iter()
+        .any(|warning| warning.code == "ONE_SIDED_LIMIT_FORMULA_MISSING"));
+    assert!(omitted_limit_warnings.iter().any(|warning| {
+        warning.code == "ONE_SIDED_DERIVATIVE_LIMIT_FORMULA_MISSING"
+    }));
+
+    let explicit_limit_answer = r#"連続であるための条件は
+\[
+\lim_{x\to2-0}f(x)=4\beta-2\alpha,
+\qquad
+f(2)=\lim_{x\to2+0}f(x)=8+2\alpha
+\]
+より、$4\beta-2\alpha=8+2\alpha$である。また、
+\[
+\lim_{x\to2-0}f'(x)=4\beta-\alpha,
+\qquad
+\lim_{x\to2+0}f'(x)=12+\alpha
+\]
+であるから、微分可能であるための条件は$4\beta-\alpha=12+\alpha$である。"#;
+    assert!(scan_limit_formula_structure(
+        piecewise_differentiable_problem,
+        explicit_limit_answer
+    )
+    .is_empty());
+    assert!(scan_limit_formula_structure(
+        r#"$n\to\infty$のときの数列の極限を求めよ。"#,
+        "極限値は$2$である。"
+    )
+    .iter()
+    .any(|warning| warning.code == "LIMIT_FORMULA_MISSING"));
+    assert!(scan_limit_formula_structure(
+        r#"$n\to\infty$のときの数列の極限を求めよ。"#,
+        r#"$\lim_{n\to\infty}a_n=2$である。"#
+    )
+    .is_empty());
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\lim_{h\\to-0}"));
+}
+
+#[test]
+fn constrained_two_variable_extremum_prompt_and_structure_regression() {
+    use kyozai_kobo_lib::ai::{
+        is_constrained_two_variable_extremum_problem,
+        scan_constrained_two_variable_extremum_structure,
+        scan_tikz_monochrome,
+        should_attach_constrained_two_variable_extremum_instructions,
+        CONSTRAINED_TWO_VARIABLE_EXTREMUM_INSTRUCTIONS,
+    };
+
+    let circle_problem =
+        "$x^2+y^2=1$のとき、$4x+3y$の最大値と最小値を求めよ。";
+    let triangle_problem = r#"$x,y$が$x\geqq0$, $y\geqq0$, $x+y\leqq1$を満たすとき、$x^2+y^2$の最大値・最小値を求めよ。"#;
+    assert!(is_constrained_two_variable_extremum_problem(circle_problem));
+    assert!(is_constrained_two_variable_extremum_problem(triangle_problem));
+    assert!(!is_constrained_two_variable_extremum_problem(
+        r#"$0\leqq x\leqq1$のとき、関数$f(x)=x^2-x$の最大値を求めよ。"#
+    ));
+    assert!(!is_constrained_two_variable_extremum_problem(
+        "$x+y=1$を満たす点の軌跡を求めよ。"
+    ));
+    assert!(should_attach_constrained_two_variable_extremum_instructions(
+        "text",
+        circle_problem
+    ));
+    assert!(!should_attach_constrained_two_variable_extremum_instructions(
+        "text",
+        "関数$f(x)$の最大値を求めよ。"
+    ));
+    assert!(should_attach_constrained_two_variable_extremum_instructions(
+        "image", ""
+    ));
+
+    for required in [
+        "F(x,y)=k",
+        "共有点をもつ",
+        "条件領域と共有点をもつ限界の位置",
+        "端点、頂点、境界同士の交点",
+        "TikZ",
+        "偏微分、勾配、ラグランジュ",
+        "問題が値域を求めていない限り",
+        "この2次方程式は重解をもつ",
+        "候補が複数残る場合だけ",
+        "【図から極値位置が明らかな場合のfew-shot】",
+        "\\clipを使用してはいけません",
+        "極値計算に不要な中間位置",
+        "すべてのnodeが切れず",
+        "帰着した1変数関数が二次関数なら微分してはいけません",
+        "【二次関数へ帰着する別解のfew-shot】",
+        "平方完成、軸と区間の位置関係、端点・継ぎ目の比較",
+    ] {
+        assert!(
+            CONSTRAINED_TWO_VARIABLE_EXTREMUM_INSTRUCTIONS.contains(required),
+            "専用指示に不足: {required}"
+        );
+    }
+
+    let geometric_answer = r#"
+制約条件は単位円である。
+求める式を$k$とおくと
+\[
+4x+3y=k
+\]
+は直線を表す。$k$を増加させると、この直線は右上へ平行移動する。
+\begin{tikzpicture}[scale=0.8]
+  \draw[->] (-1.5,0)--(1.5,0) node[right] {$x$};
+  \draw[->] (0,-1.5)--(0,1.5) node[above] {$y$};
+  \draw (0,0) circle (1);
+  \draw[dashed] (-1.3,-0.23)--(0.4,2.03);
+\end{tikzpicture}
+$k$が目的式のとり得る値であることは、直線$4x+3y=k$と単位円が共有点をもつことと同値である。
+図より、直線と円が最初に共有点をもつ限界では$k=-5$、最後に共有点をもつ限界では$k=5$である。
+したがって、最大値は$5$で、そのとき$(x,y)=(4/5,3/5)$、最小値は$-5$で、そのとき$(x,y)=(-4/5,-3/5)$である。
+"#;
+    let warnings =
+        scan_constrained_two_variable_extremum_structure(circle_problem, geometric_answer);
+    assert!(
+        warnings.is_empty(),
+        "正しい図形移動法に警告: {:?}",
+        warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+
+    let parabola_problem = r#"3つの不等式$x+2y\geqq0$、$x-y\leqq0$、$x-4y+6\geqq0$を満たす$x,y$に対して、$y^2-2x$の最大値と最小値を求めよ。また、そのときの$x,y$の値を求めよ。"#;
+    let parabola_answer = r#"
+条件領域は、頂点$A(0,0)$、$B(-2,1)$、$C(2,2)$の三角形である。
+求める式を$k$と置くと
+\[
+y^2-2x=k
+\]
+であり、$x=\dfrac12y^2-\dfrac{k}{2}$より、これは右向きに開く放物線である。
+$k$を増加させると、放物線は左へ平行移動する。
+\noindent\resizebox{0.70\linewidth}{!}{%
+\begin{tikzpicture}[x=1.05cm,y=1.05cm,>=stealth,font=\small]
+  \fill[gray!15] (0,0)--(-2,1)--(2,2)--cycle;
+  \draw[->] (-3.15,0)--(3.15,0) node[below right] {$x$};
+  \draw[->] (0,-0.35)--(0,2.70) node[above left] {$y$};
+  \draw[thick] (0,0)--(-2,1)--(2,2)--cycle;
+  \draw[thick,solid,domain=-0.1:2.1,samples=70,smooth,variable=\t]
+    plot ({0.5*\t*\t+0.5},{\t});
+  \draw[thick,densely dashed,domain=-0.1:2.2,samples=70,smooth,variable=\t]
+    plot ({0.5*\t*\t-2.5},{\t});
+  \fill (0,0) circle (1.5pt) node[below right] {$A$};
+  \fill (-2,1) circle (1.5pt) node[above left] {$B$};
+  \fill (2,2) circle (1.5pt) node[above right] {$C$};
+  \fill (1,1) circle (1.5pt) node[below right] {$(1,1)$};
+  \node[right] at (2.45,1.45) {$k=-1$};
+  \node[left] at (-2.55,0.55) {$k=5$};
+  \draw[->] (2.75,2.48)--(1.55,2.48)
+    node[midway,above] {$k\text{ の増加}$};
+\end{tikzpicture}%
+}\par\smallskip
+図より、放物線が領域と初めて共有点をもつのは、辺$AC$を含む直線$x=y$に接するときである。連立すると
+\[
+y^2-2y-k=0
+\]
+を得る。接するとき、この2次方程式は重解をもつから
+\[
+D=4+4k=0
+\]
+より、$k=-1$である。このとき$x=1$、$y=1$である。
+また図より、放物線が領域と最後に共有点をもつのは頂点$B(-2,1)$を通るときであるから
+\[
+k=1^2-2(-2)=5
+\]
+である。
+したがって、最大値は$5$で、そのとき$(x,y)=(-2,1)$である。最小値は$-1$で、そのとき$(x,y)=(1,1)$である。
+"#;
+    let parabola_warnings =
+        scan_constrained_two_variable_extremum_structure(parabola_problem, parabola_answer);
+    assert!(
+        parabola_warnings.is_empty(),
+        "放物線を使う正しい図形移動法に警告: {:?}",
+        parabola_warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    assert!(!parabola_answer.contains("\\clip"));
+    assert!(scan_tikz_monochrome(parabola_answer).is_empty());
+    assert!(!parabola_answer.contains("red"));
+    assert!(!parabola_answer.contains("blue"));
+    let colored_figure_answer = parabola_answer.replacen("thick,solid", "thick,red", 1);
+    assert!(scan_tikz_monochrome(&colored_figure_answer)
+        .iter()
+        .any(|warning| warning.code == "TIKZ_COLOR_NOT_MONOCHROME"));
+    let clipped_figure_answer = parabola_answer.replacen(
+        "\\begin{tikzpicture}[x=1.05cm,y=1.05cm,>=stealth,font=\\small]",
+        "\\begin{tikzpicture}[x=1.05cm,y=1.05cm,>=stealth,font=\\small]\n  \\clip (-3,-0.4) rectangle (3,2.6);",
+        1,
+    );
+    assert!(
+        scan_constrained_two_variable_extremum_structure(
+            parabola_problem,
+            &clipped_figure_answer
+        )
+        .iter()
+        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_TIKZ_CLIPPING")
+    );
+    let excess_level_curves = parabola_answer.replacen(
+        "\\end{tikzpicture}",
+        "  \\node at (0.4,2.2) {$k=2$};\n\\end{tikzpicture}",
+        1,
+    );
+    assert!(
+        scan_constrained_two_variable_extremum_structure(
+            parabola_problem,
+            &excess_level_curves
+        )
+        .iter()
+        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_EXCESS_LEVEL_CURVES")
+    );
+    for unnecessary in [
+        r#"y^2-2x\geqq-1"#,
+        r#"k\leqq5"#,
+        r#"-1\leqq k\leqq5"#,
+        "共有点をもつ範囲",
+    ] {
+        assert!(
+            !parabola_answer.contains(unnecessary),
+            "図から明らかな極値に不要な再証明を含めないこと: {unnecessary}"
+        );
+    }
+    assert!(parabola_answer.contains("D=4+4k=0"));
+    assert!(!parabola_answer.contains("\\Delta"));
+
+    let unnecessary_range_answer = format!(
+        "{parabola_answer}\nさらに、この放物線と領域が共有点をもつ$k$の範囲は$-1\\leqq k\\leqq5$である。"
+    );
+    assert!(
+        scan_constrained_two_variable_extremum_structure(
+            parabola_problem,
+            &unnecessary_range_answer
+        )
+        .iter()
+        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_UNNECESSARY_VALUE_RANGE")
+    );
+    let value_range_problem = format!(
+        "{} また、$y^2-2x$のとり得る値の範囲も求めよ。",
+        parabola_problem
+    );
+    assert!(
+        scan_constrained_two_variable_extremum_structure(
+            &value_range_problem,
+            &unnecessary_range_answer
+        )
+        .iter()
+        .all(|warning| warning.code != "CONSTRAINED_EXTREMUM_UNNECESSARY_VALUE_RANGE")
+    );
+
+    let redundant_global_proof = format!(
+        "{parabola_answer}\nさらに、領域全体で$y^2-2x\\geqq-1$かつ$y^2-2x\\leqq5$を示す。"
+    );
+    assert!(
+        scan_constrained_two_variable_extremum_structure(
+            parabola_problem,
+            &redundant_global_proof
+        )
+        .iter()
+        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_REDUNDANT_GLOBAL_PROOF")
+    );
+
+    let comparison_needed_answer = r#"
+求める式を$k$と置くと$xy=k$であり、これは双曲線を表す。$k$の変化に伴って双曲線の形と位置が変化する。
+\begin{tikzpicture}
+  \draw[->] (-2,0)--(2,0);
+  \draw[->] (0,-2)--(0,2);
+\end{tikzpicture}
+$xy=k$と条件領域が共有点をもつ限界の候補が複数残るため、各接点と頂点を求める。候補をすべて目的式へ代入して比較し、最大値と最小値を定める。
+"#;
+    let comparison_problem =
+        "$x,y$が複数の不等式を満たす条件のもとで、$xy$の最大値と最小値を求めよ。";
+    assert!(scan_constrained_two_variable_extremum_structure(
+        comparison_problem,
+        comparison_needed_answer
+    )
+    .is_empty());
+    let missing_comparison = comparison_needed_answer.replace(
+        "候補をすべて目的式へ代入して比較し、",
+        "候補の一部だけを調べ、",
+    );
+    assert!(
+        scan_constrained_two_variable_extremum_structure(
+            comparison_problem,
+            &missing_comparison
+        )
+        .iter()
+        .any(|warning| {
+            warning.code == "CONSTRAINED_EXTREMUM_CANDIDATE_COMPARISON_MISSING"
+        })
+    );
+
+    let few_shot_output = CONSTRAINED_TWO_VARIABLE_EXTREMUM_INSTRUCTIONS
+        .split("【few-shot出力例】")
+        .nth(1)
+        .and_then(|text| text.split("【few-shot出力例ここまで】").next())
+        .expect("最大・最小用few-shotの出力例が存在すること");
+    for forbidden in [
+        r#"y^2-2x\geqq-1"#,
+        r#"k\leqq5"#,
+        r#"-1\leqq k\leqq5"#,
+    ] {
+        assert!(!few_shot_output.contains(forbidden));
+    }
+
+    let direct_answer = r#"$y$を固定して計算すると最大値は$5$、最小値は$-5$である。"#;
+    let direct_warnings =
+        scan_constrained_two_variable_extremum_structure(circle_problem, direct_answer);
+    for expected_code in [
+        "CONSTRAINED_EXTREMUM_LEVEL_SET_MISSING",
+        "CONSTRAINED_EXTREMUM_SHARED_POINT_MISSING",
+        "CONSTRAINED_EXTREMUM_MOVEMENT_MISSING",
+        "CONSTRAINED_EXTREMUM_DIAGRAM_MISSING",
+    ] {
+        assert!(
+            direct_warnings
+                .iter()
+                .any(|warning| warning.code == expected_code),
+            "検出できない構造違反: {expected_code}"
+        );
+    }
+
+    let out_of_scope = format!("{geometric_answer}\n偏微分と勾配を用いる。");
+    assert!(
+        scan_constrained_two_variable_extremum_structure(circle_problem, &out_of_scope)
+            .iter()
+            .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_OUT_OF_SCOPE_METHOD")
+    );
+    assert!(scan_constrained_two_variable_extremum_structure(
+        "関数$f(x)$の最大値を求めよ。",
+        direct_answer
+    )
+    .is_empty());
 }
 
 #[test]
@@ -741,6 +1286,37 @@ y&\geqq0
     ] {
         assert_eq!(trajectory_target_point_name(problem), Some(expected));
     }
+
+    // 問題文で P(p,q) と定義済みなら、検査側も p,q を保持して受理する。
+    let named_coordinate_problem = r#"点$P(p,q)$から楕円$\dfrac{x^2}{4}+y^2=1$に引いた2本の接線が直交するとき、点$P$の軌跡を求めよ。"#;
+    let named_coordinate_answer = r#"求める軌跡を$R$とする。
+\[
+\begin{aligned}
+P(p,q)\in R
+&\Longleftrightarrow
+\text{「問題文の条件」}\\
+&\Longleftrightarrow
+p^2+q^2=5
+\end{aligned}
+\]
+"#;
+    let named_coordinate_warnings =
+        scan_trajectory_solution_structure(named_coordinate_problem, named_coordinate_answer);
+    assert!(
+        !named_coordinate_warnings.iter().any(|warning| matches!(
+            warning.code.as_str(),
+            "TRAJECTORY_POINT_NAME" | "TRAJECTORY_MISSING_COORDINATE_SETUP"
+        )),
+        "問題文どおりのP(p,q)を誤検出: {:?}",
+        named_coordinate_warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    let renamed_coordinates = named_coordinate_answer.replacen("P(p,q)\\in R", "P(x,y)\\in R", 1);
+    assert!(scan_trajectory_solution_structure(named_coordinate_problem, &renamed_coordinates)
+        .iter()
+        .any(|warning| warning.code == "TRAJECTORY_POINT_NAME"));
 
     let snapshot = include_str!("fixtures/trajectory_hyperbola_midpoint.tex");
     let warnings = scan_trajectory_solution_structure(hyperbola_problem, snapshot);
@@ -1221,6 +1797,83 @@ M(x,y)\in R
 }
 
 #[test]
+fn explanation_must_follow_reference_answer_structure() {
+    use kyozai_kobo_lib::ai::scan_explanation_reference_alignment;
+
+    let input = r#"【問題文】
+双曲線$x^2-y^2=2$と直線$y=3x+k$が異なる2点$A,B$で交わるとき、線分$AB$の中点$M$の軌跡を求めよ。
+
+【参照する解答】
+求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。
+\[
+\begin{aligned}
+M(x,y)\in R
+&\Longleftrightarrow \text{問題文の条件を満たす実数 }k\text{ が存在する}\\
+&\Longleftrightarrow
+\left\{
+\begin{aligned}
+|k|&>4\\
+x&=-\frac{3k}{8}\\
+y&=-\frac{k}{8}
+\end{aligned}
+\right.\\
+&\Longleftrightarrow
+\left\{
+\begin{aligned}
+x&=3y\\
+|x|&>\frac32
+\end{aligned}
+\right.
+\end{aligned}
+\]
+したがって、求める軌跡は直線$x=3y$上で$|x|>\frac32$を満たす部分である。"#;
+
+    let aligned = r#"\textbf{【着眼点】}\par
+参照する解答では、判別式と解と係数の関係で中点を$k$によって表し、その存在条件を消去している。
+\textbf{【定石】}\par
+軌跡は、求める点がその集合に属する条件から必要十分条件を保って媒介変数を消去する。
+\[
+\begin{aligned}
+M(x,y)\in R
+&\Longleftrightarrow \text{問題文の条件を満たす実数 }k\text{ が存在する}\\
+&\Longleftrightarrow
+\left\{\begin{aligned}|k|&>4\\x&=-\frac{3k}{8}\\y&=-\frac{k}{8}\end{aligned}\right.\\
+&\Longleftrightarrow
+\left\{\begin{aligned}x&=3y\\|x|&>\frac32\end{aligned}\right.
+\end{aligned}
+\]
+第1の同値変形では交点が異なる2点となる条件と中点座標をまとめ、第2の同値変形で$k$を消去している。"#;
+    assert!(scan_explanation_reference_alignment(input, aligned).is_empty());
+
+    let ordinary_caution = format!(
+        "{}\n\\textbf{{確認}}\\par\n内分公式の係数の順序を逆にしないことが重要である。",
+        aligned
+    );
+    assert!(
+        scan_explanation_reference_alignment(input, &ordinary_caution).is_empty(),
+        "一般的な注意の『逆にしない』を逆向きの証明と誤判定しないこと"
+    );
+
+    let drifted = r#"\textbf{【定石】}\par
+通常の一方向の計算で$x=3y$と$|x|>\frac32$を得る。
+\textbf{【逆向きの確認】}\par
+逆に、この条件を満たす点をとり、十分性を確認する。
+以上より、$M(x,y)\in R\Longleftrightarrow x=3y,\ |x|>\frac32$である。
+端点は判別式が0となるので軌跡に含まれない。"#;
+    let warnings = scan_explanation_reference_alignment(input, drifted);
+    for code in [
+        "EXPLANATION_REFERENCE_PROOF_DRIFT",
+        "EXPLANATION_REFERENCE_EQUIVALENCE_LOST",
+        "EXPLANATION_REFERENCE_ADDED_ENDPOINT_CHECK",
+    ] {
+        assert!(
+            warnings.iter().any(|warning| warning.code == code),
+            "参照解答からの逸脱を検出すること: {code}"
+        );
+    }
+}
+
+#[test]
 fn topic_method_guide_structure_regression() {
     use kyozai_kobo_lib::ai::scan_topic_method_guide_structure;
 
@@ -1265,11 +1918,17 @@ $0\leqq x\leqq2$での値を調べる。
 #[test]
 fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     use kyozai_kobo_lib::ai::{
-        output_schema, validate_output, BEGINNER_SOLUTION_INSTRUCTIONS,
+        output_schema, source_revision_prompt, validate_output, BEGINNER_SOLUTION_INSTRUCTIONS,
         BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS, FIXED_INSTRUCTIONS,
-        SOLUTION_FIXED_INSTRUCTIONS, TOPIC_METHOD_GUIDE_INSTRUCTIONS,
-        SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS, SOLUTION_REFERENCE_PROFILE,
+        DUAL_PROBLEM_LAYOUT_INSTRUCTIONS,
+        PROJECT_REVIEW_FIXED_INSTRUCTIONS,
+        SOLUTION_FIXED_INSTRUCTIONS, SOURCE_REVISION_FIXED_INSTRUCTIONS,
+        TIKZ_GENERATION_INSTRUCTIONS,
+        TOPIC_METHOD_GUIDE_INSTRUCTIONS,
+        SINGLE_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS, SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
+        SOLUTION_REFERENCE_PROFILE,
         TRAJECTORY_REGION_INSTRUCTIONS, TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
+        TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS,
     };
 
     let valid = json!({
@@ -1283,13 +1942,14 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
         "segments": [],
         "suggestedInsertTarget": "problem_body",
         "problems": [
-            {"title": "二次関数", "statementLatex": "$y=x^2$について答えよ。", "sourceImageIndexes": [1]},
-            {"title": "確率", "statementLatex": "さいころを2回投げる。", "sourceImageIndexes": [1, 2]}
+            {"title": "二次関数", "statementLatex": "$y=x^2$について答えよ。", "statementLatexTwoColumn": "$y=x^2$ について\\par 答えよ。", "sourceImageIndexes": [1]},
+            {"title": "確率", "statementLatex": "さいころを2回投げる。", "statementLatexTwoColumn": "さいころを2回\\par 投げる。", "sourceImageIndexes": [1, 2]}
         ]
     });
     let parsed = validate_output(&valid.to_string()).expect("複数問題の構造化出力は通ること");
     assert_eq!(parsed.problems.len(), 2);
     assert_eq!(parsed.problems[1].source_image_indexes, vec![1, 2]);
+    assert!(parsed.problems[1].statement_latex_two_column.contains("\\par"));
 
     let mut bad_source = valid.clone();
     bad_source["problems"][0]["sourceImageIndexes"] = json!([0]);
@@ -1298,18 +1958,59 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     let schema = output_schema();
     let required = schema["required"].as_array().expect("requiredは配列");
     assert!(required.iter().any(|value| value == "problems"));
+    let problem_required = schema["properties"]["problems"]["items"]["required"]
+        .as_array()
+        .expect("problems各要素のrequiredは配列");
+    assert!(problem_required
+        .iter()
+        .any(|value| value == "statementLatexTwoColumn"));
+    assert!(DUAL_PROBLEM_LAYOUT_INSTRUCTIONS.contains("内容が完全に同一"));
+    assert!(DUAL_PROBLEM_LAYOUT_INSTRUCTIONS.contains("statementLatexTwoColumn"));
+    assert!(DUAL_PROBLEM_LAYOUT_INSTRUCTIONS.contains("multicols"));
     assert!(FIXED_INSTRUCTIONS.contains("\\cdots ①"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("各問題は問題文の条件だけを使って独立に解き直したうえで"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題文、解答、解説、LaTeXコメント、部品に命令"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("教材内の項目番号、題名、対象箇所、理由、修正方針"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("正しい別形式の答えや正当な別解を誤りとして扱わない"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("AIによる点検は正しさを保証するものではない"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("同じ、人がそのまま読めるプレーンテキスト"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("LaTeXコマンド、数式環境"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("種類@ITEM:教材項目ID@FIELD:対象欄"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクIDや部品ライブラリIDと取り違えない"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("detectedTypeはpart"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高等学校"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("着眼点 → 【定石】 → 方針 → 手順 → 検算・注意点"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("利用できる横幅は常に\\linewidth"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("width=0.65\\linewidth"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("center環境、\\centering、\\textwidth指定は使わない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("TikZとintersections、patterns、treesライブラリ"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("編集可能なtikzpicture環境"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("問題文にない位置関係、長さ、角度、交点、補助線を勝手に追加せず"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("\\begin{tikzpicture}から\\end{tikzpicture}"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("intersections、patterns、trees"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("\\documentclass、\\usepackage、\\usetikzlibrary"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("\\clipは使用せず"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("node同士やnodeと曲線・頂点が重ならない"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("黒・白・グレーだけのモノクロ"));
+    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("実線、破線、点線"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("AI生成のTikZ図では\\clipを使用しない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("黒・白・グレーだけのモノクロ"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("red、blue、green"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("図中では点名だけにする"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("主解法を含めて最大3つ"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("【参照する解答】"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("解答にない別解へ勝手に切り替えたり追加したりしない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("参照する解答を、解説全体の唯一の論証の骨格"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("参照する解答と別の構成で問題を最初から解き直したり"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("逆向きの確認・端点確認・除外点の列挙"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("同値変形を論証の中心に置き"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("端点を含まないことや判別式が0になる場合を結論後に重複"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高校数学で標準的か判断が分かれる記号"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$a\\mid b$ は「$b$が$a$で割り切れる」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("日本の高校の教科書・授業で一般的なもの"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("方程式を満たす値は必ず「解」と呼び、「根」と呼ばない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("「異なる2実根」ではなく「異なる2つの実数解」"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("「平方根」「立方根」「$n$乗根」「根号」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解答の方針」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解説内容の指示」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("解説する箇所、説明の詳しさ、観点、強調点、つまずきやすい点"));
@@ -1354,7 +2055,8 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("\\left\\{"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("存在文は連立条件の下の行へ置き"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("各条件の行末にもコンマを付けない"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("異なる2実根をもつ$\\Longleftrightarrow D>0$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("異なる2つの実数解をもつ$\\Longleftrightarrow D>0$"));
+    assert!(!TRAJECTORY_REGION_INSTRUCTIONS.contains("異なる2実根"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("結論後に「すなわち」"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【動く線分・図形が通過する領域】"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
@@ -1509,6 +2211,15 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("下の式$\\leqq$対象の式$\\leqq$上の式"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("別々の不等式へ分けず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("関数を微分して増減、極値、最大・最小"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
+        "1変数の二次関数の最大・最小、値域、増減を調べるために微分してはいけません"
+    ));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
+        "平方完成して軸と頂点を求め、軸が定義域に含まれるかを確認"
+    ));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
+        "区分的な二次関数でも、各式を平方完成し、軸と各区間の位置関係"
+    ));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("導関数の符号変化と結論の対応が見やすくなるときに増減表"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
         "1変数関数の値域または最大・最小を導関数の正負と符号変化から求める場合"
@@ -1525,8 +2236,18 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("増減表を加えても理解が改善しない場合は無理に入れない"));
     assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("二段組の片方の列"));
     assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("各行が単独で列幅に収まる"));
+    assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("所属式を1行目へ単独"));
+    assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("&\\Longleftrightarrow"));
     assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("\\linewidthの横幅を活かし"));
     assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("超えそうな場合"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("問題文は二段組の片方の狭い列"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("問題の条件、数値、記号、点名、小問、選択肢"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("multicols、twocolumn、columns環境を追加してはいけません"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("各行を単独で\\linewidth内"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("原稿画像の改行が印刷上の都合"));
+    assert!(SINGLE_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("一段組の広い本文"));
+    assert!(SINGLE_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("横幅を活かして"));
+    assert!(SINGLE_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("場合だけ、等号、不等号、演算子"));
     assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("数学が苦手な高校生"));
     assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("基本事項は省略しない"));
     assert!(BEGINNER_SOLUTION_INSTRUCTIONS.contains("非自明な変形を一段ずつ"));
@@ -1547,6 +2268,46 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("【よくある誤り】"));
     assert!(TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("detectedTypeはpart"));
     assert!(BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS.contains("数学が苦手な高校生"));
+    assert!(SOURCE_REVISION_FIXED_INSTRUCTIONS.contains("指定されていない文章、数値、条件"));
+    assert!(SOURCE_REVISION_FIXED_INSTRUCTIONS.contains("修正後の対象ソースだけ"));
+    assert!(SOURCE_REVISION_FIXED_INSTRUCTIONS.contains("参考情報として示された問題文・解答・解説"));
+    let revision_prompt = source_revision_prompt(
+        "problem_answer",
+        "式①から式②への変形を1行補い、ほかは維持する",
+    )
+    .expect("解答ソースの修正プロンプトを作成できること");
+    assert!(revision_prompt.contains("修正対象は解答です"));
+    assert!(revision_prompt.contains("指定されていない箇所は変更しない"));
+    assert!(revision_prompt.contains("detectedTypeはanswer"));
+    assert!(revision_prompt.contains("suggestedInsertTargetはanswer"));
+    assert!(source_revision_prompt("unknown", "誤字を直す").is_err());
+    assert!(source_revision_prompt("part", "   ").is_err());
+}
+
+#[test]
+fn project_review_accepts_a_full_material_sized_text_input() {
+    use kyozai_kobo_lib::ai::max_input_text_chars;
+
+    assert_eq!(max_input_text_chars("project_review"), 200_000);
+    assert_eq!(max_input_text_chars("revise_source"), 60_000);
+    assert_eq!(max_input_text_chars("generate_answer"), 20_000);
+}
+
+#[test]
+fn part_preview_document_reflects_single_and_two_column_layouts() {
+    use kyozai_kobo_lib::commands::latex::build_part_preview_doc;
+
+    let template =
+        "\\documentclass{ujarticle}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
+    let single = build_part_preview_doc(template, "$x^2+y^2=1$", "single_column");
+    assert!(single.contains("$x^2+y^2=1$"));
+    assert!(!single.contains("\\begin{multicols}{2}"));
+
+    let two_column = build_part_preview_doc(template, "$x^2+y^2=1$", "two_column");
+    assert!(two_column.contains("\\usepackage{multicol}"));
+    assert!(two_column.contains("\\begin{multicols}{2}"));
+    assert!(two_column.contains("\\setlength{\\columnseprule}{0.4pt}"));
+    assert!(two_column.contains("\\end{multicols}"));
 }
 
 #[test]
@@ -1622,6 +2383,60 @@ fn ai_generation_guidance_has_a_bounded_length() {
 }
 
 #[test]
+fn ai_source_revision_requires_a_valid_target_and_instruction() {
+    use kyozai_kobo_lib::ai::{create_job, CreateJobPayload};
+
+    let (_dir, state) = make_state();
+    let payload = |source_type: &str, options: Value| CreateJobPayload {
+        source_type: source_type.into(),
+        conversion_mode: Some("revise_source".into()),
+        options: Some(options),
+        input_text: Some("既存のLaTeXソース".into()),
+        input_names: vec![],
+        target_entity_type: Some("part".into()),
+        target_entity_id: Some(1),
+        target_field: Some("latex_source".into()),
+    };
+
+    let missing_instruction = create_job(
+        &state,
+        payload("text", json!({"revisionTarget": "part", "revisionGuidance": ""})),
+    )
+    .expect_err("空の修正指示は拒否すること");
+    assert!(missing_instruction.contains("修正指示"));
+
+    let invalid_target = create_job(
+        &state,
+        payload(
+            "text",
+            json!({"revisionTarget": "template", "revisionGuidance": "誤字を直す"}),
+        ),
+    )
+    .expect_err("未対応の修正対象は拒否すること");
+    assert!(invalid_target.contains("問題文・解答・解説・部品"));
+
+    let image_source = create_job(
+        &state,
+        payload(
+            "image",
+            json!({"revisionTarget": "part", "revisionGuidance": "誤字を直す"}),
+        ),
+    )
+    .expect_err("画像をソース修正入力として扱わないこと");
+    assert!(image_source.contains("テキスト入力"));
+
+    let too_long = create_job(
+        &state,
+        payload(
+            "text",
+            json!({"revisionTarget": "part", "revisionGuidance": "あ".repeat(1001)}),
+        ),
+    )
+    .expect_err("長すぎる修正指示は拒否すること");
+    assert!(too_long.contains("最大1,000文字"));
+}
+
+#[test]
 fn graph_ai_output_validation_rejects_commands_and_unknown_fields() {
     use kyozai_kobo_lib::ai::validate_graph_output;
     let valid = json!({
@@ -1667,7 +2482,7 @@ fn schema_migration_sets_user_version() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 7);
     for table in ["projects", "templates"] {
         let count: i64 = conn
             .query_row(
@@ -1678,6 +2493,159 @@ fn schema_migration_sets_user_version() {
             .unwrap();
         assert_eq!(count, 1, "{} must have an optimistic-lock version", table);
     }
+    for table in ["parts", "part_versions"] {
+        let count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='unit_id'", table),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "{} must have a unit classification", table);
+    }
+    let problem_layout_column: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('project_settings') WHERE name='problem_two_column'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(problem_layout_column, 1);
+    for (table, column) in [
+        ("problems", "statement_latex_two_column"),
+        ("problem_versions", "statement_latex_two_column"),
+        ("project_items", "snap_statement_two_column"),
+    ] {
+        let count: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name=?1",
+                    table
+                ),
+                [column],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "{table}.{column} must store the two-column form");
+    }
+}
+
+#[test]
+fn schema_migration_from_v4_adds_part_unit_before_creating_its_index() {
+    let dir = tempdir::TempDir::new("kyozai-v4-migration-test").unwrap();
+    let db_path = dir.path().join("kyozai-kobo.db");
+    {
+        let legacy = rusqlite::Connection::open(&db_path).unwrap();
+        let legacy_schema = kyozai_kobo_lib::db::SCHEMA
+            .replace(
+                "    unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,\n",
+                "",
+            )
+            .replace(
+                "CREATE INDEX IF NOT EXISTS idx_parts_unit ON parts(unit_id);\n",
+                "",
+            );
+        legacy.execute_batch(&legacy_schema).unwrap();
+        legacy.execute_batch("PRAGMA user_version=4;").unwrap();
+    }
+
+    let migrated = kyozai_kobo_lib::db::open_db(dir.path()).unwrap();
+    let version: i64 = migrated
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 7);
+
+    for table in ["parts", "part_versions"] {
+        let count: i64 = migrated
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='unit_id'",
+                    table
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "{table}.unit_id must be added during migration");
+    }
+
+    let index_count: i64 = migrated
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_parts_unit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_count, 1);
+}
+
+#[test]
+fn schema_migration_from_v6_backfills_both_problem_statement_layouts() {
+    let dir = tempdir::TempDir::new("kyozai-v6-layout-migration-test").unwrap();
+    let db_path = dir.path().join("kyozai-kobo.db");
+    {
+        let legacy = rusqlite::Connection::open(&db_path).unwrap();
+        let legacy_schema = kyozai_kobo_lib::db::SCHEMA
+            .replace(
+                "    statement_latex_two_column TEXT NOT NULL DEFAULT '',\n",
+                "",
+            )
+            .replace(
+                "    snap_statement_two_column TEXT NOT NULL DEFAULT '',\n",
+                "",
+            );
+        legacy.execute_batch(&legacy_schema).unwrap();
+        legacy
+            .execute_batch(
+                "INSERT INTO subjects (id,name) VALUES (1,'数学');
+                 INSERT INTO fields (id,subject_id,name) VALUES (1,1,'数学I');
+                 INSERT INTO units (id,field_id,name) VALUES (1,1,'二次関数');
+                 INSERT INTO problems
+                   (id,unit_id,title,statement_latex,created_at,updated_at)
+                   VALUES (1,1,'旧問題','旧問題文','2026-01-01','2026-01-01');
+                 INSERT INTO problem_versions
+                   (problem_id,title,statement_latex,saved_at)
+                   VALUES (1,'旧問題','旧履歴問題文','2026-01-01');
+                 INSERT INTO projects
+                   (id,name,created_at,updated_at)
+                   VALUES (1,'旧教材','2026-01-01','2026-01-01');
+                 INSERT INTO project_items
+                   (project_id,item_type,problem_id,snap_title,snap_statement,created_at)
+                   VALUES (1,'problem',1,'旧問題','旧スナップショット問題文','2026-01-01');
+                 PRAGMA user_version=6;",
+            )
+            .unwrap();
+    }
+
+    let migrated = kyozai_kobo_lib::db::open_db(dir.path()).unwrap();
+    let version: i64 = migrated
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 7);
+    let bank_two: String = migrated
+        .query_row(
+            "SELECT statement_latex_two_column FROM problems WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let history_two: String = migrated
+        .query_row(
+            "SELECT statement_latex_two_column FROM problem_versions WHERE problem_id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let snapshot_two: String = migrated
+        .query_row(
+            "SELECT snap_statement_two_column FROM project_items WHERE project_id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(bank_two, "旧問題文");
+    assert_eq!(history_two, "旧履歴問題文");
+    assert_eq!(snapshot_two, "旧スナップショット問題文");
 }
 
 #[tokio::test]
@@ -1993,6 +2961,104 @@ fn backup_restore_is_integrity_checked_and_clears_sessions() {
 }
 
 #[test]
+fn parts_can_be_classified_filtered_and_duplicated_by_unit() {
+    use kyozai_kobo_lib::commands::parts;
+    use kyozai_kobo_lib::models::{PartSearchQuery, PartUpdate};
+
+    let (_dir, state) = make_state();
+    let (subject_id, field_id, unit_id) = {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO subjects (name, sort_order) VALUES ('数学III', 0)",
+            [],
+        )
+        .unwrap();
+        let subject_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fields (subject_id, name, sort_order) VALUES (?1, '微分法', 0)",
+            [subject_id],
+        )
+        .unwrap();
+        let field_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO units (field_id, name, sort_order) VALUES (?1, '関数の増減', 0)",
+            [field_id],
+        )
+        .unwrap();
+        (subject_id, field_id, conn.last_insert_rowid())
+    };
+
+    let part_id = parts::create_part(&state, "増減表の定石".into()).unwrap();
+    let payload = serde_json::from_value::<PartUpdate>(json!({
+        "id": part_id,
+        "unit_id": unit_id,
+        "title": "増減表の定石",
+        "part_type": "text",
+        "category": "定石",
+        "tags": ["微分"],
+        "latex_source": "導関数の符号を増減表に整理する。",
+        "description": "",
+        "difficulty_rank": "B",
+        "is_required": true,
+        "output_target": "both",
+        "layout_mode": "single_column",
+        "expected_version": 1
+    }))
+    .unwrap();
+    parts::update_part(&state, payload).unwrap();
+
+    let full = parts::get_part(&state, part_id).unwrap();
+    assert_eq!(full.subject_id, Some(subject_id));
+    assert_eq!(full.subject_name, "数学III");
+    assert_eq!(full.field_id, Some(field_id));
+    assert_eq!(full.field_name, "微分法");
+    assert_eq!(full.unit_id, Some(unit_id));
+    assert_eq!(full.unit_name, "関数の増減");
+
+    let query = PartSearchQuery {
+        text: String::new(),
+        subject_id: Some(subject_id),
+        field_id: Some(field_id),
+        unit_id: Some(unit_id),
+        part_type: None,
+        category: None,
+        tag: None,
+        difficulty_rank: None,
+        difficulty_ranks: None,
+        required_filter: None,
+    };
+    let found = parts::search_parts(&state, query).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].id, part_id);
+    assert_eq!(found[0].unit_name, "関数の増減");
+
+    let duplicate_id = parts::duplicate_part(&state, part_id).unwrap();
+    let duplicate = parts::get_part(&state, duplicate_id).unwrap();
+    assert_eq!(duplicate.unit_id, Some(unit_id));
+}
+
+#[test]
+fn problem_booklet_two_column_setting_persists_and_duplicates() {
+    use kyozai_kobo_lib::commands::projects;
+
+    let (_dir, state) = make_state();
+    let project_id = projects::create_project(&state, "問題冊子段組".into(), None).unwrap();
+    let project = projects::get_project(&state, project_id).unwrap();
+    assert!(!project.settings.problem_two_column);
+
+    let mut settings = project.settings.clone();
+    settings.problem_two_column = true;
+    projects::update_project_settings(&state, project_id, settings, Some(project.version))
+        .unwrap();
+    let updated = projects::get_project(&state, project_id).unwrap();
+    assert!(updated.settings.problem_two_column);
+
+    let duplicate_id = projects::duplicate_project(&state, project_id).unwrap();
+    let duplicate = projects::get_project(&state, duplicate_id).unwrap();
+    assert!(duplicate.settings.problem_two_column);
+}
+
+#[test]
 fn optimistic_lock_on_parts_items_projects_and_templates() {
     use kyozai_kobo_lib::commands::{parts, projects, templates};
     let (_dir, state) = make_state();
@@ -2187,6 +3253,94 @@ fn insert_completed_ai_job(state: &Arc<AppState>, status: &str, compile_status: 
 }
 
 #[test]
+fn unchanged_ai_latex_keeps_compile_result_and_can_be_saved_as_part() {
+    let (_dir, state) = make_state();
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs
+             SET compile_log='試験コンパイル成功', preview_pdf_path='preview.pdf'
+             WHERE id=?1",
+            [job_id],
+        )
+        .unwrap();
+    }
+
+    kyozai_kobo_lib::ai::update_job_latex(&state, job_id, "$x^2$".into())
+        .expect("同じLaTeXの保存に失敗した");
+
+    let (compile_status, compile_log, preview_pdf_path): (String, String, String) = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT compile_status, compile_log, preview_pdf_path
+             FROM ai_conversion_jobs WHERE id=?1",
+            [job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(compile_status, "ok");
+    assert_eq!(compile_log, "試験コンパイル成功");
+    assert_eq!(preview_pdf_path, "preview.pdf");
+
+    let part_id = kyozai_kobo_lib::ai::save_as_part(
+        &state,
+        job_id,
+        "直近のAI変換".into(),
+        None,
+        true,
+    )
+    .expect("同じLaTeXを再送した後も部品として保存できること");
+    let saved_latex: String = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT latex_source FROM parts WHERE id=?1",
+            [part_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_latex, "$x^2$");
+}
+
+#[test]
+fn changed_ai_latex_invalidates_previous_compile_result() {
+    let (_dir, state) = make_state();
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs
+             SET compile_log='試験コンパイル成功', preview_pdf_path='preview.pdf'
+             WHERE id=?1",
+            [job_id],
+        )
+        .unwrap();
+    }
+
+    kyozai_kobo_lib::ai::update_job_latex(&state, job_id, "$x^3$".into())
+        .expect("編集後のLaTeXを保存できること");
+
+    let (compile_status, compile_log, preview_pdf_path): (String, String, String) = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT compile_status, compile_log, preview_pdf_path
+             FROM ai_conversion_jobs WHERE id=?1",
+            [job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(compile_status, "none");
+    assert!(compile_log.is_empty());
+    assert!(preview_pdf_path.is_empty());
+}
+
+#[test]
 fn extracted_problems_are_saved_as_independent_bank_entries() {
     use kyozai_kobo_lib::ai::{save_extracted_problems, ExtractedProblem};
 
@@ -2218,11 +3372,15 @@ fn extracted_problems_are_saved_as_independent_bank_entries() {
             ExtractedProblem {
                 title: "平方完成".into(),
                 statement_latex: "$y=x^2-4x+3$の最小値を求めよ。".into(),
+                statement_latex_two_column:
+                    "$y=x^2-4x+3$ の最小値を求めよ。".into(),
                 source_image_indexes: vec![1],
             },
             ExtractedProblem {
                 title: "放物線".into(),
                 statement_latex: "放物線$y=x^2$を平行移動せよ。".into(),
+                statement_latex_two_column:
+                    "放物線 $y=x^2$ を\n平行移動せよ。".into(),
                 source_image_indexes: vec![1, 2],
             },
         ],
@@ -2240,6 +3398,320 @@ fn extracted_problems_are_saved_as_independent_bank_entries() {
         )
         .unwrap();
     assert_eq!(count, 2);
+    let saved_two_column: String = conn
+        .query_row(
+            "SELECT statement_latex_two_column FROM problems WHERE id=?1",
+            [ids[1]],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_two_column, "放物線 $y=x^2$ を\n平行移動せよ。");
+}
+
+#[test]
+fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
+    let (_dir, state) = make_state();
+    let (problem_id, job_id) = {
+        let conn = state.conn.lock().unwrap();
+        conn.execute("INSERT INTO subjects (name) VALUES ('数学')", [])
+            .unwrap();
+        let subject_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fields (subject_id, name) VALUES (?1, '数学I')",
+            [subject_id],
+        )
+        .unwrap();
+        let field_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO units (field_id, name) VALUES (?1, '二次関数')",
+            [field_id],
+        )
+        .unwrap();
+        let unit_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO problems (unit_id, title, statement_latex, answer_latex, created_at, updated_at)
+             VALUES (?1, '最大値', '$x^2$の最大値を求めよ。', '既存の解答', ?2, ?2)",
+            rusqlite::params![unit_id, kyozai_kobo_lib::db::now_str()],
+        )
+        .unwrap();
+        let problem_id = conn.last_insert_rowid();
+        drop(conn);
+
+        let job_id = insert_completed_ai_job(&state, "completed", "ok");
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs
+             SET conversion_mode='generate_answer', target_entity_type='problem',
+                 target_entity_id=?1, target_field='answer_latex'
+             WHERE id=?2",
+            rusqlite::params![problem_id, job_id],
+        )
+        .unwrap();
+        (problem_id, job_id)
+    };
+
+    let inserted = dispatch(
+        &state,
+        "ai_insert_into_target_problem",
+        json!({"jobId": job_id, "confirmed": true}),
+        Origin::Desktop,
+    )
+    .expect("AI一覧から元問題の解答へ挿入できること");
+    assert_eq!(inserted["problemId"].as_i64(), Some(problem_id));
+    assert_eq!(inserted["field"].as_str(), Some("answer_latex"));
+
+    let conn = state.conn.lock().unwrap();
+    let (answer, version): (String, i64) = conn
+        .query_row(
+            "SELECT answer_latex, version FROM problems WHERE id=?1",
+            [problem_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(answer, "既存の解答\n$x^2$");
+    assert_eq!(version, 2, "直接挿入でも問題の版を進めること");
+    let history_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM problem_versions WHERE problem_id=?1",
+            [problem_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(history_count, 1, "挿入前の問題を履歴へ保存すること");
+    drop(conn);
+
+    let duplicate = dispatch(
+        &state,
+        "ai_insert_into_target_problem",
+        json!({"jobId": job_id, "confirmed": true}),
+        Origin::Desktop,
+    );
+    assert!(
+        duplicate
+            .unwrap_err()
+            .contains("すでに挿入"),
+        "同じ生成結果の二重挿入を拒否すること"
+    );
+}
+
+#[test]
+fn ai_source_revision_replaces_problem_and_part_with_version_history() {
+    use kyozai_kobo_lib::ai::apply_source_revision;
+
+    let (_dir, state) = make_state();
+    let (problem_id, part_id) = {
+        let conn = state.conn.lock().unwrap();
+        conn.execute("INSERT INTO subjects (name) VALUES ('数学')", [])
+            .unwrap();
+        let subject_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fields (subject_id, name) VALUES (?1, '数学I')",
+            [subject_id],
+        )
+        .unwrap();
+        let field_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO units (field_id, name) VALUES (?1, '数と式')",
+            [field_id],
+        )
+        .unwrap();
+        let unit_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO problems (unit_id, title, statement_latex, created_at, updated_at)
+             VALUES (?1, '修正対象', '$x^2$を計算せよ。', ?2, ?2)",
+            rusqlite::params![unit_id, kyozai_kobo_lib::db::now_str()],
+        )
+        .unwrap();
+        let problem_id = conn.last_insert_rowid();
+        drop(conn);
+        let part_id = kyozai_kobo_lib::commands::parts::create_part(
+            &state,
+            "修正対象の部品".into(),
+        )
+        .unwrap();
+        state
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE parts SET latex_source='$x$について説明する。' WHERE id=?1",
+                [part_id],
+            )
+            .unwrap();
+        (problem_id, part_id)
+    };
+
+    let problem_job = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs
+             SET conversion_mode='revise_source', options_json=?1,
+                 target_entity_type='problem', target_entity_id=?2, target_field='statement_latex'
+             WHERE id=?3",
+            rusqlite::params![
+                json!({
+                    "revisionTarget": "problem_statement",
+                    "revisionGuidance": "誤字を直す",
+                    "revisionSourceVersion": 1
+                })
+                .to_string(),
+                problem_id,
+                problem_job
+            ],
+        )
+        .unwrap();
+    }
+    let applied = apply_source_revision(&state, problem_job, true)
+        .expect("問題文をAI修正結果で置き換えられること");
+    assert_eq!(applied["entityType"], "problem");
+    let (statement, version, history): (String, i64, i64) = {
+        let conn = state.conn.lock().unwrap();
+        let (statement, version) = conn
+            .query_row(
+                "SELECT statement_latex, version FROM problems WHERE id=?1",
+                [problem_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let history = conn
+            .query_row(
+                "SELECT COUNT(*) FROM problem_versions WHERE problem_id=?1",
+                [problem_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (statement, version, history)
+    };
+    assert_eq!(statement, "$x^2$");
+    assert_eq!(version, 2);
+    assert_eq!(history, 1);
+
+    let part_job = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs
+             SET conversion_mode='revise_source', options_json=?1,
+                 target_entity_type='part', target_entity_id=?2, target_field='latex_source'
+             WHERE id=?3",
+            rusqlite::params![
+                json!({
+                    "revisionTarget": "part",
+                    "revisionGuidance": "式を直す",
+                    "revisionSourceVersion": 1
+                })
+                .to_string(),
+                part_id,
+                part_job
+            ],
+        )
+        .unwrap();
+    }
+    let applied = apply_source_revision(&state, part_job, true)
+        .expect("部品をAI修正結果で置き換えられること");
+    assert_eq!(applied["entityType"], "part");
+    let (part_latex, part_version, part_history): (String, i64, i64) = {
+        let conn = state.conn.lock().unwrap();
+        let (latex, version) = conn
+            .query_row(
+                "SELECT latex_source, version FROM parts WHERE id=?1",
+                [part_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let history = conn
+            .query_row(
+                "SELECT COUNT(*) FROM part_versions WHERE part_id=?1",
+                [part_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (latex, version, history)
+    };
+    assert_eq!(part_latex, "$x^2$");
+    assert_eq!(part_version, 2);
+    assert_eq!(part_history, 1);
+    let duplicate_apply = apply_source_revision(&state, part_job, true)
+        .expect_err("同じ修正結果を二重適用しないこと");
+    assert!(duplicate_apply.contains("すでに適用"));
+
+    let stale_job = insert_completed_ai_job(&state, "completed", "ok");
+    state
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE ai_conversion_jobs
+             SET conversion_mode='revise_source', options_json=?1,
+                 target_entity_type='problem', target_entity_id=?2, target_field='statement_latex'
+             WHERE id=?3",
+            rusqlite::params![
+                json!({
+                    "revisionTarget": "problem_statement",
+                    "revisionGuidance": "誤字を直す",
+                    "revisionSourceVersion": 1
+                })
+                .to_string(),
+                problem_id,
+                stale_job
+            ],
+        )
+        .unwrap();
+    let stale = apply_source_revision(&state, stale_job, true)
+        .expect_err("開始後に更新された問題を古い修正案で上書きしないこと");
+    assert!(stale.contains("更新されています"));
+}
+
+#[test]
+fn ai_job_errors_distinguish_answer_format_from_dangerous_latex() {
+    let (_dir, state) = make_state();
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs SET warnings_json=?1 WHERE id=?2",
+            rusqlite::params![
+                json!([{
+                    "code": "TRAJECTORY_POINT_NAME",
+                    "severity": "error",
+                    "message": "問題文の点名と座標文字を保持してください"
+                }])
+                .to_string(),
+                job_id
+            ],
+        )
+        .unwrap();
+    }
+
+    let format_error = dispatch(
+        &state,
+        "ai_insert_into_target_problem",
+        json!({"jobId": job_id, "confirmed": true}),
+        Origin::Desktop,
+    )
+    .unwrap_err();
+    assert!(format_error.contains("答案形式の検査エラー"));
+    assert!(!format_error.contains("危険なLaTeX記述"));
+    assert!(format_error.contains("問題文の点名と座標文字を保持してください"));
+
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs SET output_latex='\\write18{blocked}' WHERE id=?1",
+            [job_id],
+        )
+        .unwrap();
+    }
+    let security_error = dispatch(
+        &state,
+        "ai_insert_into_target_problem",
+        json!({"jobId": job_id, "confirmed": true}),
+        Origin::Desktop,
+    )
+    .unwrap_err();
+    assert!(security_error.contains("危険なLaTeX記述"));
+    assert!(!security_error.contains("答案形式の検査エラー"));
 }
 
 /// 再コンパイル後にジョブが「コンパイル中」のまま残らないこと（回帰: status復元漏れ）
@@ -2247,6 +3719,22 @@ fn extracted_problems_are_saved_as_independent_bank_entries() {
 fn recompile_restores_completed_status() {
     let (_dir, state) = make_state();
     let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs SET warnings_json=?1 WHERE id=?2",
+            rusqlite::params![
+                json!([{
+                    "code": "TRAJECTORY_POINT_NAME",
+                    "severity": "error",
+                    "message": "古い検査規則による誤警告"
+                }])
+                .to_string(),
+                job_id
+            ],
+        )
+        .unwrap();
+    }
 
     let result = kyozai_kobo_lib::ai::recompile_job(&state, job_id).unwrap();
     assert_eq!(
@@ -2262,6 +3750,20 @@ fn recompile_restores_completed_status() {
     assert!(
         ["ok", "failed", "skipped"].contains(&compile_status),
         "compileStatusが不正: {compile_status}"
+    );
+    let warnings_json: String = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT warnings_json FROM ai_conversion_jobs WHERE id=?1",
+            [job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        !warnings_json.contains("古い検査規則による誤警告"),
+        "再コンパイル時に保存済みの古い警告が再評価されていない"
     );
     // 完了扱いに戻っているため、編集・削除など完了前提の操作が可能
     kyozai_kobo_lib::ai::update_job_latex(&state, job_id, "$y^2$".into())

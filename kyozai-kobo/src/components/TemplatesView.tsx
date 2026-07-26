@@ -464,6 +464,7 @@ export function TemplatesView() {
       setLastCompile({
         ...result,
         label: `テンプレート「${tpl.name}」（${kind === "answers" ? "解答冊子" : "問題冊子"}・サンプルデータ）`,
+        download_key: Date.now(),
       });
       if (!result.success) setLogOpen(true);
       if (result.success && result.pdf_path) {
