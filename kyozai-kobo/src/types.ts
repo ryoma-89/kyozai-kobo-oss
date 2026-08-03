@@ -30,6 +30,8 @@ export interface ProblemSummary {
   difficulty: string;
   difficulty_rank: DifficultyRank | null;
   is_required: boolean;
+  answer_completed: boolean;
+  explanation_completed: boolean;
   tags: string[];
   updated_at: string;
   usage_count: number;
@@ -53,6 +55,8 @@ export interface ProblemFull {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  answer_completed: boolean;
+  explanation_completed: boolean;
   difficulty: string;
   difficulty_rank: DifficultyRank | null;
   is_required: boolean;
@@ -79,6 +83,8 @@ export interface VersionFull {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  answer_completed: boolean;
+  explanation_completed: boolean;
   difficulty: string;
   difficulty_rank: DifficultyRank | null;
   is_required: boolean;
@@ -104,6 +110,8 @@ export interface SearchResult {
   difficulty: string;
   difficulty_rank: DifficultyRank | null;
   is_required: boolean;
+  answer_completed: boolean;
+  explanation_completed: boolean;
   tags: string[];
   updated_at: string;
   usage_count: number;
@@ -680,7 +688,11 @@ export interface AiJob {
   previewPdfPath: string;
   targetEntityType: string;
   targetEntityId: number | null;
+  /** 現在の問題・部品等から解決した表示名。 */
+  targetEntityName: string;
   targetField: string;
+  /** エディタへの挿入、問題・部品への保存、修正反映を行った日時。 */
+  insertedAt: string;
   errorCode: string;
   errorMessage: string;
   createdAt: string;

@@ -74,6 +74,8 @@ export const updateProblem = (payload: {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  answer_completed: boolean;
+  explanation_completed: boolean;
   difficulty: string;
   difficulty_rank: string | null;
   is_required: boolean;

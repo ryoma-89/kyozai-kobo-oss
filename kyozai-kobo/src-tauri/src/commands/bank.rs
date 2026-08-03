@@ -23,6 +23,10 @@ pub struct BankProblem {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    #[serde(default)]
+    pub answer_completed: bool,
+    #[serde(default)]
+    pub explanation_completed: bool,
     pub difficulty: String,
     #[serde(default)]
     pub difficulty_rank: Option<String>,
@@ -70,7 +74,7 @@ pub struct ImportBankResult {
 
 fn problem_to_bank(conn: &Connection, attachments_dir: &Path, problem_id: i64) -> rusqlite::Result<BankProblem> {
     let mut p = conn.query_row(
-        "SELECT title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo FROM problems WHERE id=?1",
+        "SELECT title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo FROM problems WHERE id=?1",
         params![problem_id],
         |r| {
             Ok(BankProblem {
@@ -79,10 +83,12 @@ fn problem_to_bank(conn: &Connection, attachments_dir: &Path, problem_id: i64) -
                 statement_latex_two_column: r.get(2)?,
                 answer_latex: r.get(3)?,
                 explanation_latex: r.get(4)?,
-                difficulty: r.get(5)?,
-                difficulty_rank: r.get(6)?,
-                is_required: r.get::<_, i64>(7)? != 0,
-                memo: r.get(8)?,
+                answer_completed: r.get::<_, i64>(5)? != 0,
+                explanation_completed: r.get::<_, i64>(6)? != 0,
+                difficulty: r.get(7)?,
+                difficulty_rank: r.get(8)?,
+                is_required: r.get::<_, i64>(9)? != 0,
+                memo: r.get(10)?,
                 tags: vec![],
                 attachments: vec![],
             })
@@ -309,9 +315,23 @@ pub fn apply_bank_import(
 
                     let rank = super::problems::normalize_rank(p.difficulty_rank.clone());
                     conn.execute(
-                        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-                        params![unit_id, p.title, statement, statement_two_column, answer, explanation, p.difficulty, rank, p.is_required as i64, p.memo, now],
+                        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                        params![
+                            unit_id,
+                            p.title,
+                            statement,
+                            statement_two_column,
+                            answer,
+                            explanation,
+                            p.answer_completed as i64,
+                            p.explanation_completed as i64,
+                            p.difficulty,
+                            rank,
+                            p.is_required as i64,
+                            p.memo,
+                            now
+                        ],
                     )
                     .map_err(err_str)?;
                     let pid = conn.last_insert_rowid();

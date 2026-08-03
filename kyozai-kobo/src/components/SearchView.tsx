@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { addProblemToProject, listAllTags, listProjects, searchProblems } from "../api";
 import { useApp } from "../store";
 import type { DifficultyRank, ProjectSummary, RequiredFilter, SearchResult } from "../types";
-import { DIFFICULTY_RANKS, DifficultyBadge, DifficultyRankBadge, Modal, TagChips } from "./ui";
+import {
+  CompletionBadges,
+  DIFFICULTY_RANKS,
+  DifficultyBadge,
+  DifficultyRankBadge,
+  Modal,
+  TagChips,
+} from "./ui";
 
 /** 問題検索画面 */
 export function SearchView() {
@@ -217,6 +224,7 @@ export function SearchView() {
                 <th className="px-4 py-2 font-normal">タイトル</th>
                 <th className="px-2 py-2 font-normal whitespace-nowrap">場所</th>
                 <th className="px-2 py-2 font-normal">難易度</th>
+                <th className="px-2 py-2 font-normal whitespace-nowrap">完成状態</th>
                 <th className="px-2 py-2 font-normal">タグ</th>
                 <th className="px-2 py-2 font-normal whitespace-nowrap">更新</th>
                 <th className="px-2 py-2 font-normal whitespace-nowrap">使用</th>
@@ -244,6 +252,12 @@ export function SearchView() {
                       <DifficultyBadge value={r.difficulty} />
                       <DifficultyRankBadge rank={r.difficulty_rank} required={r.is_required} />
                     </span>
+                  </td>
+                  <td className="px-2 py-2">
+                    <CompletionBadges
+                      answerCompleted={r.answer_completed}
+                      explanationCompleted={r.explanation_completed}
+                    />
                   </td>
                   <td className="px-2 py-2">
                     <TagChips tags={r.tags} />

@@ -34,8 +34,17 @@ const RUNNING: AiJobStatus[] = [
 ];
 
 function jobModeLabel(job: AiJob): string | null {
-  if (job.conversionMode === "project_review") return "教材全体のAI確認";
-  return null;
+  const labels: Record<string, string> = {
+    generate_answer: "解答生成",
+    generate_explanation: "解説生成",
+    generate_topic_guide: "解説部品生成",
+    generate_problem_layouts: "表示形式生成",
+    problem_bank_import: "問題取込",
+    revise_source: "ソース修正",
+    project_review: "教材全体のAI確認",
+    content_review: "問題・部品のAIチェック",
+  };
+  return labels[job.conversionMode] ?? null;
 }
 
 function StatusBadge({ status }: { status: AiJobStatus }) {
@@ -59,6 +68,7 @@ function directInsertLabel(job: AiJob): "解答" | "解説" | null {
     job.conversionMode === "revise_source"
     || job.status !== "completed"
     || job.compileStatus !== "ok"
+    || !!job.insertedAt
     || job.targetEntityType !== "problem"
     || job.targetEntityId === null
   ) {
@@ -69,11 +79,12 @@ function directInsertLabel(job: AiJob): "解答" | "解説" | null {
   return null;
 }
 
-function sourceRevisionLabel(job: AiJob): "問題文" | "解答" | "解説" | "部品" | null {
+function sourceRevisionLabel(job: AiJob): "問題文" | "二段組用問題文" | "解答" | "解説" | "部品" | null {
   if (
     job.conversionMode !== "revise_source"
     || job.status !== "completed"
     || job.compileStatus !== "ok"
+    || !!job.insertedAt
     || job.targetEntityId === null
     || typeof job.options.revisionSourceVersion !== "number"
     || job.options.revisionApplied === true
@@ -83,8 +94,63 @@ function sourceRevisionLabel(job: AiJob): "問題文" | "解答" | "解説" | "�
   if (job.targetEntityType === "part" && job.targetField === "latex_source") return "部品";
   if (job.targetEntityType !== "problem") return null;
   if (job.targetField === "statement_latex") return "問題文";
+  if (job.targetField === "statement_latex_two_column") return "二段組用問題文";
   if (job.targetField === "answer_latex") return "解答";
   if (job.targetField === "explanation_latex") return "解説";
+  return null;
+}
+
+function targetFieldLabel(field: string): string | null {
+  if (field === "statement_latex" || field === "snap_statement") return "問題文";
+  if (field === "statement_latex_two_column" || field === "snap_statement_two_column") {
+    return "二段組用問題文";
+  }
+  if (field === "answer_latex" || field === "snap_answer") return "解答";
+  if (field === "explanation_latex" || field === "snap_explanation") return "解説";
+  if (field === "latex_source") return "部品本文";
+  if (field === "review") return "AIチェック";
+  return null;
+}
+
+function targetDisplayLabel(job: AiJob): string | null {
+  if (job.targetEntityId === null) return null;
+  const name = job.targetEntityName.trim();
+  const named = (kind: string) => name ? `${kind}「${name}」` : `${kind} #${job.targetEntityId}`;
+  let target: string;
+  if (job.targetEntityType === "problem") {
+    target = named("問題");
+  } else if (job.targetEntityType === "problem_batch") {
+    const count = job.structuredResult?.problems?.length ?? 0;
+    target = named("問題");
+    if (count > 1) target += `ほか${count - 1}件`;
+  } else if (job.targetEntityType === "part") {
+    target = named("部品");
+  } else if (job.targetEntityType === "project") {
+    target = named("教材");
+  } else if (job.targetEntityType === "template") {
+    target = named("テンプレート");
+  } else if (job.targetEntityType === "project_item") {
+    target = name ? `教材項目「${name}」` : `教材項目 #${job.targetEntityId}`;
+  } else {
+    return null;
+  }
+  const field = targetFieldLabel(job.targetField);
+  return field ? `${target}・${field}` : target;
+}
+
+function generatedEntityLabel(job: AiJob): string | null {
+  if (targetDisplayLabel(job)) return null;
+  const problems = job.structuredResult?.problems ?? [];
+  if (problems.length > 0) {
+    const first = problems[0].title.trim() || "名称未設定";
+    return problems.length === 1
+      ? `問題候補「${first}」`
+      : `問題候補「${first}」ほか${problems.length - 1}件`;
+  }
+  if (job.conversionMode === "generate_topic_guide") {
+    const title = job.inputText.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    if (title) return `部品候補「${title.slice(0, 50)}」`;
+  }
   return null;
 }
 
@@ -155,9 +221,12 @@ export function AiJobsView() {
   const onDirectInsert = async (job: AiJob) => {
     const label = directInsertLabel(job);
     if (!label || job.targetEntityId === null) return;
+    const problemName = job.targetEntityName.trim()
+      ? `問題「${job.targetEntityName.trim()}」`
+      : `問題 #${job.targetEntityId}`;
     const hasReviewItems = job.warnings.length > 0 || job.uncertainFragments.length > 0;
     const accepted = await confirm(
-      `問題 #${job.targetEntityId} の${label}へ生成結果を挿入しますか？\n`
+      `${problemName}の${label}へ生成結果を挿入しますか？\n`
       + "既存の内容がある場合は末尾へ追記します。"
       + (hasReviewItems ? "\n警告・要確認箇所があるため、内容を確認してから実行してください。" : ""),
     );
@@ -165,7 +234,7 @@ export function AiJobsView() {
     setInsertingJobId(job.id);
     try {
       await aiInsertIntoTargetProblem(job.id, true);
-      showToast(`問題 #${job.targetEntityId} の${label}へ挿入しました`);
+      showToast(`${problemName}の${label}へ挿入しました`);
       await load();
     } catch (e) {
       showToast(String(e), "error");
@@ -177,7 +246,11 @@ export function AiJobsView() {
   const onApplyRevision = async (job: AiJob) => {
     const label = sourceRevisionLabel(job);
     if (!label || job.targetEntityId === null) return;
-    const targetName = job.targetEntityType === "part" ? "部品" : `問題 #${job.targetEntityId}`;
+    const targetName = job.targetEntityName.trim()
+      ? `${job.targetEntityType === "part" ? "部品" : "問題"}「${job.targetEntityName.trim()}」`
+      : job.targetEntityType === "part"
+        ? `部品 #${job.targetEntityId}`
+        : `問題 #${job.targetEntityId}`;
     const hasReviewItems = job.warnings.length > 0 || job.uncertainFragments.length > 0;
     const accepted = await confirm(
       `${targetName}の${label}をAIの修正結果で置き換えますか？\n`
@@ -233,16 +306,22 @@ export function AiJobsView() {
                 {jobModeLabel(job) && (
                   <span className="badge badge-muted">{jobModeLabel(job)}</span>
                 )}
-                {directInsertLabel(job) && (
+                {(targetDisplayLabel(job) || generatedEntityLabel(job)) && (
                   <span className="badge badge-muted">
-                    問題 #{job.targetEntityId}・{directInsertLabel(job)}
+                    {targetDisplayLabel(job) || generatedEntityLabel(job)}
                   </span>
                 )}
-                {sourceRevisionLabel(job) && (
-                  <span className="badge badge-muted">
-                    {job.targetEntityType === "part"
-                      ? `部品 #${job.targetEntityId}・ソース修正`
-                      : `問題 #${job.targetEntityId}・${sourceRevisionLabel(job)}修正`}
+                {!!job.insertedAt && (
+                  <span
+                    className="badge"
+                    title={`挿入・反映日時: ${job.insertedAt}`}
+                    style={{
+                      color: "var(--success)",
+                      borderColor: "rgba(197,183,223,0.4)",
+                      background: "var(--success-dim)",
+                    }}
+                  >
+                    挿入済み
                   </span>
                 )}
                 <span className="min-w-0 flex-1 truncate text-xs">

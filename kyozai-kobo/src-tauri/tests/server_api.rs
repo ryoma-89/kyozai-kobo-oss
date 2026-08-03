@@ -768,6 +768,45 @@ C(x,y)\in R
             warning.code == "NON_HIGH_SCHOOL_CRITICAL_TERM" && warning.severity == "error"
         }));
     }
+    let difference_quotient_term =
+        scan_solution_notation(r#"差商$\dfrac{f(a+h)-f(a)}{h}$の極限を考える。"#);
+    assert!(difference_quotient_term.iter().any(|warning| {
+        warning.code == "NON_HIGH_SCHOOL_DIFFERENCE_QUOTIENT_TERM"
+            && warning.severity == "error"
+    }));
+    for standard_derivative_term in [
+        r#"$\dfrac{f(a+h)-f(a)}{h}$は、$x=a$から$x=a+h$までの平均変化率である。"#,
+        r#"平均変化率の極限$\lim_{h\to0}\dfrac{f(a+h)-f(a)}{h}$が、$x=a$における微分係数である。"#,
+        r#"微分係数を定義する式$\lim_{h\to0}\dfrac{f(a+h)-f(a)}{h}$を用いる。"#,
+    ] {
+        assert!(scan_solution_notation(standard_derivative_term)
+            .iter()
+            .all(|warning| warning.code != "NON_HIGH_SCHOOL_DIFFERENCE_QUOTIENT_TERM"));
+    }
+    for non_high_school_binomial in [
+        r#"$\binom{n}{r}$"#,
+        r#"$\dbinom{8}{3}$"#,
+        r#"$\tbinom{n}{2}$"#,
+        r#"${n\choose r}$"#,
+        r#"$\mathrm{C}(n,r)$"#,
+        r#"${}^{n}\mathrm{C}_{r}$"#,
+    ] {
+        let warnings = scan_solution_notation(non_high_school_binomial);
+        assert!(warnings.iter().any(|warning| {
+            warning.code == "NON_HIGH_SCHOOL_BINOMIAL_NOTATION"
+                && warning.severity == "error"
+        }));
+    }
+    for high_school_binomial in [
+        r#"${}_n\mathrm{C}_r$"#,
+        r#"${}_5\mathrm{C}_2=10$"#,
+        r#"${}_n\mathrm{C}_r=\dfrac{n!}{r!(n-r)!}$"#,
+        r#"点$C(1,2)$を通る。"#,
+    ] {
+        assert!(scan_solution_notation(high_school_binomial)
+            .iter()
+            .all(|warning| warning.code != "NON_HIGH_SCHOOL_BINOMIAL_NOTATION"));
+    }
     let derivative_range_without_table = r#"$f'(x)=x-1$であり、$f'(x)>0$と$f'(x)<0$となる区間を調べると、値域が求まる。"#;
     assert!(scan_solution_notation(derivative_range_without_table)
         .iter()
@@ -1920,6 +1959,7 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     use kyozai_kobo_lib::ai::{
         output_schema, source_revision_prompt, validate_output, BEGINNER_SOLUTION_INSTRUCTIONS,
         BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS, FIXED_INSTRUCTIONS,
+        CONTENT_REVIEW_FIXED_INSTRUCTIONS,
         DUAL_PROBLEM_LAYOUT_INSTRUCTIONS,
         PROJECT_REVIEW_FIXED_INSTRUCTIONS,
         SOLUTION_FIXED_INSTRUCTIONS, SOURCE_REVISION_FIXED_INSTRUCTIONS,
@@ -1978,6 +2018,11 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("種類@ITEM:教材項目ID@FIELD:対象欄"));
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクIDや部品ライブラリIDと取り違えない"));
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("detectedTypeはpart"));
+    assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクの1問題または部品ライブラリの1部品"));
+    assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("問題文の条件だけを使って独立に解き直し"));
+    assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("種類@FIELD:対象欄"));
+    assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("statement_two_column"));
+    assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("部品の対象欄はcontentまたはitem"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高等学校"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("着眼点 → 【定石】 → 方針 → 手順 → 検算・注意点"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("利用できる横幅は常に\\linewidth"));
@@ -2187,6 +2232,14 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("通常の計算より何を省けるか"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("同型問題にも応用できる判断の仕方"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("特殊で分かりにくい技巧を使わず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("「差商」という用語は使用しない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$x=a$から$x=a+h$までの平均変化率"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("有限の$h$に対する平均変化率と、その極限である微分係数を区別"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("二項係数は、日本の高校数学で一般的な${}_n\\mathrm{C}_r$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$\\binom{n}{r}$、$\\dbinom{n}{r}$、$\\tbinom{n}{r}$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("${}_5\\mathrm{C}_2$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("{}_n\\mathrm{C}_r="));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\frac{n!}{r!(n-r)!}"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\arcsin、\\arccos、\\arctan等のarcを付けた関数名は高校範囲外"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず$x=\\sin y$と書き直してから"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$1=\\cos y\\dfrac{dy}{dx}$"));
@@ -2289,8 +2342,124 @@ fn project_review_accepts_a_full_material_sized_text_input() {
     use kyozai_kobo_lib::ai::max_input_text_chars;
 
     assert_eq!(max_input_text_chars("project_review"), 200_000);
+    assert_eq!(max_input_text_chars("content_review"), 100_000);
     assert_eq!(max_input_text_chars("revise_source"), 60_000);
     assert_eq!(max_input_text_chars("generate_answer"), 20_000);
+}
+
+#[test]
+fn content_review_requires_a_saved_problem_or_part_target() {
+    use kyozai_kobo_lib::ai::{create_job, CreateJobPayload};
+
+    let (_dir, state) = make_state();
+    let part_id = kyozai_kobo_lib::commands::parts::create_part(
+        &state,
+        "確認対象の部品".into(),
+    )
+    .unwrap();
+    let payload = |source_type: &str, entity_type: &str, entity_id: i64, version: i64| {
+        CreateJobPayload {
+            source_type: source_type.into(),
+            conversion_mode: Some("content_review".into()),
+            options: Some(json!({
+                "contentReviewSourceVersion": version,
+                "contentReviewEntityType": entity_type,
+                "solutionSubject": "mathematics"
+            })),
+            input_text: Some("【対象種別】部品\n【部品本文LaTeX】\n$x^2$".into()),
+            input_names: vec![],
+            target_entity_type: Some(entity_type.into()),
+            target_entity_id: Some(entity_id),
+            target_field: Some("review".into()),
+        }
+    };
+
+    let image_error = create_job(&state, payload("image", "part", part_id, 1))
+        .expect_err("AIチェックは画像入力を受け付けないこと");
+    assert!(image_error.contains("テキスト入力"));
+
+    let target_error = create_job(&state, payload("text", "template", part_id, 1))
+        .expect_err("問題・部品以外を対象にできないこと");
+    assert!(target_error.contains("問題または部品"));
+
+    let stale_error = create_job(&state, payload("text", "part", part_id, 99))
+        .expect_err("古い版の内容をAIチェックへ送らないこと");
+    assert!(stale_error.contains("対象が更新"));
+}
+
+#[test]
+fn content_review_warning_codes_are_mapped_to_editable_fields() {
+    use kyozai_kobo_lib::ai::{
+        normalize_content_review_warning_codes, AiWarning,
+    };
+
+    let mut problem_warnings = vec![
+        AiWarning {
+            code: "MATH_ERROR@FIELD:answer".into(),
+            severity: "error".into(),
+            message: "計算を確認".into(),
+        },
+        AiWarning {
+            code: "UNKNOWN_FIELD@FIELD:metadata".into(),
+            severity: "warning".into(),
+            message: "分類を確認".into(),
+        },
+    ];
+    normalize_content_review_warning_codes(&mut problem_warnings, "problem");
+    assert_eq!(problem_warnings[0].code, "MATH_ERROR@FIELD:answer");
+    assert_eq!(problem_warnings[1].code, "UNKNOWN_FIELD@FIELD:item");
+
+    let mut part_warnings = vec![AiWarning {
+        code: "FACT_ERROR@FIELD:answer".into(),
+        severity: "error".into(),
+        message: "公式を確認".into(),
+    }];
+    normalize_content_review_warning_codes(&mut part_warnings, "part");
+    assert_eq!(part_warnings[0].code, "FACT_ERROR@FIELD:item");
+}
+
+#[test]
+fn subject_specific_solution_instructions_preserve_mathematics_and_separate_other_subjects() {
+    use kyozai_kobo_lib::ai::{
+        scan_subject_explanation_structure, scan_subject_topic_guide_structure,
+        solution_subject_fixed_instructions, SOLUTION_FIXED_INSTRUCTIONS,
+        SOLUTION_SUBJECT_VALUES,
+    };
+
+    assert_eq!(
+        solution_subject_fixed_instructions("mathematics"),
+        SOLUTION_FIXED_INSTRUCTIONS,
+        "数学は従来の詳細指示をそのまま使用すること"
+    );
+
+    for (subject, expected) in [
+        ("physics", "【科目：物理】"),
+        ("chemistry", "【科目：化学】"),
+        ("biology", "【科目：生物】"),
+        ("english", "【科目：英語】"),
+        ("japanese", "【科目：国語】"),
+        ("social_studies", "【科目：地理・歴史・公民】"),
+        ("information", "【科目：情報】"),
+        ("general", "【科目：その他】"),
+    ] {
+        let instructions = solution_subject_fixed_instructions(subject);
+        assert!(instructions.contains(expected));
+        assert!(instructions.contains("【要点】"));
+        assert!(!instructions.contains("【軌跡・領域問題専用の解答規則】"));
+    }
+    assert_eq!(SOLUTION_SUBJECT_VALUES.len(), 9);
+
+    assert!(scan_subject_explanation_structure("【要点】\n単位と向きを確認する。").is_empty());
+    assert!(scan_subject_explanation_structure("法則を説明する。")
+        .iter()
+        .any(|warning| warning.code == "MISSING_SUBJECT_KEY_POINTS"));
+
+    let subject_guide =
+        "【概要】a【基本事項】b【要点】c【手順】d【典型例】e【よくある誤り】f";
+    assert!(scan_subject_topic_guide_structure(subject_guide).is_empty());
+    assert!(scan_subject_topic_guide_structure(&subject_guide.replace("【要点】", ""))
+        .iter()
+        .any(|warning| warning.code == "SUBJECT_TOPIC_GUIDE_MISSING_SECTIONS"));
 }
 
 #[test]
@@ -2380,6 +2549,23 @@ fn ai_generation_guidance_has_a_bounded_length() {
     )
     .expect_err("未対応の解答モードは拒否すること");
     assert!(error.contains("standard / beginner"));
+
+    let error = create_job(
+        &state,
+        CreateJobPayload {
+            source_type: "text".into(),
+            conversion_mode: Some("generate_answer".into()),
+            options: Some(json!({"solutionSubject": "astronomy"})),
+            input_text: Some("問題文".into()),
+            input_names: vec![],
+            target_entity_type: None,
+            target_entity_id: None,
+            target_field: None,
+        },
+    )
+    .expect_err("未対応の生成科目は拒否すること");
+    assert!(error.contains("生成科目"));
+    assert!(error.contains("mathematics / physics"));
 }
 
 #[test]
@@ -2482,7 +2668,7 @@ fn schema_migration_sets_user_version() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 9);
     for table in ["projects", "templates"] {
         let count: i64 = conn
             .query_row(
@@ -2503,6 +2689,29 @@ fn schema_migration_sets_user_version() {
             .unwrap();
         assert_eq!(count, 1, "{} must have a unit classification", table);
     }
+    for table in ["problems", "problem_versions"] {
+        for column in ["answer_completed", "explanation_completed"] {
+            let count: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name=?1",
+                        table
+                    ),
+                    [column],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "{table}.{column} must store completion state");
+        }
+    }
+    let ai_inserted_at_column: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('ai_conversion_jobs') WHERE name='inserted_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ai_inserted_at_column, 1);
     let problem_layout_column: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('project_settings') WHERE name='problem_two_column'",
@@ -2553,7 +2762,7 @@ fn schema_migration_from_v4_adds_part_unit_before_creating_its_index() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 9);
 
     for table in ["parts", "part_versions"] {
         let count: i64 = migrated
@@ -2621,7 +2830,7 @@ fn schema_migration_from_v6_backfills_both_problem_statement_layouts() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 9);
     let bank_two: String = migrated
         .query_row(
             "SELECT statement_latex_two_column FROM problems WHERE id=1",
@@ -2646,6 +2855,116 @@ fn schema_migration_from_v6_backfills_both_problem_statement_layouts() {
     assert_eq!(bank_two, "旧問題文");
     assert_eq!(history_two, "旧履歴問題文");
     assert_eq!(snapshot_two, "旧スナップショット問題文");
+}
+
+#[test]
+fn schema_migration_from_v7_adds_problem_completion_flags() {
+    let dir = tempdir::TempDir::new("kyozai-v7-completion-migration-test").unwrap();
+    let db_path = dir.path().join("kyozai-kobo.db");
+    {
+        let legacy = rusqlite::Connection::open(&db_path).unwrap();
+        let legacy_schema = kyozai_kobo_lib::db::SCHEMA
+            .replace(
+                "    answer_completed INTEGER NOT NULL DEFAULT 0,\n",
+                "",
+            )
+            .replace(
+                "    explanation_completed INTEGER NOT NULL DEFAULT 0,\n",
+                "",
+            );
+        legacy.execute_batch(&legacy_schema).unwrap();
+        legacy
+            .execute_batch(
+                "INSERT INTO subjects (id,name) VALUES (1,'数学');
+                 INSERT INTO fields (id,subject_id,name) VALUES (1,1,'数学I');
+                 INSERT INTO units (id,field_id,name) VALUES (1,1,'二次関数');
+                 INSERT INTO problems
+                   (id,unit_id,title,answer_latex,explanation_latex,created_at,updated_at)
+                   VALUES (1,1,'旧問題','旧解答','旧解説','2026-01-01','2026-01-01');
+                 INSERT INTO problem_versions
+                   (problem_id,title,answer_latex,explanation_latex,saved_at)
+                   VALUES (1,'旧問題','旧解答','旧解説','2026-01-01');
+                 PRAGMA user_version=7;",
+            )
+            .unwrap();
+    }
+
+    let migrated = kyozai_kobo_lib::db::open_db(dir.path()).unwrap();
+    let version: i64 = migrated
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 9);
+    for table in ["problems", "problem_versions"] {
+        let flags: (i64, i64) = migrated
+            .query_row(
+                &format!(
+                    "SELECT answer_completed, explanation_completed FROM {} LIMIT 1",
+                    table
+                ),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(flags, (0, 0), "{table}の既存データは未完成として移行する");
+    }
+}
+
+#[test]
+fn schema_migration_from_v8_adds_ai_job_inserted_state() {
+    let dir = tempdir::TempDir::new("kyozai-v8-ai-inserted-migration-test").unwrap();
+    let db_path = dir.path().join("kyozai-kobo.db");
+    {
+        let legacy = rusqlite::Connection::open(&db_path).unwrap();
+        legacy.execute_batch(kyozai_kobo_lib::db::SCHEMA).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE ai_conversion_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_uuid TEXT NOT NULL UNIQUE,
+                    source_type TEXT NOT NULL DEFAULT 'image',
+                    conversion_mode TEXT NOT NULL DEFAULT 'auto',
+                    options_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    progress_message TEXT NOT NULL DEFAULT '',
+                    input_text TEXT NOT NULL DEFAULT '',
+                    input_asset_paths TEXT NOT NULL DEFAULT '[]',
+                    output_latex TEXT NOT NULL DEFAULT '',
+                    structured_result_json TEXT NOT NULL DEFAULT '',
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    uncertain_fragments_json TEXT NOT NULL DEFAULT '[]',
+                    compile_status TEXT NOT NULL DEFAULT 'none',
+                    compile_log TEXT NOT NULL DEFAULT '',
+                    preview_pdf_path TEXT NOT NULL DEFAULT '',
+                    target_entity_type TEXT NOT NULL DEFAULT '',
+                    target_entity_id INTEGER,
+                    target_field TEXT NOT NULL DEFAULT '',
+                    error_code TEXT NOT NULL DEFAULT '',
+                    error_message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL DEFAULT ''
+                 );
+                 INSERT INTO ai_conversion_jobs
+                    (job_uuid,status,created_at,updated_at)
+                 VALUES ('legacy-job','completed','2026-01-01','2026-01-01');
+                 PRAGMA user_version=8;",
+            )
+            .unwrap();
+    }
+
+    let migrated = kyozai_kobo_lib::db::open_db(dir.path()).unwrap();
+    let version: i64 = migrated
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 9);
+    let inserted_at: String = migrated
+        .query_row(
+            "SELECT inserted_at FROM ai_conversion_jobs WHERE job_uuid='legacy-job'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(inserted_at.is_empty(), "既存の未判定ジョブは未挿入として移行する");
 }
 
 #[tokio::test]
@@ -3038,6 +3357,74 @@ fn parts_can_be_classified_filtered_and_duplicated_by_unit() {
 }
 
 #[test]
+fn problem_completion_flags_are_saved_listed_duplicated_and_restored() {
+    use kyozai_kobo_lib::commands::problems;
+    use kyozai_kobo_lib::models::ProblemUpdate;
+
+    let (_dir, state) = make_state();
+    let unit_id = {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO subjects (name, sort_order) VALUES ('数学', 0)",
+            [],
+        )
+        .unwrap();
+        let subject_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fields (subject_id, name, sort_order) VALUES (?1, '数学I', 0)",
+            [subject_id],
+        )
+        .unwrap();
+        let field_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO units (field_id, name, sort_order) VALUES (?1, '二次関数', 0)",
+            [field_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+
+    let problem_id = problems::create_problem(&state, unit_id, "完成管理".into()).unwrap();
+    let payload = serde_json::from_value::<ProblemUpdate>(json!({
+        "id": problem_id,
+        "unit_id": unit_id,
+        "title": "完成管理",
+        "statement_latex": "問題文",
+        "statement_latex_two_column": "問題文",
+        "answer_latex": "解答",
+        "explanation_latex": "解説",
+        "answer_completed": true,
+        "explanation_completed": true,
+        "difficulty": "標準",
+        "difficulty_rank": null,
+        "is_required": false,
+        "memo": "",
+        "tags": [],
+        "expected_version": 1
+    }))
+    .unwrap();
+    problems::update_problem(&state, payload).unwrap();
+
+    let full = problems::get_problem(&state, problem_id).unwrap();
+    assert!(full.answer_completed);
+    assert!(full.explanation_completed);
+    let listed = problems::list_problems(&state, unit_id).unwrap();
+    assert!(listed[0].answer_completed);
+    assert!(listed[0].explanation_completed);
+
+    let duplicate_id = problems::duplicate_problem(&state, problem_id).unwrap();
+    let duplicate = problems::get_problem(&state, duplicate_id).unwrap();
+    assert!(duplicate.answer_completed);
+    assert!(duplicate.explanation_completed);
+
+    let old_version = problems::list_versions(&state, problem_id).unwrap()[0].id;
+    problems::restore_version(&state, old_version).unwrap();
+    let restored = problems::get_problem(&state, problem_id).unwrap();
+    assert!(!restored.answer_completed);
+    assert!(!restored.explanation_completed);
+}
+
+#[test]
 fn problem_booklet_two_column_setting_persists_and_duplicates() {
     use kyozai_kobo_lib::commands::projects;
 
@@ -3260,7 +3647,8 @@ fn unchanged_ai_latex_keeps_compile_result_and_can_be_saved_as_part() {
         let conn = state.conn.lock().unwrap();
         conn.execute(
             "UPDATE ai_conversion_jobs
-             SET compile_log='試験コンパイル成功', preview_pdf_path='preview.pdf'
+             SET compile_log='試験コンパイル成功', preview_pdf_path='preview.pdf',
+                 inserted_at='2026-01-01 12:00:00'
              WHERE id=?1",
             [job_id],
         )
@@ -3270,20 +3658,29 @@ fn unchanged_ai_latex_keeps_compile_result_and_can_be_saved_as_part() {
     kyozai_kobo_lib::ai::update_job_latex(&state, job_id, "$x^2$".into())
         .expect("同じLaTeXの保存に失敗した");
 
-    let (compile_status, compile_log, preview_pdf_path): (String, String, String) = state
+    let (compile_status, compile_log, preview_pdf_path, inserted_at): (
+        String,
+        String,
+        String,
+        String,
+    ) = state
         .conn
         .lock()
         .unwrap()
         .query_row(
-            "SELECT compile_status, compile_log, preview_pdf_path
+            "SELECT compile_status, compile_log, preview_pdf_path, inserted_at
              FROM ai_conversion_jobs WHERE id=?1",
             [job_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
     assert_eq!(compile_status, "ok");
     assert_eq!(compile_log, "試験コンパイル成功");
     assert_eq!(preview_pdf_path, "preview.pdf");
+    assert_eq!(
+        inserted_at, "2026-01-01 12:00:00",
+        "同じLaTeXを再保存しただけなら挿入済み状態を維持すること"
+    );
 
     let part_id = kyozai_kobo_lib::ai::save_as_part(
         &state,
@@ -3304,6 +3701,12 @@ fn unchanged_ai_latex_keeps_compile_result_and_can_be_saved_as_part() {
         )
         .unwrap();
     assert_eq!(saved_latex, "$x^2$");
+    let saved_job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
+    assert_eq!(saved_job["targetEntityName"].as_str(), Some("直近のAI変換"));
+    assert!(
+        !saved_job["insertedAt"].as_str().unwrap_or_default().is_empty(),
+        "部品として保存したジョブは挿入済みと分かること"
+    );
 }
 
 #[test]
@@ -3314,7 +3717,8 @@ fn changed_ai_latex_invalidates_previous_compile_result() {
         let conn = state.conn.lock().unwrap();
         conn.execute(
             "UPDATE ai_conversion_jobs
-             SET compile_log='試験コンパイル成功', preview_pdf_path='preview.pdf'
+             SET compile_log='試験コンパイル成功', preview_pdf_path='preview.pdf',
+                 inserted_at='2026-01-01 12:00:00'
              WHERE id=?1",
             [job_id],
         )
@@ -3324,20 +3728,29 @@ fn changed_ai_latex_invalidates_previous_compile_result() {
     kyozai_kobo_lib::ai::update_job_latex(&state, job_id, "$x^3$".into())
         .expect("編集後のLaTeXを保存できること");
 
-    let (compile_status, compile_log, preview_pdf_path): (String, String, String) = state
+    let (compile_status, compile_log, preview_pdf_path, inserted_at): (
+        String,
+        String,
+        String,
+        String,
+    ) = state
         .conn
         .lock()
         .unwrap()
         .query_row(
-            "SELECT compile_status, compile_log, preview_pdf_path
+            "SELECT compile_status, compile_log, preview_pdf_path, inserted_at
              FROM ai_conversion_jobs WHERE id=?1",
             [job_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
     assert_eq!(compile_status, "none");
     assert!(compile_log.is_empty());
     assert!(preview_pdf_path.is_empty());
+    assert!(
+        inserted_at.is_empty(),
+        "挿入後にLaTeXを変更したジョブは未挿入へ戻すこと"
+    );
 }
 
 #[test]
@@ -3406,6 +3819,13 @@ fn extracted_problems_are_saved_as_independent_bank_entries() {
         )
         .unwrap();
     assert_eq!(saved_two_column, "放物線 $y=x^2$ を\n平行移動せよ。");
+    drop(conn);
+    let saved_job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
+    assert_eq!(saved_job["targetEntityName"].as_str(), Some("平方完成"));
+    assert!(
+        !saved_job["insertedAt"].as_str().unwrap_or_default().is_empty(),
+        "一括保存したジョブは挿入済みと分かること"
+    );
 }
 
 #[test]
@@ -3429,8 +3849,8 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
         .unwrap();
         let unit_id = conn.last_insert_rowid();
         conn.execute(
-            "INSERT INTO problems (unit_id, title, statement_latex, answer_latex, created_at, updated_at)
-             VALUES (?1, '最大値', '$x^2$の最大値を求めよ。', '既存の解答', ?2, ?2)",
+            "INSERT INTO problems (unit_id, title, statement_latex, answer_latex, answer_completed, explanation_completed, created_at, updated_at)
+             VALUES (?1, '最大値', '$x^2$の最大値を求めよ。', '既存の解答', 1, 1, ?2, ?2)",
             rusqlite::params![unit_id, kyozai_kobo_lib::db::now_str()],
         )
         .unwrap();
@@ -3461,14 +3881,19 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
     assert_eq!(inserted["field"].as_str(), Some("answer_latex"));
 
     let conn = state.conn.lock().unwrap();
-    let (answer, version): (String, i64) = conn
+    let (answer, answer_completed, explanation_completed, version): (String, i64, i64, i64) = conn
         .query_row(
-            "SELECT answer_latex, version FROM problems WHERE id=?1",
+            "SELECT answer_latex, answer_completed, explanation_completed, version FROM problems WHERE id=?1",
             [problem_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
     assert_eq!(answer, "既存の解答\n$x^2$");
+    assert_eq!(answer_completed, 0, "AIで解答を変更したら完成状態を解除すること");
+    assert_eq!(
+        explanation_completed, 0,
+        "解答変更時は解説の完成状態も解除すること"
+    );
     assert_eq!(version, 2, "直接挿入でも問題の版を進めること");
     let history_count: i64 = conn
         .query_row(
@@ -3479,6 +3904,12 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
         .unwrap();
     assert_eq!(history_count, 1, "挿入前の問題を履歴へ保存すること");
     drop(conn);
+    let inserted_job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
+    assert_eq!(inserted_job["targetEntityName"].as_str(), Some("最大値"));
+    assert!(
+        !inserted_job["insertedAt"].as_str().unwrap_or_default().is_empty(),
+        "問題へ直接挿入したジョブは挿入済みと分かること"
+    );
 
     let duplicate = dispatch(
         &state,
@@ -3492,6 +3923,50 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
             .contains("すでに挿入"),
         "同じ生成結果の二重挿入を拒否すること"
     );
+}
+
+#[test]
+fn editor_insertion_records_part_name_and_inserted_state() {
+    let (_dir, state) = make_state();
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    let part_id = {
+        let conn = state.conn.lock().unwrap();
+        let now = kyozai_kobo_lib::db::now_str();
+        conn.execute(
+            "INSERT INTO parts (title, latex_source, created_at, updated_at)
+             VALUES ('微分係数の基本', '$f''(a)$', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+
+    kyozai_kobo_lib::ai::mark_inserted(
+        &state,
+        job_id,
+        "part".into(),
+        part_id,
+        "latex_source".into(),
+        true,
+    )
+    .expect("部品エディタへの挿入を記録できること");
+
+    let job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
+    assert_eq!(job["targetEntityType"].as_str(), Some("part"));
+    assert_eq!(job["targetEntityName"].as_str(), Some("微分係数の基本"));
+    assert!(!job["insertedAt"].as_str().unwrap_or_default().is_empty());
+    let event_count: i64 = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM ai_conversion_events
+             WHERE job_id=?1 AND kind='inserted'",
+            [job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event_count, 1);
 }
 
 #[test]
@@ -3586,6 +4061,17 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
     assert_eq!(statement, "$x^2$");
     assert_eq!(version, 2);
     assert_eq!(history, 1);
+    let applied_problem_job = kyozai_kobo_lib::ai::get_job(&state, problem_job).unwrap();
+    assert_eq!(
+        applied_problem_job["targetEntityName"].as_str(),
+        Some("修正対象")
+    );
+    assert!(
+        !applied_problem_job["insertedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty()
+    );
 
     let part_job = insert_completed_ai_job(&state, "completed", "ok");
     {
@@ -3632,6 +4118,17 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
     assert_eq!(part_latex, "$x^2$");
     assert_eq!(part_version, 2);
     assert_eq!(part_history, 1);
+    let applied_part_job = kyozai_kobo_lib::ai::get_job(&state, part_job).unwrap();
+    assert_eq!(
+        applied_part_job["targetEntityName"].as_str(),
+        Some("修正対象の部品")
+    );
+    assert!(
+        !applied_part_job["insertedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty()
+    );
     let duplicate_apply = apply_source_revision(&state, part_job, true)
         .expect_err("同じ修正結果を二重適用しないこと");
     assert!(duplicate_apply.contains("すでに適用"));

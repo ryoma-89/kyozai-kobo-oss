@@ -896,7 +896,9 @@ fn bank_export_import_roundtrip() {
         .execute(
             "UPDATE problems
              SET statement_latex = statement_latex || ' \\includegraphics{imgabc.png}',
-                 statement_latex_two_column = statement_latex_two_column || ' \\includegraphics{imgabc.png}'
+                 statement_latex_two_column = statement_latex_two_column || ' \\includegraphics{imgabc.png}',
+                 answer_completed = 1,
+                 explanation_completed = 1
              WHERE id=?1",
             params![problem_id],
         )
@@ -906,6 +908,8 @@ fn bank_export_import_roundtrip() {
     let data = build_bank_export(&conn_a, &att_dir_a, "unit", Some(unit_id), None).unwrap();
     assert_eq!(data.subjects.len(), 1);
     assert_eq!(data.subjects[0].fields[0].units[0].problems.len(), 1);
+    assert!(data.subjects[0].fields[0].units[0].problems[0].answer_completed);
+    assert!(data.subjects[0].fields[0].units[0].problems[0].explanation_completed);
     assert!(!data.subjects[0].fields[0].units[0].problems[0].attachments[0].data_base64.is_empty());
 
     // 新しいDBへインポート
@@ -944,6 +948,14 @@ fn bank_export_import_roundtrip() {
         )
         .unwrap();
     assert_eq!(tag, "平方完成");
+    let completion: (i64, i64) = conn_b
+        .query_row(
+            "SELECT answer_completed, explanation_completed FROM problems LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(completion, (1, 1));
 
     // 同じデータを再インポートすると階層はマージされ、問題だけ増える
     let result2 = apply_bank_import(&conn_b, &att_dir_b, &data).unwrap();

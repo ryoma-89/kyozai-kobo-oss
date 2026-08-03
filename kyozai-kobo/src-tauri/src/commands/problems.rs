@@ -51,13 +51,23 @@ pub fn normalize_rank(rank: Option<String>) -> Option<String> {
 
 pub fn list_problems(state: &AppState, unit_id: i64) -> Result<Vec<ProblemSummary>, String> {
     let conn = state.conn.lock().map_err(err_str)?;
-    let rows: Vec<(i64, i64, String, String, Option<String>, bool, String)> = {
+    let rows: Vec<(i64, i64, String, String, Option<String>, bool, bool, bool, String)> = {
         let mut stmt = conn
-            .prepare("SELECT id, unit_id, title, difficulty, difficulty_rank, is_required, updated_at FROM problems WHERE unit_id=?1 ORDER BY id")
+            .prepare("SELECT id, unit_id, title, difficulty, difficulty_rank, is_required, answer_completed, explanation_completed, updated_at FROM problems WHERE unit_id=?1 ORDER BY id")
             .map_err(err_str)?;
         let rows = stmt
             .query_map(params![unit_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? != 0, r.get(6)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get::<_, i64>(5)? != 0,
+                    r.get::<_, i64>(6)? != 0,
+                    r.get::<_, i64>(7)? != 0,
+                    r.get(8)?,
+                ))
             })
             .map_err(err_str)?
             .collect::<Result<_, _>>()
@@ -65,7 +75,17 @@ pub fn list_problems(state: &AppState, unit_id: i64) -> Result<Vec<ProblemSummar
         rows
     };
     let mut out = vec![];
-    for (id, unit_id, title, difficulty, difficulty_rank, is_required, updated_at) in rows {
+    for (
+        id,
+        unit_id,
+        title,
+        difficulty,
+        difficulty_rank,
+        is_required,
+        answer_completed,
+        explanation_completed,
+        updated_at,
+    ) in rows {
         out.push(ProblemSummary {
             id,
             unit_id,
@@ -73,6 +93,8 @@ pub fn list_problems(state: &AppState, unit_id: i64) -> Result<Vec<ProblemSummar
             difficulty,
             difficulty_rank,
             is_required,
+            answer_completed,
+            explanation_completed,
             tags: tags_of(&conn, id).map_err(err_str)?,
             updated_at,
             usage_count: usage_count(&conn, id).map_err(err_str)?,
@@ -85,7 +107,7 @@ pub fn get_problem(state: &AppState, id: i64) -> Result<ProblemFull, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut p = conn
         .query_row(
-            "SELECT id, unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, created_at, updated_at, version FROM problems WHERE id=?1",
+            "SELECT id, unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at, version FROM problems WHERE id=?1",
             params![id],
             |r| {
                 Ok(ProblemFull {
@@ -96,15 +118,17 @@ pub fn get_problem(state: &AppState, id: i64) -> Result<ProblemFull, String> {
                     statement_latex_two_column: r.get(4)?,
                     answer_latex: r.get(5)?,
                     explanation_latex: r.get(6)?,
-                    difficulty: r.get(7)?,
-                    difficulty_rank: r.get(8)?,
-                    is_required: r.get::<_, i64>(9)? != 0,
-                    memo: r.get(10)?,
-                    created_at: r.get(11)?,
-                    updated_at: r.get(12)?,
+                    answer_completed: r.get::<_, i64>(7)? != 0,
+                    explanation_completed: r.get::<_, i64>(8)? != 0,
+                    difficulty: r.get(9)?,
+                    difficulty_rank: r.get(10)?,
+                    is_required: r.get::<_, i64>(11)? != 0,
+                    memo: r.get(12)?,
+                    created_at: r.get(13)?,
+                    updated_at: r.get(14)?,
                     tags: vec![],
                     attachments: vec![],
-                    version: r.get(13)?,
+                    version: r.get(15)?,
                 })
             },
         )
@@ -128,8 +152,8 @@ pub fn create_problem(state: &AppState, unit_id: i64, title: String) -> Result<i
 
 pub(crate) fn save_version(conn: &Connection, problem_id: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO problem_versions (problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, saved_at)
-         SELECT id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, ?2 FROM problems WHERE id=?1",
+        "INSERT INTO problem_versions (problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, saved_at)
+         SELECT id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, ?2 FROM problems WHERE id=?1",
         params![problem_id, now_str()],
     )?;
     // 履歴は最大30件
@@ -175,7 +199,7 @@ pub fn update_problem(state: &AppState, payload: ProblemUpdate) -> Result<i64, S
     save_version(&tx, payload.id).map_err(err_str)?;
     let difficulty_rank = normalize_rank(payload.difficulty_rank);
     tx.execute(
-        "UPDATE problems SET unit_id=?1, title=?2, statement_latex=?3, statement_latex_two_column=?4, answer_latex=?5, explanation_latex=?6, difficulty=?7, difficulty_rank=?8, is_required=?9, memo=?10, updated_at=?11, version=version+1 WHERE id=?12",
+        "UPDATE problems SET unit_id=?1, title=?2, statement_latex=?3, statement_latex_two_column=?4, answer_latex=?5, explanation_latex=?6, answer_completed=?7, explanation_completed=?8, difficulty=?9, difficulty_rank=?10, is_required=?11, memo=?12, updated_at=?13, version=version+1 WHERE id=?14",
         params![
             payload.unit_id,
             payload.title,
@@ -183,6 +207,8 @@ pub fn update_problem(state: &AppState, payload: ProblemUpdate) -> Result<i64, S
             payload.statement_latex_two_column,
             payload.answer_latex,
             payload.explanation_latex,
+            payload.answer_completed as i64,
+            payload.explanation_completed as i64,
             payload.difficulty,
             difficulty_rank,
             payload.is_required as i64,
@@ -201,8 +227,8 @@ pub fn duplicate_problem(state: &AppState, id: i64) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let now = now_str();
     conn.execute(
-        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
-         SELECT unit_id, title || ' (コピー)', statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, ?2, ?2 FROM problems WHERE id=?1",
+        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
+         SELECT unit_id, title || ' (コピー)', statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, ?2, ?2 FROM problems WHERE id=?1",
         params![id, now],
     )
     .map_err(err_str)?;
@@ -250,7 +276,7 @@ pub fn list_versions(state: &AppState, problem_id: i64) -> Result<Vec<VersionSum
 pub fn get_version(state: &AppState, version_id: i64) -> Result<VersionFull, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     conn.query_row(
-        "SELECT id, problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, difficulty, difficulty_rank, is_required, memo, saved_at FROM problem_versions WHERE id=?1",
+        "SELECT id, problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, saved_at FROM problem_versions WHERE id=?1",
         params![version_id],
         |r| {
             Ok(VersionFull {
@@ -261,11 +287,13 @@ pub fn get_version(state: &AppState, version_id: i64) -> Result<VersionFull, Str
                 statement_latex_two_column: r.get(4)?,
                 answer_latex: r.get(5)?,
                 explanation_latex: r.get(6)?,
-                difficulty: r.get(7)?,
-                difficulty_rank: r.get(8)?,
-                is_required: r.get::<_, i64>(9)? != 0,
-                memo: r.get(10)?,
-                saved_at: r.get(11)?,
+                answer_completed: r.get::<_, i64>(7)? != 0,
+                explanation_completed: r.get::<_, i64>(8)? != 0,
+                difficulty: r.get(9)?,
+                difficulty_rank: r.get(10)?,
+                is_required: r.get::<_, i64>(11)? != 0,
+                memo: r.get(12)?,
+                saved_at: r.get(13)?,
             })
         },
     )
@@ -287,6 +315,8 @@ pub fn restore_version(state: &AppState, version_id: i64) -> Result<(), String> 
             statement_latex_two_column=(SELECT statement_latex_two_column FROM problem_versions WHERE id=?1),
             answer_latex=(SELECT answer_latex FROM problem_versions WHERE id=?1),
             explanation_latex=(SELECT explanation_latex FROM problem_versions WHERE id=?1),
+            answer_completed=(SELECT answer_completed FROM problem_versions WHERE id=?1),
+            explanation_completed=(SELECT explanation_completed FROM problem_versions WHERE id=?1),
             difficulty=(SELECT difficulty FROM problem_versions WHERE id=?1),
             difficulty_rank=(SELECT difficulty_rank FROM problem_versions WHERE id=?1),
             is_required=(SELECT is_required FROM problem_versions WHERE id=?1),
@@ -315,7 +345,7 @@ pub fn list_all_tags(state: &AppState) -> Result<Vec<String>, String> {
 pub fn search_problems(state: &AppState, query: SearchQuery) -> Result<Vec<SearchResult>, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut sql = String::from(
-        "SELECT DISTINCT p.id, p.title, p.difficulty, p.difficulty_rank, p.is_required, p.updated_at, u.id, u.name, f.name, s.name
+        "SELECT DISTINCT p.id, p.title, p.difficulty, p.difficulty_rank, p.is_required, p.answer_completed, p.explanation_completed, p.updated_at, u.id, u.name, f.name, s.name
          FROM problems p
          JOIN units u ON u.id = p.unit_id
          JOIN fields f ON f.id = u.field_id
@@ -401,7 +431,7 @@ pub fn search_problems(state: &AppState, query: SearchQuery) -> Result<Vec<Searc
     }
     sql.push_str(" ORDER BY p.updated_at DESC LIMIT 500");
 
-    let rows: Vec<(i64, String, String, Option<String>, bool, String, i64, String, String, String)> = {
+    let rows: Vec<(i64, String, String, Option<String>, bool, bool, bool, String, i64, String, String, String)> = {
         let mut stmt = conn.prepare(&sql).map_err(err_str)?;
         let rows = stmt
             .query_map(params_from_iter(args.iter()), |r| {
@@ -411,11 +441,13 @@ pub fn search_problems(state: &AppState, query: SearchQuery) -> Result<Vec<Searc
                     r.get(2)?,
                     r.get(3)?,
                     r.get::<_, i64>(4)? != 0,
-                    r.get(5)?,
-                    r.get(6)?,
+                    r.get::<_, i64>(5)? != 0,
+                    r.get::<_, i64>(6)? != 0,
                     r.get(7)?,
                     r.get(8)?,
                     r.get(9)?,
+                    r.get(10)?,
+                    r.get(11)?,
                 ))
             })
             .map_err(err_str)?
@@ -424,13 +456,28 @@ pub fn search_problems(state: &AppState, query: SearchQuery) -> Result<Vec<Searc
         rows
     };
     let mut out = vec![];
-    for (id, title, difficulty, difficulty_rank, is_required, updated_at, unit_id, unit_name, field_name, subject_name) in rows {
+    for (
+        id,
+        title,
+        difficulty,
+        difficulty_rank,
+        is_required,
+        answer_completed,
+        explanation_completed,
+        updated_at,
+        unit_id,
+        unit_name,
+        field_name,
+        subject_name,
+    ) in rows {
         out.push(SearchResult {
             id,
             title,
             difficulty,
             difficulty_rank,
             is_required,
+            answer_completed,
+            explanation_completed,
             tags: tags_of(&conn, id).map_err(err_str)?,
             updated_at,
             usage_count: usage_count(&conn, id).map_err(err_str)?,

@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 9;
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS subjects (
@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS problems (
     statement_latex_two_column TEXT NOT NULL DEFAULT '',
     answer_latex TEXT NOT NULL DEFAULT '',
     explanation_latex TEXT NOT NULL DEFAULT '',
+    answer_completed INTEGER NOT NULL DEFAULT 0,
+    explanation_completed INTEGER NOT NULL DEFAULT 0,
     difficulty TEXT NOT NULL DEFAULT '標準',
     difficulty_rank TEXT DEFAULT NULL,
     is_required INTEGER NOT NULL DEFAULT 0,
@@ -48,6 +50,8 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     statement_latex_two_column TEXT NOT NULL DEFAULT '',
     answer_latex TEXT NOT NULL DEFAULT '',
     explanation_latex TEXT NOT NULL DEFAULT '',
+    answer_completed INTEGER NOT NULL DEFAULT 0,
+    explanation_completed INTEGER NOT NULL DEFAULT 0,
     difficulty TEXT NOT NULL DEFAULT '標準',
     difficulty_rank TEXT DEFAULT NULL,
     is_required INTEGER NOT NULL DEFAULT 0,
@@ -354,8 +358,32 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     // 問題の新難易度分類（既存 difficulty は保持）
     ensure_column(conn, "problems", "difficulty_rank", "difficulty_rank TEXT DEFAULT NULL")?;
     ensure_column(conn, "problems", "is_required", "is_required INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        conn,
+        "problems",
+        "answer_completed",
+        "answer_completed INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "problems",
+        "explanation_completed",
+        "explanation_completed INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(conn, "problem_versions", "difficulty_rank", "difficulty_rank TEXT DEFAULT NULL")?;
     ensure_column(conn, "problem_versions", "is_required", "is_required INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        conn,
+        "problem_versions",
+        "answer_completed",
+        "answer_completed INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "problem_versions",
+        "explanation_completed",
+        "explanation_completed INTEGER NOT NULL DEFAULT 0",
+    )?;
     // 教材プロジェクト: 使用テンプレートとそのスナップショット
     ensure_column(conn, "projects", "template_id", "template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL")?;
     ensure_column(conn, "projects", "snap_tpl_name", "snap_tpl_name TEXT NOT NULL DEFAULT ''")?;
@@ -525,6 +553,7 @@ CREATE TABLE IF NOT EXISTS ai_conversion_jobs (
     target_entity_type TEXT NOT NULL DEFAULT '',
     target_entity_id INTEGER,
     target_field TEXT NOT NULL DEFAULT '',
+    inserted_at TEXT NOT NULL DEFAULT '',
     error_code TEXT NOT NULL DEFAULT '',
     error_message TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
@@ -543,6 +572,25 @@ CREATE TABLE IF NOT EXISTS ai_conversion_events (
 CREATE INDEX IF NOT EXISTS idx_ai_events_job ON ai_conversion_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_hash ON web_sessions(token_hash);
 "#,
+    )?;
+    ensure_column(
+        conn,
+        "ai_conversion_jobs",
+        "inserted_at",
+        "inserted_at TEXT NOT NULL DEFAULT ''",
+    )?;
+    // 旧版で直接挿入・ソース修正を行ったジョブは、記録済みイベントから可能な範囲で復元する。
+    conn.execute(
+        "UPDATE ai_conversion_jobs
+         SET inserted_at=COALESCE(
+             (SELECT MAX(created_at)
+              FROM ai_conversion_events
+              WHERE ai_conversion_events.job_id=ai_conversion_jobs.id
+                AND kind IN ('inserted','revision_applied')),
+             ''
+         )
+         WHERE inserted_at=''",
+        [],
     )?;
     Ok(())
 }

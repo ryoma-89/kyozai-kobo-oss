@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   addPartAttachment,
   addPartToProject,
+  aiCreateJob,
   compilePartPreview,
   createPart,
   deletePart,
@@ -25,6 +26,7 @@ import {
   revokeIfBlobUrl,
 } from "../transport";
 import type {
+  AiJob,
   DifficultyRank,
   PartFull,
   PartOutputTarget,
@@ -35,7 +37,11 @@ import type {
   RequiredFilter,
   SubjectNode,
 } from "../types";
-import { AiConvertDialog } from "./AiConvertDialog";
+import {
+  AiConvertDialog,
+  inferSolutionSubject,
+  type ContentReviewFixTarget,
+} from "./AiConvertDialog";
 import { useNarrowLayout } from "./BankView";
 import { ConflictDialog } from "./ConflictDialog";
 import { LatexEditor } from "./LatexEditor";
@@ -129,6 +135,9 @@ export function PartsView() {
   const [aiDialogMode, setAiDialogMode] = useState<
     "convert" | "topic_guide" | "revise" | null
   >(null);
+  const [contentReviewJob, setContentReviewJob] = useState<AiJob | null>(null);
+  const [contentReviewStarting, setContentReviewStarting] = useState(false);
+  const [contentReviewGuidance, setContentReviewGuidance] = useState("");
   const [conflict, setConflict] = useState<PartFull | null>(null);
   const [previewMode, setPreviewMode] = useState<"quick" | "pdf">("quick");
   const [pdfSrc, setPdfSrc] = useState<string | null>(null);
@@ -159,6 +168,12 @@ export function PartsView() {
   const editorUnits = useMemo(
     () => editorFields.find((field) => field.id === editFieldId)?.units ?? [],
     [editorFields, editFieldId],
+  );
+  const aiSolutionSubject = inferSolutionSubject(
+    tree.find(
+      (subject) =>
+        subject.id === (part?.subject_id ?? editSubjectId ?? subjectId),
+    )?.name ?? "",
   );
 
   const resetPdfPreview = () => {
@@ -349,6 +364,78 @@ export function PartsView() {
     } finally {
       setPdfBusy(false);
     }
+  };
+
+  const startContentReview = async () => {
+    const current = latestPart.current;
+    if (!current) return;
+    if (dirtyRef.current) {
+      showToast("AIチェックの前に、現在の変更を保存してください", "error");
+      return;
+    }
+    if (!current.latex_source.trim()) {
+      showToast("AIチェックする部品本文を入力してください", "error");
+      return;
+    }
+    setContentReviewStarting(true);
+    try {
+      const reviewJob = await aiCreateJob({
+        sourceType: "text",
+        conversionMode: "content_review",
+        options: {
+          contentReviewSourceVersion: current.version,
+          contentReviewEntityType: "part",
+          solutionSubject: aiSolutionSubject,
+        },
+        inputText: [
+          "【対象種別】部品ライブラリの部品",
+          `【科目区分】${current.subject_name || "未分類"}`,
+          `【部品ID】${current.id}`,
+          `【題名】${current.title}`,
+          `【種類】${current.part_type}`,
+          `【カテゴリ】${current.category || "未設定"}`,
+          `【版】${current.version}`,
+          "",
+          "【説明・メモ】",
+          current.description.trim() || "（未入力）",
+          "",
+          "【部品本文LaTeX】",
+          current.latex_source.trim(),
+        ].join("\n"),
+        targetEntityType: "part",
+        targetEntityId: current.id,
+        targetField: "review",
+      });
+      setContentReviewJob(reviewJob);
+      showToast("部品のAIチェックを開始しました。待っている間も編集を続けられます");
+    } catch (error) {
+      showToast(String(error), "error");
+    } finally {
+      setContentReviewStarting(false);
+    }
+  };
+
+  const openContentReviewFix = (
+    target: ContentReviewFixTarget,
+    action: "manual" | "ai",
+  ) => {
+    if (action === "manual" || target.field === "item") {
+      setContentReviewJob(null);
+      return;
+    }
+    if (target.field !== "content") return;
+    const current = latestPart.current;
+    const reviewedVersion = contentReviewJob?.options.contentReviewSourceVersion;
+    if (!current || dirtyRef.current || reviewedVersion !== current.version) {
+      showToast(
+        "AIチェック後に内容が更新されています。保存後、最新内容でもう一度AIチェックしてください",
+        "error",
+      );
+      return;
+    }
+    setContentReviewJob(null);
+    setContentReviewGuidance(target.guidance);
+    setAiDialogMode("revise");
   };
 
   const toggleRankFilter = (rank: DifficultyRank | "__unset") => {
@@ -618,7 +705,7 @@ export function PartsView() {
               }}
               className="select text-xs"
             >
-              <option value="">科目: すべて</option>
+              <option value="">教科: すべて</option>
               {tree.map((subject) => (
                 <option key={subject.id} value={subject.id}>{subject.name}</option>
               ))}
@@ -632,7 +719,7 @@ export function PartsView() {
               className="select text-xs"
               disabled={subjectId == null}
             >
-              <option value="">分野: すべて</option>
+              <option value="">科目: すべて</option>
               {filterFields.map((field) => (
                 <option key={field.id} value={field.id}>{field.name}</option>
               ))}
@@ -731,7 +818,7 @@ export function PartsView() {
                     </div>
                     <div className="mt-1 truncate text-[11px]" style={{ color: "var(--muted)" }}>
                       {p.unit_id == null
-                        ? "科目・分野・単元: 未分類"
+                        ? "教科・科目・単元: 未分類"
                         : `${p.subject_name} › ${p.field_name} › ${p.unit_name}`}
                     </div>
                     <div className="mt-1 truncate text-xs" style={{ color: "var(--muted)" }}>
@@ -765,6 +852,15 @@ export function PartsView() {
                 <DifficultyRankBadge rank={part.difficulty_rank} required={part.is_required} />
                 {dirty && <span className="badge badge-warn">● 未保存</span>}
                 <button
+                  onClick={() => void startContentReview()}
+                  disabled={contentReviewStarting}
+                  className="btn btn-solid btn-sm"
+                  title="保存済みの部品内容をAIで点検し、指摘から修正できます"
+                >
+                  <Icon name="sparkle" size={15} />
+                  {contentReviewStarting ? "チェック開始中..." : "AIチェック"}
+                </button>
+                <button
                   onClick={() => setAiDialogMode("convert")}
                   className="btn btn-outline btn-sm"
                   title="写真やテキストをAIでLaTeXへ変換して挿入"
@@ -786,7 +882,7 @@ export function PartsView() {
               </div>
               <div className="space-y-2 border-b px-3 py-2" style={{ borderColor: "var(--border)" }}>
                 <div>
-                  <div className="mb-1 section-label">科目・分野・単元</div>
+                  <div className="mb-1 section-label">教科・科目・単元</div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     <select
                       value={editSubjectId ?? ""}
@@ -798,7 +894,7 @@ export function PartsView() {
                       }}
                       className="select"
                     >
-                      <option value="">未分類</option>
+                      <option value="">教科を選択（未分類）</option>
                       {tree.map((subject) => (
                         <option key={subject.id} value={subject.id}>{subject.name}</option>
                       ))}
@@ -812,7 +908,7 @@ export function PartsView() {
                       className="select"
                       disabled={editSubjectId == null}
                     >
-                      <option value="">分野を選択</option>
+                      <option value="">科目を選択</option>
                       {editorFields.map((field) => (
                         <option key={field.id} value={field.id}>{field.name}</option>
                       ))}
@@ -1126,9 +1222,23 @@ export function PartsView() {
         </Modal>
       )}
 
+      {contentReviewJob && (
+        <AiConvertDialog
+          initialJob={contentReviewJob}
+          onClose={() => setContentReviewJob(null)}
+          onContentReviewFix={openContentReviewFix}
+        />
+      )}
+
       {aiDialogMode && (
         <AiConvertDialog
-          onClose={() => setAiDialogMode(null)}
+          onClose={() => {
+            const shouldRefresh = aiDialogMode === "revise";
+            const currentId = latestPart.current?.id;
+            setAiDialogMode(null);
+            setContentReviewGuidance("");
+            if (shouldRefresh && currentId != null) void loadPart(currentId, true);
+          }}
           preset={
             aiDialogMode === "topic_guide"
               ? {
@@ -1137,6 +1247,7 @@ export function PartsView() {
                   title: "分野・解法の解説部品を生成",
                   solutionLayout: part?.layout_mode === "two_column" ? "two_column" : "single_column",
                   solutionDetail: "standard",
+                  solutionSubject: aiSolutionSubject,
                 }
               : aiDialogMode === "revise" && part
                 ? {
@@ -1146,10 +1257,12 @@ export function PartsView() {
                     title: "AIで部品ソースを修正",
                     revisionTarget: "part",
                     revisionSourceVersion: part.version,
+                    revisionGuidance: contentReviewGuidance,
                     replaceTarget: true,
+                    solutionSubject: aiSolutionSubject,
                     solutionLayout: part.layout_mode === "two_column" ? "two_column" : "single_column",
                   }
-              : undefined
+              : { solutionSubject: aiSolutionSubject }
           }
           insertTargets={
             (aiDialogMode === "convert" || aiDialogMode === "revise") && part

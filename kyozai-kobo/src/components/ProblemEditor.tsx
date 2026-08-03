@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   addAttachment,
+  aiCreateJob,
   compileProblemPreview,
   createGraphWebSession,
   ensureGraphFromAsset,
@@ -21,8 +22,13 @@ import { insertTextAtRange } from "../graphIntegration";
 import { moveProblems } from "../api";
 import { useApp } from "../store";
 import { compiledPdfUrl, ConflictError, isTauri, revokeIfBlobUrl } from "../transport";
-import type { GraphAssetSummary, ProblemFull, VersionFull, VersionSummary } from "../types";
-import { AiConvertDialog, type AiConvertPreset } from "./AiConvertDialog";
+import type { AiJob, GraphAssetSummary, ProblemFull, VersionFull, VersionSummary } from "../types";
+import {
+  AiConvertDialog,
+  inferSolutionSubject,
+  type AiConvertPreset,
+  type ContentReviewFixTarget,
+} from "./AiConvertDialog";
 import { ConflictDialog } from "./ConflictDialog";
 import { LatexEditor, type LatexEditorHandle } from "./LatexEditor";
 import { LatexPreview } from "./LatexPreview";
@@ -33,6 +39,11 @@ import { DIFFICULTY_RANKS, DifficultyRankBadge, Modal } from "./ui";
 
 type Tab = "statement" | "answer" | "explanation";
 type StatementLayout = "single_column" | "two_column";
+type ProblemLatexField =
+  | "statement_latex"
+  | "statement_latex_two_column"
+  | "answer_latex"
+  | "explanation_latex";
 
 const TAB_LABELS: Record<Tab, string> = {
   statement: "問題文",
@@ -104,6 +115,8 @@ function editableProblemSignature(problem: ProblemFull): string {
     statement_latex_two_column: problem.statement_latex_two_column,
     answer_latex: problem.answer_latex,
     explanation_latex: problem.explanation_latex,
+    answer_completed: problem.answer_completed,
+    explanation_completed: problem.explanation_completed,
     difficulty: problem.difficulty,
     difficulty_rank: problem.difficulty_rank,
     is_required: problem.is_required,
@@ -117,6 +130,7 @@ export function ProblemEditor() {
   const {
     selectedProblemId,
     selectProblem,
+    tree,
     refreshTree,
     showToast,
     confirm,
@@ -145,6 +159,8 @@ export function ProblemEditor() {
   const [zoom, setZoom] = useState(100);
   const [showAi, setShowAi] = useState(false);
   const [aiPreset, setAiPreset] = useState<(AiConvertPreset & { targetTab?: Tab }) | null>(null);
+  const [contentReviewJob, setContentReviewJob] = useState<AiJob | null>(null);
+  const [contentReviewStarting, setContentReviewStarting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<ProblemFull | null>(null);
   const previewBoxRef = useRef<HTMLDivElement>(null);
@@ -326,6 +342,8 @@ export function ProblemEditor() {
         statement_latex_two_column: p.statement_latex_two_column,
         answer_latex: p.answer_latex,
         explanation_latex: p.explanation_latex,
+        answer_completed: p.answer_completed,
+        explanation_completed: p.explanation_completed,
         difficulty: p.difficulty,
         difficulty_rank: p.difficulty_rank,
         is_required: p.is_required,
@@ -395,6 +413,8 @@ export function ProblemEditor() {
           statement_latex_two_column: mine.statement_latex_two_column,
           answer_latex: mine.answer_latex,
           explanation_latex: mine.explanation_latex,
+          answer_completed: mine.answer_completed,
+          explanation_completed: mine.explanation_completed,
           difficulty: mine.difficulty,
           difficulty_rank: mine.difficulty_rank,
           is_required: mine.is_required,
@@ -431,18 +451,28 @@ export function ProblemEditor() {
     statementLayout === "two_column"
       ? "statement_latex_two_column"
       : "statement_latex";
-  const fieldKey: Record<
-    Tab,
-    | "statement_latex"
-    | "statement_latex_two_column"
-    | "answer_latex"
-    | "explanation_latex"
-  > = {
+  const fieldKey: Record<Tab, ProblemLatexField> = {
     statement: statementField,
     answer: "answer_latex",
     explanation: "explanation_latex",
   };
   const currentText = problem[fieldKey[tab]];
+  const patchLatex = (target: ProblemLatexField, value: string) => {
+    const changes = { [target]: value } as Partial<ProblemFull>;
+    if (target === "statement_latex" && value !== problem.statement_latex) {
+      changes.answer_completed = false;
+      changes.explanation_completed = false;
+    } else if (target === "answer_latex" && value !== problem.answer_latex) {
+      changes.answer_completed = false;
+      changes.explanation_completed = false;
+    } else if (
+      target === "explanation_latex"
+      && value !== problem.explanation_latex
+    ) {
+      changes.explanation_completed = false;
+    }
+    patch(changes);
+  };
 
   const sourceRevisionInput = (targetTab: Tab): string => {
     const blocks: string[] = [];
@@ -466,7 +496,7 @@ export function ProblemEditor() {
     const start = ta.selectionStart;
     const end = ta.selectionEnd;
     const newValue = currentText.slice(0, start) + text + currentText.slice(end);
-    patch({ [fieldKey[tab]]: newValue } as Partial<ProblemFull>);
+    patchLatex(fieldKey[tab], newValue);
     requestAnimationFrame(() => {
       ta.focus();
       const pos = start + (cursorOffset ?? text.length);
@@ -499,7 +529,7 @@ export function ProblemEditor() {
           const latest = problemRef.current;
           if (latest) {
             const nextText = insertTextAtRange(latest[targetField], result.insertedLatex, start, end);
-            patch({ [targetField]: nextText } as Partial<ProblemFull>);
+            patchLatex(targetField, nextText);
             requestAnimationFrame(() => {
               const currentEditor = textareaRef.current;
               if (tab === targetTab && currentEditor) {
@@ -570,7 +600,7 @@ export function ProblemEditor() {
         async (result) => {
           const current = problemRef.current;
           if (current) {
-            patch({ [target]: insertTextAtRange(current[target], result.insertedLatex, start, end) } as Partial<ProblemFull>);
+            patchLatex(target, insertTextAtRange(current[target], result.insertedLatex, start, end));
             setTab(targetTab);
             if (target === "statement_latex_two_column") {
               setStatementLayout("two_column");
@@ -708,6 +738,145 @@ export function ProblemEditor() {
     }
   };
 
+  const problemSubjectName =
+    tree.find((subject) =>
+      subject.fields.some((field) =>
+        field.units.some((unit) => unit.id === problem.unit_id),
+      ),
+    )?.name ?? "";
+  const problemSolutionSubject = inferSolutionSubject(problemSubjectName);
+
+  const buildProblemReviewSource = (): string =>
+    [
+      "【対象種別】問題バンクの問題",
+      `【科目区分】${problemSubjectName || "未分類"}`,
+      `【問題ID】${problem.id}`,
+      `【題名】${problem.title}`,
+      `【版】${problem.version}`,
+      "",
+      "【問題文（一段組用）】",
+      problem.statement_latex.trim() || "（未入力）",
+      "",
+      "【問題文（二段組用）】",
+      problem.statement_latex_two_column.trim() || "（未入力）",
+      "",
+      "【解答】",
+      problem.answer_latex.trim() || "（未入力）",
+      "",
+      "【解説】",
+      problem.explanation_latex.trim() || "（未入力）",
+      "",
+      `【完成状態】解答=${problem.answer_completed ? "完成" : "未完成"}、解説=${problem.explanation_completed ? "完成" : "未完成"}`,
+    ].join("\n");
+
+  const startContentReview = async () => {
+    if (dirtyRef.current) {
+      showToast("AIチェックの前に、現在の変更を保存してください", "error");
+      return;
+    }
+    if (!problem.statement_latex.trim() && !problem.statement_latex_two_column.trim()) {
+      showToast("AIチェックする問題文を入力してください", "error");
+      return;
+    }
+    setContentReviewStarting(true);
+    try {
+      const reviewJob = await aiCreateJob({
+        sourceType: "text",
+        conversionMode: "content_review",
+        options: {
+          contentReviewSourceVersion: problem.version,
+          contentReviewEntityType: "problem",
+          solutionSubject: problemSolutionSubject,
+        },
+        inputText: buildProblemReviewSource(),
+        targetEntityType: "problem",
+        targetEntityId: problem.id,
+        targetField: "review",
+      });
+      setContentReviewJob(reviewJob);
+      showToast("問題のAIチェックを開始しました。待っている間も編集を続けられます");
+    } catch (error) {
+      showToast(String(error), "error");
+    } finally {
+      setContentReviewStarting(false);
+    }
+  };
+
+  const openContentReviewFix = (
+    target: ContentReviewFixTarget,
+    action: "manual" | "ai",
+  ) => {
+    const field = target.field;
+    if (field === "content") return;
+    const targetTab: Tab =
+      field === "answer" || field === "explanation" ? field : "statement";
+    const targetField: ProblemLatexField =
+      field === "statement_two_column"
+        ? "statement_latex_two_column"
+        : field === "answer"
+          ? "answer_latex"
+          : field === "explanation"
+            ? "explanation_latex"
+            : "statement_latex";
+    if (targetTab === "statement") {
+      setStatementLayout(
+        field === "statement_two_column" ? "two_column" : "single_column",
+      );
+    }
+    setTab(targetTab);
+    if (action === "manual" || field === "item") {
+      setContentReviewJob(null);
+      return;
+    }
+    const reviewedVersion = contentReviewJob?.options.contentReviewSourceVersion;
+    if (dirtyRef.current || reviewedVersion !== problem.version) {
+      showToast(
+        "AIチェック後に内容が更新されています。保存後、最新内容でもう一度AIチェックしてください",
+        "error",
+      );
+      return;
+    }
+    setContentReviewJob(null);
+
+    const blocks: string[] = [];
+    if (targetTab !== "statement") {
+      blocks.push("【問題文（参照用）】", problem.statement_latex.trim());
+    }
+    if (targetTab === "explanation") {
+      blocks.push("", "【解答（参照用）】", problem.answer_latex.trim());
+    }
+    blocks.push(
+      "",
+      `【修正対象の${field === "statement_two_column" ? "二段組用問題文" : TAB_LABELS[targetTab]}LaTeX】`,
+      problem[targetField].trim(),
+    );
+    setAiPreset({
+      sourceType: "text",
+      text: blocks.join("\n").trim(),
+      mode: "revise_source",
+      title: `AIチェックの指摘に基づいて${field === "statement_two_column" ? "二段組用問題文" : TAB_LABELS[targetTab]}を修正`,
+      revisionTarget:
+        field === "statement_two_column"
+          ? "problem_statement_two_column"
+          : (`problem_${targetTab}` as
+              | "problem_statement"
+              | "problem_answer"
+              | "problem_explanation"),
+      revisionSourceVersion: reviewedVersion,
+      revisionGuidance: target.guidance,
+      replaceTarget: true,
+      targetTab,
+      solutionSubject: problemSolutionSubject,
+      solutionLayout:
+        targetTab === "statement"
+          ? field === "statement_two_column"
+            ? "two_column"
+            : "single_column"
+          : undefined,
+    });
+    setShowAi(true);
+  };
+
   return (
     <div className="problem-editor editor-split flex h-full min-w-0">
       {/* 中央: 編集 */}
@@ -817,6 +986,32 @@ export function ProblemEditor() {
           </span>
         </div>
 
+        <div
+          className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-3 py-1.5 text-xs"
+          style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+        >
+          <span className="section-label">完成状態</span>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={problem.answer_completed}
+              onChange={(e) => patch({ answer_completed: e.target.checked })}
+            />
+            解答完成
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={problem.explanation_completed}
+              onChange={(e) => patch({ explanation_completed: e.target.checked })}
+            />
+            解説完成
+          </label>
+          <span style={{ color: "var(--muted)" }}>
+            保存すると問題バンク一覧に表示されます
+          </span>
+        </div>
+
         {/* タブ */}
         <div className="flex border-b" style={{ borderColor: "var(--border)" }}>
           {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
@@ -882,8 +1077,17 @@ export function ProblemEditor() {
             グラフを再編集
           </button>
           <button
+            onClick={() => void startContentReview()}
+            disabled={contentReviewStarting}
+            className="btn btn-solid btn-sm"
+            title="保存済みの問題文・解答・解説をまとめてAIで点検し、指摘から修正できます"
+          >
+            <Icon name="sparkle" size={15} />
+            {contentReviewStarting ? "チェック開始中..." : "AIチェック"}
+          </button>
+          <button
             onClick={() => {
-              setAiPreset(null);
+              setAiPreset({ solutionSubject: problemSolutionSubject });
               setShowAi(true);
             }}
             className="btn btn-outline btn-sm"
@@ -916,6 +1120,7 @@ export function ProblemEditor() {
                 revisionSourceVersion: problem.version,
                 replaceTarget: true,
                 targetTab,
+                solutionSubject: problemSolutionSubject,
                 solutionLayout:
                   targetTab === "statement"
                     ? statementLayout
@@ -961,6 +1166,7 @@ export function ProblemEditor() {
                 mode: "generate_answer",
                 title: "AIで解答を生成（高校範囲）",
                 targetTab: "answer",
+                solutionSubject: problemSolutionSubject,
               });
               setShowAi(true);
             }}
@@ -984,6 +1190,7 @@ export function ProblemEditor() {
                 mode: "generate_explanation",
                 title: "AIで詳しい解説を生成（高校範囲）",
                 targetTab: "explanation",
+                solutionSubject: problemSolutionSubject,
               });
               setShowAi(true);
             }}
@@ -1004,7 +1211,7 @@ export function ProblemEditor() {
             key={`${problem.id}-${tab}`}
             ref={textareaRef}
             value={currentText}
-            onChange={(v) => patch({ [fieldKey[tab]]: v } as Partial<ProblemFull>)}
+            onChange={(v) => patchLatex(fieldKey[tab], v)}
             className="h-full"
             placeholder={`${TAB_LABELS[tab]}のLaTeXソースを入力（既存のソースを貼り付け可能）`}
           />
@@ -1154,11 +1361,20 @@ export function ProblemEditor() {
       </div>
 
       {/* AI変換ダイアログ */}
+      {contentReviewJob && (
+        <AiConvertDialog
+          initialJob={contentReviewJob}
+          onClose={() => setContentReviewJob(null)}
+          onContentReviewFix={openContentReviewFix}
+        />
+      )}
       {showAi && (
         <AiConvertDialog
           onClose={() => {
+            const shouldRefresh = aiPreset?.mode === "revise_source";
             setShowAi(false);
             setAiPreset(null);
+            if (shouldRefresh) void load(true);
           }}
           preset={aiPreset ?? undefined}
           onUseProblemLayouts={
@@ -1168,6 +1384,8 @@ export function ProblemEditor() {
                     statement_latex: layouts.statementLatex,
                     statement_latex_two_column:
                       layouts.statementLatexTwoColumn,
+                    answer_completed: false,
+                    explanation_completed: false,
                   });
                   setTab("statement");
                   setStatementLayout("single_column");
@@ -1186,7 +1404,7 @@ export function ProblemEditor() {
               if (!latest) return;
               const key = fieldKey[t];
               if (aiPreset?.replaceTarget) {
-                patch({ [key]: latexText } as Partial<ProblemFull>);
+                patchLatex(key, latexText);
                 setTab(t);
                 return;
               }
@@ -1195,11 +1413,11 @@ export function ProblemEditor() {
                 const ta = textareaRef.current;
                 const start = ta.selectionStart;
                 const end = ta.selectionEnd;
-                patch({ [key]: insertTextAtRange(latest[key], latexText, start, end) } as Partial<ProblemFull>);
+                patchLatex(key, insertTextAtRange(latest[key], latexText, start, end));
               } else {
                 // 別タブなら末尾に追記してそのタブへ切り替え
                 const base = latest[key];
-                patch({ [key]: base ? `${base}\n${latexText}` : latexText } as Partial<ProblemFull>);
+                patchLatex(key, base ? `${base}\n${latexText}` : latexText);
                 setTab(t);
               }
             },

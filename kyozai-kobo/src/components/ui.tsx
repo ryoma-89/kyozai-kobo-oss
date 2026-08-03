@@ -164,6 +164,29 @@ export function DifficultyRankBadge({
   );
 }
 
+export function CompletionBadges({
+  answerCompleted,
+  explanationCompleted,
+}: {
+  answerCompleted: boolean;
+  explanationCompleted: boolean;
+}) {
+  const badge = (label: string, completed: boolean) => (
+    <span
+      className={`badge ${completed ? "badge-basic" : "badge-muted"}`}
+      title={`${label}は${completed ? "完成" : "未完成"}です`}
+    >
+      {label}{completed ? "✓" : "－"}
+    </span>
+  );
+  return (
+    <span className="flex flex-wrap gap-1 whitespace-nowrap">
+      {badge("解答", answerCompleted)}
+      {badge("解説", explanationCompleted)}
+    </span>
+  );
+}
+
 export function TagChips({ tags }: { tags: string[] }) {
   return (
     <span className="flex flex-wrap gap-1">

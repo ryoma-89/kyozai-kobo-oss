@@ -6,7 +6,14 @@ import { isTauri } from "../transport";
 import type { DifficultyRank, ProblemSummary, RequiredFilter } from "../types";
 import { AiConvertDialog } from "./AiConvertDialog";
 import { Icon } from "./Icon";
-import { DIFFICULTY_RANKS, DifficultyBadge, DifficultyRankBadge, Modal, TagChips } from "./ui";
+import {
+  CompletionBadges,
+  DIFFICULTY_RANKS,
+  DifficultyBadge,
+  DifficultyRankBadge,
+  Modal,
+  TagChips,
+} from "./ui";
 
 /** 選択中の単元の問題一覧（複数選択で一括移動・削除・エクスポート） */
 export function ProblemList() {
@@ -257,6 +264,7 @@ export function ProblemList() {
                   <input type="checkbox" checked={allChecked} onChange={toggleAll} title="すべて選択" />
                 </th>
                 <th className="px-2 py-2 font-normal">タイトル</th>
+                <th className="px-2 py-2 font-normal whitespace-nowrap">完成状態</th>
                 <th className="px-2 py-2 font-normal">難易度</th>
                 <th className="px-2 py-2 font-normal">タグ</th>
                 <th className="px-2 py-2 font-normal whitespace-nowrap">最終更新</th>
@@ -276,6 +284,12 @@ export function ProblemList() {
                   <td className="px-2 py-2 font-medium" onClick={() => selectProblem(p.id)}>
                     <span className="mr-2">{p.title}</span>
                     <DifficultyRankBadge rank={p.difficulty_rank} required={p.is_required} />
+                  </td>
+                  <td className="px-2 py-2" onClick={() => selectProblem(p.id)}>
+                    <CompletionBadges
+                      answerCompleted={p.answer_completed}
+                      explanationCompleted={p.explanation_completed}
+                    />
                   </td>
                   <td className="px-2 py-2" onClick={() => selectProblem(p.id)}>
                     <DifficultyBadge value={p.difficulty} />
@@ -318,6 +332,10 @@ export function ProblemList() {
                   </span>
                   <span className="mt-2 flex flex-wrap items-center gap-1.5">
                     <DifficultyBadge value={p.difficulty} />
+                    <CompletionBadges
+                      answerCompleted={p.answer_completed}
+                      explanationCompleted={p.explanation_completed}
+                    />
                     <TagChips tags={p.tags} />
                   </span>
                   <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]" style={{ color: "var(--muted)" }}>

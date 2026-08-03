@@ -42,6 +42,92 @@ const MODES: { value: string; label: string; experimental?: boolean }[] = [
   { value: "verbatim", label: "原文を整形せず転記" },
 ];
 
+export type SolutionSubject =
+  | "mathematics"
+  | "physics"
+  | "chemistry"
+  | "biology"
+  | "english"
+  | "japanese"
+  | "social_studies"
+  | "information"
+  | "general";
+
+const SOLUTION_SUBJECTS: Array<{
+  value: SolutionSubject;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "mathematics",
+    label: "数学",
+    description: "現在の高校数学用の詳細な答案・解説規則をそのまま使用します。",
+  },
+  {
+    value: "physics",
+    label: "物理",
+    description: "法則の適用理由、向き・符号、単位、有効数字を確認します。",
+  },
+  {
+    value: "chemistry",
+    label: "化学",
+    description: "反応式、物質量、単位、反応条件を高校化学の表記で扱います。",
+  },
+  {
+    value: "biology",
+    label: "生物",
+    description: "資料・実験結果を根拠に、構造・働き・因果関係を説明します。",
+  },
+  {
+    value: "english",
+    label: "英語",
+    description: "本文根拠、文構造、文法・語法、和訳・英作文に合わせて説明します。",
+  },
+  {
+    value: "japanese",
+    label: "国語",
+    description: "本文根拠、現代文の論理、古文・漢文の語句や文法を扱います。",
+  },
+  {
+    value: "social_studies",
+    label: "地理・歴史・公民",
+    description: "資料、年代、地域、制度と因果関係を高校教科書の範囲で扱います。",
+  },
+  {
+    value: "information",
+    label: "情報",
+    description: "情報I・IIの用語、アルゴリズム、データ、ネットワーク等に対応します。",
+  },
+  {
+    value: "general",
+    label: "その他",
+    description: "入力から科目を判断し、高校範囲の一般的な答案形式で生成します。",
+  },
+];
+
+function parseSolutionSubject(value: string): SolutionSubject {
+  return SOLUTION_SUBJECTS.some((subject) => subject.value === value)
+    ? (value as SolutionSubject)
+    : "mathematics";
+}
+
+/** 問題バンクの科目名から、AI生成で使う科目別指示を推定する。 */
+export function inferSolutionSubject(subjectName: string): SolutionSubject {
+  const name = subjectName.trim().toLowerCase();
+  if (!name) return "mathematics";
+  if (/(物理|physics)/i.test(name)) return "physics";
+  if (/(化学|chemistry)/i.test(name)) return "chemistry";
+  if (/(生物|biology)/i.test(name)) return "biology";
+  if (/(英語|英文|english)/i.test(name)) return "english";
+  if (/(国語|現代文|古文|漢文|japanese)/i.test(name)) return "japanese";
+  if (/(地理|歴史|日本史|世界史|公民|倫理|政治経済|政経)/i.test(name)) {
+    return "social_studies";
+  }
+  if (/(情報|information)/i.test(name)) return "information";
+  if (/(数学|数[123ⅠⅡⅢabc]|math)/i.test(name)) return "mathematics";
+  return "general";
+}
+
 const RUNNING_STATUSES = [
   "queued",
   "preprocessing",
@@ -99,6 +185,7 @@ export interface AiConvertPreset {
   title?: string;
   solutionLayout?: "two_column" | "single_column";
   solutionDetail?: "standard" | "beginner";
+  solutionSubject?: SolutionSubject;
   explanationGuidance?: string;
   revisionGuidance?: string;
   revisionTarget?:
@@ -122,6 +209,19 @@ function extractedProblemsOf(job?: AiJob | null): AiExtractedProblem[] {
 
 type ProjectReviewFixTarget = Omit<ProjectReviewFix, "projectId" | "action">;
 
+export type ContentReviewField =
+  | "statement"
+  | "statement_two_column"
+  | "answer"
+  | "explanation"
+  | "content"
+  | "item";
+
+export interface ContentReviewFixTarget {
+  field: ContentReviewField;
+  guidance: string;
+}
+
 function projectReviewTarget(code: string): ProjectReviewFixTarget | null {
   const match = code.match(
     /^(.*?)@ITEM:(\d+)@FIELD:(statement|answer|explanation|content|item)$/,
@@ -136,6 +236,21 @@ function projectReviewTarget(code: string): ProjectReviewFixTarget | null {
 
 function projectReviewCodeLabel(code: string): string {
   return code.split("@ITEM:", 1)[0] || code;
+}
+
+function contentReviewTarget(code: string): ContentReviewFixTarget | null {
+  const match = code.match(
+    /^(.*?)@FIELD:(statement|statement_two_column|answer|explanation|content|item)$/,
+  );
+  if (!match) return null;
+  return {
+    field: match[2] as ContentReviewField,
+    guidance: "",
+  };
+}
+
+function contentReviewCodeLabel(code: string): string {
+  return code.split("@FIELD:", 1)[0] || code;
 }
 
 /** 画像ファイル → 向き補正・縮小済みのJPEG/PNG DataURL */
@@ -187,6 +302,7 @@ export function AiConvertDialog({
   initialJob,
   preset,
   onProjectReviewFix,
+  onContentReviewFix,
   onUseProblemLayouts,
 }: {
   onClose: () => void;
@@ -195,6 +311,10 @@ export function AiConvertDialog({
   preset?: AiConvertPreset;
   onProjectReviewFix?: (
     target: ProjectReviewFixTarget,
+    action: ProjectReviewFix["action"],
+  ) => void;
+  onContentReviewFix?: (
+    target: ContentReviewFixTarget,
     action: ProjectReviewFix["action"],
   ) => void;
   /** 既存問題の一段組版・二段組版へ、確認済みの1組を読み込む */
@@ -277,6 +397,15 @@ export function AiConvertDialog({
     ) === "beginner"
       ? "beginner"
       : "standard",
+  );
+  const [solutionSubject, setSolutionSubject] = useState<SolutionSubject>(() =>
+    parseSolutionSubject(
+      stringOption(
+        initialJob?.options,
+        "solutionSubject",
+        preset?.solutionSubject ?? "mathematics",
+      ),
+    ),
   );
   const [busy, setBusy] = useState(false);
   const [minimized, setMinimized] = useState(false);
@@ -461,6 +590,7 @@ export function AiConvertDialog({
           revisionSourceVersion:
             mode === "revise_source" ? revisionSourceVersion ?? null : null,
           solutionLayout,
+          solutionSubject,
           solutionDetail:
             mode === "generate_answer" || mode === "generate_topic_guide"
               ? solutionDetail
@@ -541,6 +671,7 @@ export function AiConvertDialog({
         revisionSourceVersion:
           mode === "revise_source" ? revisionSourceVersion ?? null : null,
         solutionLayout,
+        solutionSubject,
         solutionDetail:
           mode === "generate_answer" || mode === "generate_topic_guide"
             ? solutionDetail
@@ -689,6 +820,16 @@ export function AiConvertDialog({
     setBusy(true);
     try {
       await prepareCurrentLatexForInsert();
+      const target = insertTargets?.length === 1 ? insertTargets[0] : undefined;
+      if (target) {
+        await aiMarkInserted(
+          job.id,
+          target.entityType,
+          target.entityId,
+          target.field,
+          confirmed,
+        );
+      }
       onUseProblemLayouts(problem);
       showToast("一段組版と二段組版を問題編集画面へ読み込みました");
       onClose();
@@ -704,6 +845,7 @@ export function AiConvertDialog({
       mode !== "revise_source"
       || !job
       || job.targetEntityId === null
+      || !!job.insertedAt
       || typeof job.options.revisionSourceVersion !== "number"
       || job.options.revisionApplied === true
     ) {
@@ -781,6 +923,8 @@ export function AiConvertDialog({
     revisesSolution ||
     (formatsProblemStatement && !outputsBothProblemLayouts);
   const isProjectReviewMode = mode === "project_review";
+  const isContentReviewMode = mode === "content_review";
+  const isReviewMode = isProjectReviewMode || isContentReviewMode;
 
   // ---- 入力ステップ ----
   const renderInput = () => (
@@ -1039,6 +1183,29 @@ export function AiConvertDialog({
         </div>
       )}
 
+      {(isGenerationMode || revisesSolution) && (
+        <div>
+          <label className="section-label mb-1 block">生成する科目</label>
+          <select
+            value={solutionSubject}
+            onChange={(event) =>
+              setSolutionSubject(parseSolutionSubject(event.target.value))
+            }
+            className="select w-full sm:max-w-md"
+          >
+            {SOLUTION_SUBJECTS.map((subject) => (
+              <option key={subject.value} value={subject.value}>
+                {subject.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+            {SOLUTION_SUBJECTS.find((subject) => subject.value === solutionSubject)
+              ?.description}
+          </p>
+        </div>
+      )}
+
       {(mode === "generate_answer" || mode === "generate_explanation" || isTopicGuideMode) && (
         <>
           {mode !== "generate_explanation" && (
@@ -1056,7 +1223,15 @@ export function AiConvertDialog({
                 <option value="standard">
                   {isTopicGuideMode ? "標準（高校生向け詳説）" : "標準（試験で提出する答案向け）"}
                 </option>
-                <option value="beginner">基礎から丁寧（数学が苦手な人向け）</option>
+                <option value="beginner">
+                  {`基礎から丁寧（${
+                    solutionSubject === "mathematics"
+                      ? "数学"
+                      : SOLUTION_SUBJECTS.find(
+                          (subject) => subject.value === solutionSubject,
+                        )?.label ?? "この科目"
+                  }が苦手な人向け）`}
+                </option>
               </select>
               <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
                 {solutionDetail === "beginner"
@@ -1090,18 +1265,24 @@ export function AiConvertDialog({
               className="input-area min-h-20 w-full resize-y text-xs"
               placeholder={
                 isTopicGuideMode
-                  ? "例：数学が苦手な生徒向け／グラフとの対応を重視／使い分けを詳しく"
+                  ? solutionSubject === "mathematics"
+                    ? "例：数学が苦手な生徒向け／グラフとの対応を重視／使い分けを詳しく"
+                    : "例：基本用語から説明／資料の読み取りを重視／判断の根拠を詳しく"
                   : mode === "generate_explanation"
-                    ? "例：式①から②への変形を特に丁寧に／増減表の読み方を初歩から／この置換を使う理由を詳しく"
-                  : "例：ベクトルを使わず座標を置いて解く／相加平均・相乗平均の関係を用いる"
+                    ? solutionSubject === "mathematics"
+                      ? "例：式①から②への変形を特に丁寧に／増減表の読み方を初歩から／この置換を使う理由を詳しく"
+                      : "例：この法則を使う理由を詳しく／本文の根拠箇所を示す／単位換算を丁寧に"
+                    : solutionSubject === "mathematics"
+                      ? "例：ベクトルを使わず座標を置いて解く／相加平均・相乗平均の関係を用いる"
+                      : "例：エネルギー保存を用いる／反応式から物質量を求める／本文根拠を先に示す"
               }
             />
             <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
               {isTopicGuideMode
-                ? "高校範囲に収まる場合に反映します。空欄なら入力された分野・解法の核となる内容を選びます。"
+                ? "選択科目の高校範囲に収まる場合に反映します。空欄なら入力された分野・事項の核となる内容を選びます。"
                 : mode === "generate_explanation"
-                  ? "重点的に説明する箇所、詳しさ、観点、つまずきやすい点などを指定できます。参照解答の流れと【定石】は維持します。"
-                : "指定が数学的に適切で高校範囲に収まる場合に優先します。空欄ならAIが最も自然な方針を選びます。"}
+                  ? `重点的に説明する箇所、詳しさ、観点、つまずきやすい点などを指定できます。参照解答の流れと${solutionSubject === "mathematics" ? "【定石】" : "【要点】"}は維持します。`
+                  : "指定が選択科目の高校範囲で適切な場合に優先します。空欄ならAIが最も自然な方針を選びます。"}
             </p>
           </div>
         </>
@@ -1518,7 +1699,24 @@ export function AiConvertDialog({
     showToast("修正対象の教材を特定できませんでした", "error");
   };
 
-  const renderProjectReviewResult = () => {
+  const openContentReviewTarget = (
+    target: ContentReviewFixTarget,
+    action: ProjectReviewFix["action"],
+  ) => {
+    if (!onContentReviewFix) {
+      showToast("問題バンクまたは部品ライブラリからAIチェックを開くと、そのまま修正できます", "error");
+      return;
+    }
+    onContentReviewFix(
+      {
+        ...target,
+        guidance: target.guidance.trim().slice(0, 1000),
+      },
+      action,
+    );
+  };
+
+  const renderReviewResult = () => {
     const report =
       job?.structuredResult?.plainText?.trim() ||
       job?.outputLatex?.trim() ||
@@ -1553,7 +1751,7 @@ export function AiConvertDialog({
                 background: "var(--danger-dim)",
               }}
             >
-              教材全体のAI確認に失敗しました
+              {isProjectReviewMode ? "教材全体のAI確認" : "問題・部品のAIチェック"}に失敗しました
               {job.errorMessage ? `\n${job.errorMessage}` : ""}
             </section>
           )}
@@ -1578,7 +1776,9 @@ export function AiConvertDialog({
             ) : (
               <div className="space-y-2">
                 {findings.map((warning, index) => {
-                  const parsed = projectReviewTarget(warning.code);
+                  const parsed = isProjectReviewMode
+                    ? projectReviewTarget(warning.code)
+                    : contentReviewTarget(warning.code);
                   const target = parsed ? { ...parsed, guidance: warning.message } : null;
                   return (
                     <article
@@ -1591,29 +1791,60 @@ export function AiConvertDialog({
                           className="badge badge-muted font-mono text-[10px]"
                           style={{ color: severityColor(warning.severity) }}
                         >
-                          {projectReviewCodeLabel(warning.code)}
+                          {isProjectReviewMode
+                            ? projectReviewCodeLabel(warning.code)
+                            : contentReviewCodeLabel(warning.code)}
                         </span>
                         <p className="min-w-0 flex-1 text-sm whitespace-pre-wrap">
                           {warning.message}
                         </p>
                       </div>
-                      {target && (
+                      {target && (isProjectReviewMode || onContentReviewFix) && (
                         <div className="mt-2 flex flex-wrap justify-end gap-1.5">
                           <button
-                            onClick={() => openProjectReviewTarget(target, "manual")}
+                            onClick={() => {
+                              if (isProjectReviewMode) {
+                                openProjectReviewTarget(
+                                  target as ProjectReviewFixTarget,
+                                  "manual",
+                                );
+                              } else {
+                                openContentReviewTarget(
+                                  target as ContentReviewFixTarget,
+                                  "manual",
+                                );
+                              }
+                            }}
                             className="btn btn-outline btn-sm"
                           >
                             対象を手動で編集
                           </button>
                           {target.field !== "item" && (
                             <button
-                              onClick={() => openProjectReviewTarget(target, "ai")}
+                              onClick={() => {
+                                if (isProjectReviewMode) {
+                                  openProjectReviewTarget(
+                                    target as ProjectReviewFixTarget,
+                                    "ai",
+                                  );
+                                } else {
+                                  openContentReviewTarget(
+                                    target as ContentReviewFixTarget,
+                                    "ai",
+                                  );
+                                }
+                              }}
                               className="btn btn-solid btn-sm"
                             >
                               <Icon name="sparkle" size={14} /> AI修正案を作る
                             </button>
                           )}
                         </div>
+                      )}
+                      {target && isContentReviewMode && !onContentReviewFix && (
+                        <p className="mt-2 text-right text-[11px]" style={{ color: "var(--muted)" }}>
+                          修正する場合は、対象の問題バンクまたは部品ライブラリからAIチェックを開いてください
+                        </p>
                       )}
                     </article>
                   );
@@ -1639,7 +1870,7 @@ export function AiConvertDialog({
   };
 
   const renderReview = () => {
-    if (isProjectReviewMode) return renderProjectReviewResult();
+    if (isReviewMode) return renderReviewResult();
     return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
       {isNarrow ? (
@@ -1822,7 +2053,7 @@ export function AiConvertDialog({
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5" style={{ borderColor: "var(--border)" }}>
           <h2 className="text-sm font-bold">
             <span className="brand-mark mr-1.5">▸</span>
-            {preset?.title ?? (isProjectReviewMode ? "教材全体のAI確認" : isRevisionMode ? "AIで既存ソースを修正" : isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
+            {preset?.title ?? (isProjectReviewMode ? "教材全体のAI確認" : isContentReviewMode ? (job?.targetEntityType === "part" ? "部品をAIチェック" : "問題をAIチェック") : isRevisionMode ? "AIで既存ソースを修正" : isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
             {job && (
               <span className="badge badge-muted ml-2">ジョブ #{job.id}</span>
             )}
