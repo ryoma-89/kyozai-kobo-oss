@@ -29,15 +29,15 @@
 
 セットアップ・使い方はそれぞれの README を参照してください。
 
-- [kyozai-kobo/README.md](kyozai-kobo/README.md)（教材工房 本体、Web版・AI変換の説明含む）
-- [kyozai-kobo/USER_GUIDE.md](kyozai-kobo/USER_GUIDE.md)（テンプレートの使い方）
+- [kyozai-kobo/README.md](kyozai-kobo/README.md)（教材工房 本体、Web版・AI変換・AIチャットの説明含む）
+- [kyozai-kobo/USER_GUIDE.md](kyozai-kobo/USER_GUIDE.md)（操作手順とテンプレートの使い方）
 - [mathgraph-pdf-studio/README.md](mathgraph-pdf-studio/README.md)
 
 ## 前提となる外部ツール（同梱していません）
 
 - **TeX Live または MiKTeX**: 教材工房のLaTeX→PDF変換（`uplatex` + `dvipdfmx`）に必要。
   未導入でも問題管理・教材編成・`.tex`書き出しは利用できます。
-- **Codex CLI（`@openai/codex`）**: 写真・テキストからのAI変換機能を使う場合のみ必要。
+- **Codex CLI（`@openai/codex`）**: 写真・テキストからのAI変換と、AIチャット（自然言語での操作）を使う場合のみ必要。
   利用にはご自身のChatGPT/OpenAIアカウントが必要です（本リポジトリに認証情報は含まれません）。
 
 ## サードパーティ ライセンス

@@ -5,6 +5,7 @@
 - 問題を「科目 → 分野 → 単元」の階層で整理し、問題文・解答・解説のLaTeXソースを保存
 - 問題を選んで並べ、教材プロジェクトとして問題冊子・解答冊子（.tex / PDF）を生成
 - **LaTeXテンプレート**を登録・編集・取り込みでき、普段使っているテンプレートの見た目を維持できる
+- **AIチャット**へ日本語で指示し、問題検索・登録、解答/解説生成、教材編成、PDF生成を許可済みToolとして実行（書き込みは確認・Undo付き）
 - データはすべてPC内に保存（ログイン・クラウド不要、オフラインで動作）
 - UIは黒基調の落ち着いたダークテーマ。出力されるPDFは白黒印刷向けの従来の教材デザイン
 
@@ -71,7 +72,7 @@ TeX環境が無い場合でも、問題管理・検索・教材の組み立て�
 - 問題の作成・編集・複製・削除、難易度（基礎/標準/発展）、タグ、メモ
 - 問題文 / 解答 / 解説 をタブで切替、LaTeX挿入補助ボタン（`\frac`、`\sqrt`、`enumerate` など）
 - **完成状態**: 解答・解説それぞれに「完成」チェックを持たせ、問題一覧・検索結果にバッジ（`解答✓` / `解説－`）で表示。元になるLaTeXを編集すると自動で未完成へ戻ります（問題文・解答を直すと解答と解説、解説を直すと解説がリセット）
-- MathJaxによる数式の簡易プレビュー
+- MathJaxによる数式の簡易プレビュー。**一段組 / 二段組**と**表示範囲（現在の欄 / 問題全体）**を切り替えられ、A4紙面に近い余白・段組で確認できます（PDFプレビューも同じ段組で組版）
 - 保存時に旧内容を履歴として自動保存（最大30件、復元可能）
 - 画像添付（PNG/JPG/PDF）→ `\includegraphics{保存名}` で参照
 
@@ -255,6 +256,57 @@ OpenAIの **Codex CLI**（`codex app-server`）を使って、プリントの写
 - 関数グラフと判定された場合は、教材工房内の**グラフ**画面または各編集画面の「グラフを挿入」を利用できます
 - TikZ候補モードは実験的機能で、結果は自動挿入されません
 
+## AIチャット（自然言語で既存機能を操作）
+
+AI変換が「資料 → LaTeX断片」の変換であるのに対し、AIチャットは**日本語の指示から
+アプリの既存機能そのものを呼び出す**エージェントです。準備はAI変換と同じCodex CLIの接続だけです。
+
+### 開き方
+
+- 画面右上の **「✦ AI Chat」** で右side panelを開閉します（実行中はボタンが回転表示になります）
+- 問題編集・部品編集・教材編集の各画面にある **「✦ AI Chat」** から開くと、その対象専用のチャットが始まり、
+  「この問題「〜」について、」が入力欄に用意されます
+- 画像はドラッグ＆ドロップ・貼り付け・「＋画像」から最大8枚まで添付できます
+
+### 実行モードと確認
+
+「設定 → AIチャット / エージェント」で切り替えます。
+
+| モード | 動作 |
+| --- | --- |
+| 提案のみ | 読み取りだけ実行し、書き込みは提案の表示にとどめます |
+| 書き込み前に確認（既定） | 読み取りは即時実行、書き込み・PDF生成などは実行内容を提示して承認を待ちます |
+| 自動実行 | 確認なしで実行します |
+
+- 「確認なしで」「そのまま実行して」のように指示文で明示した場合のみ、確認モードでも承認を省略できます
+- 1回の指示で実行できるTool数の上限（1〜24、既定10）も設定できます
+- 問題を登録する提案では、タイトル・単元ID・難易度・本文のプレビューが確認欄に表示され、「修正」で作り直しを依頼できます
+
+### 使えるTool
+
+| 分類 | 内容 |
+| --- | --- |
+| 参照 | 科目・分野・単元の取得、問題検索、問題・部品・教材の取得、教材バランス分析、AI操作履歴 |
+| 書き込み | 問題の作成・更新、部品の更新、分野解説の保存、解答・解説の生成と部分修正、教材の作成・問題追加・並べ替え・入れ替え |
+| 実行 | PDF生成、グラフ・平面図形・空間図形の作成（既存のAIジョブと検証済み保存経路を使用） |
+| 履歴 | 直前のAI操作のUndo / Redo |
+
+削除、階層変更、任意のSQL・shell・ファイル操作はToolとして公開していません。できない操作はその理由が返ります。
+
+### 安全策とUndo
+
+- モデルはDB・SQL・ファイルシステム・shellへ直接アクセスできません。厳密なJSON Schemaで
+  **許可済みToolの呼び出し案だけ**を返し、アプリ側が引数・権限・確認状態を検証してから既存コマンドを呼びます
+- Tool結果・問題文・LaTeX・画像内の文章は「信頼できない資料」として扱い、その中の指示には従いません
+- 生成されたLaTeXは保存前に危険な記述の検査と試験コンパイルの結果検査を通ります
+- 更新Toolは既存のversion・updated_atによる楽観的ロックを通るため、他端末の編集を黙って上書きしません
+- 1回の指示で行われた書き込みは **Action Group** として実行前後のスナップショット付きで記録され、
+  チャット右上の「↶ / ↷」または「元に戻して」の指示でまとめてUndo / Redoできます
+  （Undo時に対象が別画面・別端末から変更されていた場合は、上書きを避けて中止します）
+- 途中で失敗した場合は逆順にロールバックします。停止した場合やアプリを再起動した場合も、
+  そこまでに適用された操作はAction Groupとして確定するため、あとからUndoできます
+- 生成済みPDFは履歴に残りますが、Undoでファイル自体は削除しません
+
 ## グラフ作成（Windows / iPad / Android / 別PC）
 
 既存の **MathGraph PDF Studio** のReact・TypeScript・SVG描画・PDF出力コードを教材工房から直接共有しています。
@@ -376,7 +428,7 @@ GET  /api/health                      ヘルスチェック（無認証）
 POST /api/auth/pair                   ペアリング {code, deviceName}
 GET  /api/auth/me / POST /api/auth/logout
 POST /api/invoke/:cmd                 デスクトップと同じ全コマンド（問題・部品・教材・テンプレート・PDF生成・AIジョブ等）
-GET  /api/events                      SSE（問題/部品/教材/テンプレート/AIジョブ/Codex/サーバー状態）
+GET  /api/events                      SSE（問題/部品/教材/テンプレート/AIジョブ/AIチャット/Codex/サーバー状態）
 POST /api/uploads/attachment?problemId=   添付アップロード（multipart、マジックバイト検証）
 POST /api/uploads/part-attachment?partId=
 GET  /api/files/attachment/:name      添付画像の配信
@@ -390,13 +442,15 @@ GET  /api/graphs/:id/files/:format    graphのPDF/PNG/SVG/TikZ/JSON/thumbnail配
 
 ## データベースの追加テーブル
 
-既存の `ensure_column` / `CREATE TABLE IF NOT EXISTS` 方式を維持しつつ、SQLiteの `user_version`（現行 9）とトランザクションで起動時に自動マイグレーションされます（再実行安全）。既存DBを変更する前にSQLite Online Backup APIで `backups\kyozai-kobo-pre-migration-v<旧版>-<時刻>.db` を作り、整合性を確認します。
+既存の `ensure_column` / `CREATE TABLE IF NOT EXISTS` 方式を維持しつつ、SQLiteの `user_version`（現行 10）とトランザクションで起動時に自動マイグレーションされます（再実行安全）。既存DBを変更する前にSQLite Online Backup APIで `backups\kyozai-kobo-pre-migration-v<旧版>-<時刻>.db` を作り、整合性を確認します。
 
 - `problems.version` / `project_items.version` / `projects.version` / `templates.version` … 楽観的ロック用（既存行は1）
 - `problems.answer_completed` / `problems.explanation_completed`（および `problem_versions` の同名列） … 完成状態。既存行は0（未完成）
 - `ai_conversion_jobs.inserted_at` … 挿入・保存・修正反映を行った日時。旧ジョブは記録済みイベントから可能な範囲で復元されます
 - `server_settings` / `trusted_devices` / `web_sessions`（トークンはSHA-256ハッシュのみ保存）
 - `ai_provider_settings` / `ai_conversion_jobs` / `ai_conversion_events`
+- `ai_chat_sessions` / `ai_chat_messages` … AIチャットの会話・添付・Tool実行状況
+- `ai_action_groups` / `ai_actions` … 1回の指示に対応するAIの書き込み操作と、実行前後のスナップショット（Undo/Redo用）
 - `graphs` / `graph_versions` … graph.json正本、派生出力状態、楽観的ロック、履歴
 - `graph_assets` … 教材へ挿入した不変スナップショットのメタデータ
 - `graph_web_sessions` … Web教材編集とグラフoverlayを結ぶ期限付き・挿入先固定セッション
