@@ -272,7 +272,14 @@ export const compileProblemPreview = (
   statement: string,
   answer: string,
   explanation: string,
-) => invoke<CompileResult>("compile_problem_preview", { problemId, statement, answer, explanation });
+  layoutMode: "single_column" | "two_column",
+) => invoke<CompileResult>("compile_problem_preview", {
+  problemId,
+  statement,
+  answer,
+  explanation,
+  layoutMode,
+});
 export const compilePartPreview = (
   partId: number,
   latexSource: string,
@@ -467,3 +474,34 @@ export const aiApplySourceRevision = (jobId: number, confirmed: boolean) =>
     entityId: number;
     field: "statement_latex" | "answer_latex" | "explanation_latex" | "latex_source";
   }>("ai_apply_source_revision", { jobId, confirmed });
+
+// ---- AIチャット / 既存機能Tool Agent ----
+export const aiChatCreateSession = (context?: Record<string, unknown>) =>
+  invoke<import("./types").AiChatSession>("ai_chat_create_session", { context: context ?? null });
+export const aiChatGetSession = (sessionId: string) =>
+  invoke<import("./types").AiChatSession>("ai_chat_get_session", { sessionId });
+export const aiChatSessionStatus = (sessionId: string) =>
+  invoke<{ status: import("./types").AiChatStatus; updatedAt: string }>("ai_chat_session_status", { sessionId });
+export const aiChatSendMessage = (payload: {
+  sessionId: string;
+  content: string;
+  inputNames?: string[];
+  context?: Record<string, unknown>;
+}) => invoke<import("./types").AiChatSession>("ai_chat_send_message", {
+  sessionId: payload.sessionId,
+  content: payload.content,
+  inputNames: payload.inputNames ?? [],
+  context: payload.context ?? null,
+});
+export const aiChatConfirm = (sessionId: string, approved: boolean) =>
+  invoke<import("./types").AiChatSession>("ai_chat_confirm", { sessionId, approved });
+export const aiChatCancel = (sessionId: string) =>
+  invoke<void>("ai_chat_cancel", { sessionId });
+export const aiChatRegenerate = (sessionId: string) =>
+  invoke<import("./types").AiChatSession>("ai_chat_regenerate", { sessionId });
+export const aiChatUndo = (sessionId: string) =>
+  invoke<import("./types").AiChatSession>("ai_chat_undo", { sessionId });
+export const aiChatRedo = (sessionId: string) =>
+  invoke<import("./types").AiChatSession>("ai_chat_redo", { sessionId });
+export const aiChatReadAttachment = (sessionId: string, storedName: string) =>
+  invoke<{ mimeType: string; dataBase64: string }>("ai_chat_read_attachment", { sessionId, storedName });

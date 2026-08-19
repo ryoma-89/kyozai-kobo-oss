@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS subjects (
@@ -571,6 +571,63 @@ CREATE TABLE IF NOT EXISTS ai_conversion_events (
 
 CREATE INDEX IF NOT EXISTS idx_ai_events_job ON ai_conversion_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_hash ON web_sessions(token_hash);
+
+-- 自然言語から既存機能を操作するAIチャット。モデルはこの表やDBへ直接アクセスせず、
+-- ai_chatモジュールが公開する許可済みToolだけを実行する。
+CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '新しいチャット',
+    status TEXT NOT NULL DEFAULT 'idle',
+    execution_mode TEXT NOT NULL DEFAULT 'confirm',
+    context_json TEXT NOT NULL DEFAULT '{}',
+    pending_calls_json TEXT NOT NULL DEFAULT '[]',
+    active_user_message_id INTEGER,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    attachments_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'completed',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_action_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    user_message_id INTEGER REFERENCES ai_chat_messages(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES ai_action_groups(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    target_type TEXT NOT NULL DEFAULT '',
+    target_id TEXT NOT NULL DEFAULT '',
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    before_json TEXT NOT NULL DEFAULT 'null',
+    after_json TEXT NOT NULL DEFAULT 'null',
+    status TEXT NOT NULL DEFAULT 'applied',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session
+    ON ai_chat_messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_ai_action_groups_session
+    ON ai_action_groups(session_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_actions_group
+    ON ai_actions(group_id, id);
 "#,
     )?;
     ensure_column(

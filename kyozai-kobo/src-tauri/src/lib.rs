@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod ai_chat;
 pub mod codex;
 pub mod commands;
 pub mod db;
@@ -183,6 +184,9 @@ pub fn run() {
                     }
                 }
             });
+
+            // 前回終了時に実行スレッドだけが失われたAIチャットを復旧可能な状態へ戻す。
+            ai_chat::repair_interrupted_sessions(&state);
 
             // AI変換ワーカーを起動
             ai::start_worker(state.clone());

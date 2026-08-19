@@ -292,6 +292,7 @@ fn dispatch_inner(
             arg(args, "statement")?,
             arg(args, "answer")?,
             arg(args, "explanation")?,
+            arg(args, "layoutMode")?,
         )?),
         "compile_part_preview" => ok(latex::compile_part_preview(
             state,
@@ -560,6 +561,44 @@ fn dispatch_inner(
             state,
             arg(args, "jobId")?,
             arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
+        ),
+
+        // ---- AIチャット / 既存機能Tool Orchestrator ----
+        "ai_chat_create_session" => crate::ai_chat::create_session(state, arg(args, "context")?),
+        "ai_chat_get_session" => {
+            crate::ai_chat::get_session(state, &arg::<String>(args, "sessionId")?)
+        }
+        "ai_chat_session_status" => {
+            crate::ai_chat::get_session_status(state, &arg::<String>(args, "sessionId")?)
+        }
+        "ai_chat_list_sessions" => crate::ai_chat::list_sessions(state, arg(args, "limit")?),
+        "ai_chat_send_message" => crate::ai_chat::send_message(
+            state,
+            arg(args, "sessionId")?,
+            arg(args, "content")?,
+            arg(args, "inputNames")?,
+            arg(args, "context")?,
+        ),
+        "ai_chat_confirm" => crate::ai_chat::confirm_pending(
+            state,
+            arg(args, "sessionId")?,
+            arg(args, "approved")?,
+        ),
+        "ai_chat_cancel" => ok(crate::ai_chat::cancel(state, arg(args, "sessionId")?)?),
+        "ai_chat_regenerate" => {
+            crate::ai_chat::regenerate(state, arg(args, "sessionId")?)
+        }
+        "ai_chat_undo" => crate::ai_chat::undo(state, arg(args, "sessionId")?),
+        "ai_chat_redo" => crate::ai_chat::redo(state, arg(args, "sessionId")?),
+        "ai_chat_history" => crate::ai_chat::get_history(
+            state,
+            arg(args, "sessionId")?,
+            arg(args, "limit")?,
+        ),
+        "ai_chat_read_attachment" => crate::ai_chat::read_attachment(
+            state,
+            arg(args, "sessionId")?,
+            arg(args, "storedName")?,
         ),
 
         _ => Err(format!("不明なコマンド: {}", cmd)),

@@ -40,6 +40,7 @@ import {
   updateProjectSettings,
 } from "../api";
 import { insertTextAtRange, waitForGraphIntegration } from "../graphIntegration";
+import { openAiChatForTarget } from "../aiChat";
 import { useApp, type ProjectReviewFix } from "../store";
 import {
   buildFileUrl,
@@ -807,6 +808,13 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
         className="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5"
         style={{ borderColor: "var(--border)" }}
       >
+        <button
+          onClick={() => openAiChatForTarget({ kind: "material", id: project.id, title: project.name, currentScreen: "projects" })}
+          className="btn btn-outline btn-sm"
+          title="この教材を対象にAI Chatを開く"
+        >
+          <Icon name="sparkle" size={14} /> AI Chat
+        </button>
         <button onClick={() => setShowPicker(true)} className="btn btn-solid btn-sm">
           ＋ 問題を追加
         </button>

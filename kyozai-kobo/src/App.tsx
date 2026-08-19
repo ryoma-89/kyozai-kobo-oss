@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   aiCancelJob,
+  aiChatSessionStatus,
   aiListJobs,
   createSampleData,
   getSettings,
@@ -30,7 +31,8 @@ import {
   isTauri,
   subscribeEvents,
 } from "./transport";
-import type { AiJob } from "./types";
+import type { AiChatStatus, AiJob } from "./types";
+import type { AiChatLaunchTarget } from "./aiChat";
 
 const NAV: { view: View; label: string; icon: string }[] = [
   { view: "bank", label: "問題バンク", icon: "▦" },
@@ -42,6 +44,7 @@ const NAV: { view: View; label: string; icon: string }[] = [
 ];
 
 const GraphsView = lazy(() => import("./components/GraphsView").then((module) => ({ default: module.GraphsView })));
+const AiChatPanel = lazy(() => import("./components/AiChatPanel").then((module) => ({ default: module.AiChatPanel })));
 
 const RUNNING_AI_STATUSES = new Set([
   "queued",
@@ -51,6 +54,8 @@ const RUNNING_AI_STATUSES = new Set([
   "validating",
   "compiling",
 ]);
+const RUNNING_AI_CHAT_STATUSES = new Set<AiChatStatus>(["running", "cancelling"]);
+const AI_CHAT_SESSION_KEY = "kyozai-kobo-ai-chat-session";
 
 export default function App() {
   const {
@@ -87,6 +92,9 @@ export default function App() {
   const [aiJobs, setAiJobs] = useState<AiJob[]>([]);
   const [latestFinishedAiJob, setLatestFinishedAiJob] = useState<AiJob | null>(null);
   const [hiddenAiPanelKeys, setHiddenAiPanelKeys] = useState<Set<string>>(() => new Set());
+  const [aiChatOpen, setAiChatOpen] = useState(() => localStorage.getItem("kk-ai-chat-open") === "1");
+  const [aiChatLaunch, setAiChatLaunch] = useState<AiChatLaunchTarget | null>(null);
+  const [aiChatStatus, setAiChatStatus] = useState<AiChatStatus | null>(null);
   const aiStatusesRef = useRef<Map<number, string>>(new Map());
   const aiActivityInitializedRef = useRef(false);
 
@@ -112,7 +120,22 @@ export default function App() {
     }
   };
 
+  const refreshAiChatActivity = async () => {
+    const sessionId = localStorage.getItem(AI_CHAT_SESSION_KEY);
+    if (!sessionId) {
+      setAiChatStatus(null);
+      return;
+    }
+    try {
+      const session = await aiChatSessionStatus(sessionId);
+      setAiChatStatus(session.status);
+    } catch {
+      /* 一時的な通信断では直前の実行表示を維持する */
+    }
+  };
+
   const runningAiJobs = aiJobs.filter((job) => RUNNING_AI_STATUSES.has(job.status));
+  const aiChatAgentRunning = aiChatStatus !== null && RUNNING_AI_CHAT_STATUSES.has(aiChatStatus);
   const aiPanelKey = (job: AiJob) =>
     `${job.id}:${RUNNING_AI_STATUSES.has(job.status) ? "running" : job.status}`;
   const floatingAiJob =
@@ -224,6 +247,18 @@ export default function App() {
     return () => clearInterval(timer);
   }, [authed, runningAiJobs.map((job) => `${job.id}:${job.status}`).join(",")]);
 
+  // チャットを閉じても、上部のAI Chatボタンでエージェントの実行状態を追う。
+  useEffect(() => {
+    if (!authed) return;
+    void refreshAiChatActivity();
+  }, [authed, bumps.ai_chat, aiChatOpen]);
+
+  useEffect(() => {
+    if (!authed || !aiChatAgentRunning || aiChatOpen) return;
+    const timer = setInterval(() => void refreshAiChatActivity(), 1400);
+    return () => clearInterval(timer);
+  }, [authed, aiChatAgentRunning, aiChatOpen]);
+
   // Web版: オフライン検知
   useEffect(() => {
     if (isTauri) return;
@@ -284,6 +319,18 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
+
+  useEffect(() => {
+    const openForTarget = (event: Event) => {
+      const detail = (event as CustomEvent<AiChatLaunchTarget>).detail;
+      if (!detail) return;
+      setAiChatLaunch(detail);
+      localStorage.setItem("kk-ai-chat-open", "1");
+      setAiChatOpen(true);
+    };
+    window.addEventListener("kk-open-ai-chat", openForTarget);
+    return () => window.removeEventListener("kk-open-ai-chat", openForTarget);
+  }, []);
 
   const onSample = async (create: boolean) => {
     setWelcome(false);
@@ -398,6 +445,27 @@ export default function App() {
           ) : null}
           <button
             onClick={() => {
+              if (!aiChatOpen) setAiChatLaunch(null);
+              setAiChatOpen((current) => {
+                localStorage.setItem("kk-ai-chat-open", current ? "0" : "1");
+                return !current;
+              });
+            }}
+            className={`btn btn-sm ${aiChatOpen ? "btn-outline" : "btn-ghost"}`}
+            title={aiChatAgentRunning ? "AIエージェントが実行中です。チャットを開く" : "AIチャットを開閉"}
+          >
+            {aiChatAgentRunning ? (
+              <span
+                className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-t-transparent"
+                style={{ borderColor: "var(--purple)", borderTopColor: "transparent" }}
+              />
+            ) : (
+              <Icon name="sparkle" size={15} />
+            )}
+            AI Chat{aiChatAgentRunning ? " 実行中" : ""}
+          </button>
+          <button
+            onClick={() => {
               void navigate("search", true);
             }}
             className={`btn btn-sm ${view === "search" ? "btn-outline" : "btn-ghost"}`}
@@ -464,9 +532,21 @@ export default function App() {
           {view === "ai" && <AiJobsView />}
           {view === "settings" && <SettingsView />}
         </main>
+        {aiChatOpen && (
+          <Suspense fallback={<aside className="ai-chat-panel flex items-center justify-center text-xs" style={{ width: 380, color: "var(--muted)" }}>AIチャットを読み込んでいます...</aside>}>
+            <AiChatPanel
+              launch={aiChatLaunch}
+              onStatusChange={setAiChatStatus}
+              onClose={() => {
+                localStorage.setItem("kk-ai-chat-open", "0");
+                setAiChatOpen(false);
+              }}
+            />
+          </Suspense>
+        )}
       </div>
 
-      {floatingAiJob && (
+      {floatingAiJob && !aiChatOpen && (
         <aside
           className="ai-progress-panel fixed z-30 w-[min(22rem,calc(100vw-2rem))] rounded-md border p-3 shadow-2xl"
           style={{ background: "var(--panel)", borderColor: "var(--border-strong)" }}

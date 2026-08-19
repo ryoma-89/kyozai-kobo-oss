@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { insertTextAtRange } from "../graphIntegration";
 import { moveProblems } from "../api";
+import { openAiChatForTarget } from "../aiChat";
 import { useApp } from "../store";
 import { compiledPdfUrl, ConflictError, isTauri, revokeIfBlobUrl } from "../transport";
 import type { AiJob, GraphAssetSummary, ProblemFull, VersionFull, VersionSummary } from "../types";
@@ -30,8 +31,8 @@ import {
   type ContentReviewFixTarget,
 } from "./AiConvertDialog";
 import { ConflictDialog } from "./ConflictDialog";
+import { DocumentPreview, type PreviewLayout } from "./DocumentPreview";
 import { LatexEditor, type LatexEditorHandle } from "./LatexEditor";
-import { LatexPreview } from "./LatexPreview";
 import { PdfCanvasViewer } from "./PdfCanvasViewer";
 import { Icon } from "./Icon";
 import { UnitPicker } from "./ProblemList";
@@ -152,6 +153,8 @@ export function ProblemEditor() {
   const [showMove, setShowMove] = useState(false);
   const [imgWidth, setImgWidth] = useState("0.65\\linewidth");
   const [previewMode, setPreviewMode] = useState<"quick" | "pdf">("quick");
+  const [previewLayout, setPreviewLayout] = useState<PreviewLayout>("single_column");
+  const [previewScope, setPreviewScope] = useState<"current" | "full">("current");
   const [pdfSrc, setPdfSrc] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [graphBusy, setGraphBusy] = useState(false);
@@ -165,6 +168,14 @@ export function ProblemEditor() {
   const [conflict, setConflict] = useState<ProblemFull | null>(null);
   const previewBoxRef = useRef<HTMLDivElement>(null);
   const webFileInputRef = useRef<HTMLInputElement>(null);
+
+  const resetPdfPreview = () => {
+    setPreviewMode("quick");
+    setPdfSrc((previous) => {
+      revokeIfBlobUrl(previous);
+      return null;
+    });
+  };
 
   const changeZoom = (delta: number) => {
     setZoom((z) => Math.min(300, Math.max(50, z + delta)));
@@ -183,6 +194,12 @@ export function ProblemEditor() {
     el.addEventListener("wheel", handler, { passive: false });
     return () => el.removeEventListener("wheel", handler);
   }, [problem != null]);
+  useEffect(
+    () => () => {
+      revokeIfBlobUrl(pdfSrc);
+    },
+    [pdfSrc],
+  );
   const textareaRef = useRef<LatexEditorHandle>(null);
   const problemRef = useRef<ProblemFull | null>(null);
   const savedProblemRef = useRef<ProblemFull | null>(null);
@@ -224,12 +241,14 @@ export function ProblemEditor() {
       setProblem(p);
       setDirty(false);
       setTab("statement");
-      setStatementLayout("single_column");
-      setPdfSrc((prev) => {
-        revokeIfBlobUrl(prev);
-        return null;
-      });
-      setPreviewMode("quick");
+      const initialLayout =
+        !p.statement_latex.trim() && p.statement_latex_two_column.trim()
+          ? "two_column"
+          : "single_column";
+      setStatementLayout(initialLayout);
+      setPreviewLayout(initialLayout);
+      setPreviewScope("current");
+      resetPdfPreview();
       // 通信断時に端末へ退避した未送信ドラフトの復元提案
       const draftKey = `kk-draft-problem-${p.id}`;
       const raw = localStorage.getItem(draftKey);
@@ -269,17 +288,21 @@ export function ProblemEditor() {
     if (!p) return;
     setPdfBusy(true);
     try {
+      const previewStatement =
+        previewLayout === "two_column"
+          ? p.statement_latex_two_column || p.statement_latex
+          : p.statement_latex || p.statement_latex_two_column;
+      const includeFull = previewScope === "full";
       const result = await compileProblemPreview(
         p.id,
-        statementLayout === "two_column"
-          ? p.statement_latex_two_column
-          : p.statement_latex,
-        p.answer_latex,
-        p.explanation_latex,
+        includeFull || tab === "statement" ? previewStatement : "",
+        includeFull || tab === "answer" ? p.answer_latex : "",
+        includeFull || tab === "explanation" ? p.explanation_latex : "",
+        previewLayout,
       );
       setLastCompile({
         ...result,
-        label: `問題プレビュー「${p.title}」`,
+        label: `問題プレビュー「${p.title}」（${previewScope === "full" ? "全体" : TAB_LABELS[tab]}・${previewLayout === "two_column" ? "二段組" : "一段組"}）`,
         download_key: Date.now(),
       });
       if (result.success && result.pdf_path) {
@@ -322,6 +345,14 @@ export function ProblemEditor() {
   }, [dirty]);
 
   const patch = (fields: Partial<ProblemFull>) => {
+    if (
+      fields.statement_latex !== undefined ||
+      fields.statement_latex_two_column !== undefined ||
+      fields.answer_latex !== undefined ||
+      fields.explanation_latex !== undefined
+    ) {
+      resetPdfPreview();
+    }
     setProblem((current) => (current ? { ...current, ...fields } : current));
   };
 
@@ -457,6 +488,35 @@ export function ProblemEditor() {
     explanation: "explanation_latex",
   };
   const currentText = problem[fieldKey[tab]];
+  const previewStatement =
+    previewLayout === "two_column"
+      ? problem.statement_latex_two_column || problem.statement_latex
+      : problem.statement_latex || problem.statement_latex_two_column;
+  const currentPreviewSource =
+    tab === "statement"
+      ? previewStatement
+      : tab === "answer"
+        ? problem.answer_latex
+        : problem.explanation_latex;
+  const previewSections =
+    previewScope === "full"
+      ? [
+          { label: "問題文", source: previewStatement },
+          { label: "【解答】", source: problem.answer_latex },
+          { label: "【解説】", source: problem.explanation_latex },
+        ]
+      : [{ label: TAB_LABELS[tab], source: currentPreviewSource }];
+
+  const changePreviewLayout = (layout: PreviewLayout) => {
+    setPreviewLayout(layout);
+    if (tab === "statement") setStatementLayout(layout);
+    resetPdfPreview();
+  };
+
+  const changePreviewScope = (scope: "current" | "full") => {
+    setPreviewScope(scope);
+    resetPdfPreview();
+  };
   const patchLatex = (target: ProblemLatexField, value: string) => {
     const changes = { [target]: value } as Partial<ProblemFull>;
     if (target === "statement_latex" && value !== problem.statement_latex) {
@@ -971,6 +1031,13 @@ export function ProblemEditor() {
             placeholder="タグ追加→Enter"
           />
           <span className="problem-editor-actions ml-auto flex gap-1">
+            <button
+              onClick={() => openAiChatForTarget({ kind: "problem", id: problem.id, title: problem.title, currentScreen: "bank" })}
+              className="btn btn-outline btn-sm"
+              title="この問題を対象にAI Chatを開く"
+            >
+              <Icon name="sparkle" size={14} /> AI Chat
+            </button>
             <button onClick={() => setShowMove(true)} className="btn btn-ghost btn-sm" title="別の単元へ移動">
               移動
             </button>
@@ -1015,7 +1082,15 @@ export function ProblemEditor() {
         {/* タブ */}
         <div className="flex border-b" style={{ borderColor: "var(--border)" }}>
           {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
-            <button key={t} onClick={() => setTab(t)} className={`tab ${tab === t ? "tab-active" : ""}`}>
+            <button
+              key={t}
+              onClick={() => {
+                setTab(t);
+                if (t === "statement") setPreviewLayout(statementLayout);
+                resetPdfPreview();
+              }}
+              className={`tab ${tab === t ? "tab-active" : ""}`}
+            >
               {TAB_LABELS[t]}
             </button>
           ))}
@@ -1030,7 +1105,11 @@ export function ProblemEditor() {
             </span>
             <button
               type="button"
-              onClick={() => setStatementLayout("single_column")}
+              onClick={() => {
+                setStatementLayout("single_column");
+                setPreviewLayout("single_column");
+                resetPdfPreview();
+              }}
               className={`btn btn-sm ${
                 statementLayout === "single_column" ? "btn-outline" : "btn-ghost"
               }`}
@@ -1039,7 +1118,11 @@ export function ProblemEditor() {
             </button>
             <button
               type="button"
-              onClick={() => setStatementLayout("two_column")}
+              onClick={() => {
+                setStatementLayout("two_column");
+                setPreviewLayout("two_column");
+                resetPdfPreview();
+              }}
               className={`btn btn-sm ${
                 statementLayout === "two_column" ? "btn-outline" : "btn-ghost"
               }`}
@@ -1297,25 +1380,68 @@ export function ProblemEditor() {
       {/* 右: プレビュー（白い紙 = PDF出力イメージ） */}
       <div className="editor-preview-pane flex w-[38%] min-w-[280px] flex-col" style={{ background: "var(--panel)" }}>
         <div
-          className="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5"
+          className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2"
           style={{ borderColor: "var(--border)" }}
         >
           <span className="section-label mr-auto min-w-0 truncate">
-            プレビュー{previewMode === "quick" ? `（${TAB_LABELS[tab]}・簡易）` : "（PDF）"}
+            問題プレビュー
           </span>
-          <button
-            onClick={() => setPreviewMode("quick")}
-            className={`btn btn-sm ${previewMode === "quick" ? "btn-outline" : "btn-ghost"}`}
-          >
-            簡易
-          </button>
-          <button
-            onClick={() => (pdfSrc ? setPreviewMode("pdf") : onPdfPreview())}
-            className={`btn btn-sm ${previewMode === "pdf" ? "btn-outline" : "btn-ghost"}`}
-            disabled={pdfBusy}
-          >
-            PDF
-          </button>
+          <span className="badge badge-muted">
+            {previewLayout === "two_column" ? "二段組" : "一段組"}
+          </span>
+          <span className="badge badge-muted">
+            {previewScope === "full" ? "問題全体" : TAB_LABELS[tab]}
+          </span>
+          <div className="basis-full" />
+          <div className="preview-segmented" aria-label="プレビュー範囲">
+            <button
+              onClick={() => changePreviewScope("current")}
+              className="btn btn-sm"
+              aria-pressed={previewScope === "current"}
+            >
+              現在の欄
+            </button>
+            <button
+              onClick={() => changePreviewScope("full")}
+              className="btn btn-sm"
+              aria-pressed={previewScope === "full"}
+            >
+              問題全体
+            </button>
+          </div>
+          <div className="preview-segmented" aria-label="プレビュー段組">
+            <button
+              onClick={() => changePreviewLayout("single_column")}
+              className="btn btn-sm"
+              aria-pressed={previewLayout === "single_column"}
+            >
+              1段
+            </button>
+            <button
+              onClick={() => changePreviewLayout("two_column")}
+              className="btn btn-sm"
+              aria-pressed={previewLayout === "two_column"}
+            >
+              2段
+            </button>
+          </div>
+          <div className="preview-segmented" aria-label="プレビュー方式">
+            <button
+              onClick={() => setPreviewMode("quick")}
+              className="btn btn-sm"
+              aria-pressed={previewMode === "quick"}
+            >
+              簡易
+            </button>
+            <button
+              onClick={() => (pdfSrc ? setPreviewMode("pdf") : onPdfPreview())}
+              className="btn btn-sm"
+              aria-pressed={previewMode === "pdf"}
+              disabled={pdfBusy}
+            >
+              PDF
+            </button>
+          </div>
           <button
             onClick={onPdfPreview}
             disabled={pdfBusy}
@@ -1341,9 +1467,14 @@ export function ProblemEditor() {
         </div>
         <div ref={previewBoxRef} className="min-h-0 flex-1 overflow-auto p-3">
           {previewMode === "quick" ? (
-            <div className="paper" style={{ zoom: zoom / 100 }}>
-              <LatexPreview source={currentText} />
-            </div>
+            <DocumentPreview
+              title={problem.title || "無題の問題"}
+              eyebrow={previewScope === "full" ? "問題全体" : `${TAB_LABELS[tab]}を編集中`}
+              layout={previewLayout}
+              sections={previewSections}
+              zoom={zoom}
+              emptyMessage={`${previewScope === "full" ? "問題" : TAB_LABELS[tab]}の内容がありません`}
+            />
           ) : pdfSrc ? (
             <PdfCanvasViewer src={pdfSrc} zoom={zoom} />
           ) : (
@@ -1356,7 +1487,8 @@ export function ProblemEditor() {
           className="border-t px-3 py-1.5 text-[11px]"
           style={{ borderColor: "var(--border)", color: "var(--muted)" }}
         >
-          更新: {problem.updated_at}　作成: {problem.created_at}
+          <span>更新: {problem.updated_at}　作成: {problem.created_at}</span>
+          <span className="ml-2">Ctrl+ホイールで拡大縮小</span>
         </div>
       </div>
 

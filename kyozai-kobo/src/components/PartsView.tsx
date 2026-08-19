@@ -19,6 +19,7 @@ import {
   uploadPartAttachment,
 } from "../api";
 import { useApp } from "../store";
+import { openAiChatForTarget } from "../aiChat";
 import {
   compiledPdfUrl,
   ConflictError,
@@ -44,8 +45,8 @@ import {
 } from "./AiConvertDialog";
 import { useNarrowLayout } from "./BankView";
 import { ConflictDialog } from "./ConflictDialog";
+import { DocumentPreview } from "./DocumentPreview";
 import { LatexEditor } from "./LatexEditor";
-import { LatexPreview } from "./LatexPreview";
 import { PdfCanvasViewer } from "./PdfCanvasViewer";
 import { Icon } from "./Icon";
 import { DIFFICULTY_RANKS, DifficultyRankBadge, Modal, TagChips } from "./ui";
@@ -812,6 +813,7 @@ export function PartsView() {
                     </div>
                     <div className="mt-1 flex items-center gap-2 text-[11px]" style={{ color: "var(--muted)" }}>
                       <span>{PART_TYPES.find((t) => t.value === p.part_type)?.label ?? p.part_type}</span>
+                      <span>{p.layout_mode === "two_column" ? "2段" : "1段"}</span>
                       <span>{p.category || "カテゴリなし"}</span>
                       <span>使用 {p.usage_count}</span>
                       <span>v{p.version}</span>
@@ -851,6 +853,13 @@ export function PartsView() {
                 />
                 <DifficultyRankBadge rank={part.difficulty_rank} required={part.is_required} />
                 {dirty && <span className="badge badge-warn">● 未保存</span>}
+                <button
+                  onClick={() => openAiChatForTarget({ kind: "part", id: part.id, title: part.title, currentScreen: "parts" })}
+                  className="btn btn-outline btn-sm"
+                  title="この部品を対象にAI Chatを開く"
+                >
+                  <Icon name="sparkle" size={15} /> AI Chat
+                </button>
                 <button
                   onClick={() => void startContentReview()}
                   disabled={contentReviewStarting}
@@ -1084,28 +1093,62 @@ export function PartsView() {
             </section>
             <aside className="editor-preview-pane flex w-[36%] min-w-[280px] flex-col" style={{ background: "var(--panel)" }}>
               <div
-                className="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5"
+                className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2"
                 style={{ borderColor: "var(--border)" }}
               >
                 <span className="section-label mr-auto min-w-0 truncate">
-                  LaTeXプレビュー
-                  {previewMode === "quick"
-                    ? `（簡易・${part.layout_mode === "two_column" ? "二段組" : "一段組"}）`
-                    : "（PDF）"}
+                  部品プレビュー
                 </span>
-                <button
-                  onClick={() => setPreviewMode("quick")}
-                  className={`btn btn-sm ${previewMode === "quick" ? "btn-outline" : "btn-ghost"}`}
-                >
-                  簡易
-                </button>
-                <button
-                  onClick={() => (pdfSrc ? setPreviewMode("pdf") : onPdfPreview())}
-                  className={`btn btn-sm ${previewMode === "pdf" ? "btn-outline" : "btn-ghost"}`}
-                  disabled={pdfBusy || !part.latex_source.trim()}
-                >
-                  PDF
-                </button>
+                <span className="badge badge-muted">
+                  {part.layout_mode === "two_column" ? "二段組" : "一段組"}
+                </span>
+                <span className="badge badge-muted">
+                  {PART_TYPES.find((type) => type.value === part.part_type)?.label ?? part.part_type}
+                </span>
+                <div className="basis-full" />
+                <div className="preview-segmented" aria-label="部品の段組">
+                  <button
+                    onClick={() => {
+                      if (part.layout_mode !== "single_column") {
+                        patch({ layout_mode: "single_column" });
+                        resetPdfPreview();
+                      }
+                    }}
+                    className="btn btn-sm"
+                    aria-pressed={part.layout_mode === "single_column"}
+                  >
+                    1段
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (part.layout_mode !== "two_column") {
+                        patch({ layout_mode: "two_column" });
+                        resetPdfPreview();
+                      }
+                    }}
+                    className="btn btn-sm"
+                    aria-pressed={part.layout_mode === "two_column"}
+                  >
+                    2段
+                  </button>
+                </div>
+                <div className="preview-segmented" aria-label="プレビュー方式">
+                  <button
+                    onClick={() => setPreviewMode("quick")}
+                    className="btn btn-sm"
+                    aria-pressed={previewMode === "quick"}
+                  >
+                    簡易
+                  </button>
+                  <button
+                    onClick={() => (pdfSrc ? setPreviewMode("pdf") : onPdfPreview())}
+                    className="btn btn-sm"
+                    aria-pressed={previewMode === "pdf"}
+                    disabled={pdfBusy || !part.latex_source.trim()}
+                  >
+                    PDF
+                  </button>
+                </div>
                 <button
                   onClick={onPdfPreview}
                   disabled={pdfBusy || !part.latex_source.trim()}
@@ -1139,21 +1182,14 @@ export function PartsView() {
               </div>
               <div ref={previewBoxRef} className="min-h-0 flex-1 overflow-auto p-3">
                 {previewMode === "quick" ? (
-                  <div className="paper" style={{ zoom: previewZoom / 100 }}>
-                    <div
-                      style={
-                        part.layout_mode === "two_column"
-                          ? {
-                              columnCount: 2,
-                              columnGap: "2em",
-                              columnRule: "1px solid #777",
-                            }
-                          : undefined
-                      }
-                    >
-                      <LatexPreview source={part.latex_source || " "} />
-                    </div>
-                  </div>
+                  <DocumentPreview
+                    title={part.title || "無題の部品"}
+                    eyebrow={`${PART_TYPES.find((type) => type.value === part.part_type)?.label ?? part.part_type}・${part.output_target === "both" ? "問題／解答冊子" : part.output_target === "problems" ? "問題冊子" : part.output_target === "answers" ? "解答冊子" : "出力対象外"}`}
+                    layout={part.layout_mode}
+                    sections={[{ source: part.latex_source }]}
+                    zoom={previewZoom}
+                    emptyMessage="部品のLaTeXソースがありません"
+                  />
                 ) : pdfSrc ? (
                   <PdfCanvasViewer src={pdfSrc} zoom={previewZoom} />
                 ) : (
@@ -1164,6 +1200,7 @@ export function PartsView() {
               </div>
               <div className="border-t px-3 py-1.5 text-[11px]" style={{ borderColor: "var(--border)", color: "var(--muted)" }}>
                 更新: {part.updated_at} / 作成: {part.created_at}
+                <span className="ml-2">Ctrl+ホイールで拡大縮小</span>
               </div>
             </aside>
           </div>

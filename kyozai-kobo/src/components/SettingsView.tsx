@@ -225,6 +225,51 @@ export function SettingsView() {
       </section>
 
       <section className="mb-6 space-y-3">
+        {sectionTitle("AIチャット / エージェント")}
+        <p className="text-xs" style={{ color: "var(--muted)" }}>
+          AIはデータベースを直接操作せず、問題・教材・LaTeX/PDFの許可済みToolだけを使用します。
+          書き込みはAction Groupとして履歴化され、チャットから元に戻せます。
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={(values["ai_chat_enabled"] ?? "1") !== "0"}
+            onChange={(event) => set("ai_chat_enabled", event.target.checked ? "1" : "0")}
+          />
+          AIチャットを有効にする
+        </label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="section-label mb-0.5 block">自動実行レベル</label>
+            <select
+              className="select w-full"
+              value={values["ai_chat_execution_mode"] ?? "confirm"}
+              onChange={(event) => set("ai_chat_execution_mode", event.target.value)}
+            >
+              <option value="suggest">提案のみ</option>
+              <option value="confirm">書き込み前に確認</option>
+              <option value="auto">自動実行</option>
+            </select>
+          </div>
+          <div>
+            <label className="section-label mb-0.5 block">1指示の最大Tool Call数</label>
+            <input
+              className="input w-full"
+              type="number"
+              min={1}
+              max={24}
+              value={values["ai_chat_max_tool_calls"] ?? "10"}
+              onChange={(event) => set("ai_chat_max_tool_calls", String(Math.min(24, Math.max(1, Number(event.target.value) || 10))))}
+            />
+          </div>
+        </div>
+        <p className="text-[11px]" style={{ color: "var(--muted)" }}>
+          「確認なしで追加して」等を明示した指示は、破壊的でない書き込みだけ確認を省略できます。
+          削除・階層変更・任意SQL・任意ファイル操作・shellはAI Toolへ公開されません。
+        </p>
+      </section>
+
+      <section className="mb-6 space-y-3">
         {sectionTitle("AI解答・解説の参考スタイル")}
         <p className="text-xs" style={{ color: "var(--muted)" }}>
           提供された駿台の「研究問題・問題と解答」は完成解答の簡潔さへ、

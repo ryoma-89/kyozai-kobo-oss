@@ -21,6 +21,23 @@ function escapeHtml(s: string): string {
  */
 export function latexToPreviewHtml(src: string): string {
   let s = escapeHtml(src);
+  // 簡易表示で描画できない図や複雑な表は、長い生ソースを見せずPDF確認へ案内する。
+  s = s.replace(
+    /(?:\\resizebox\{[^{}]*\}\{!\}\{)?\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}\}?/g,
+    '<span class="preview-placeholder">TikZ図（PDFで正確に表示）</span>',
+  );
+  s = s.replace(
+    /\\begin\{tabular\}(?:\{[^{}]*\})?[\s\S]*?\\end\{tabular\}/g,
+    '<span class="preview-placeholder">表（PDFで正確に表示）</span>',
+  );
+  // 紙面制御用コマンドはDocumentPreview側で表現する。
+  s = s.replace(/\\begin\{multicols\}\{2\}|\\end\{multicols\}/g, "");
+  s = s.replace(/\\(?:noindent|raggedcolumns|smallskip|medskip|bigskip)\b/g, "");
+  s = s.replace(/\\(?:vspace|hspace)\*?\{[^{}]*\}/g, "");
+  s = s.replace(/\\par\b/g, "\n\n");
+  // 見出し
+  s = s.replace(/\\section\*?\{([^{}]*)\}/g, '<h3 class="preview-heading">$1</h3>');
+  s = s.replace(/\\subsection\*?\{([^{}]*)\}/g, '<h4 class="preview-subheading">$1</h4>');
   // 箇条書き環境
   s = s.replace(/\\begin\{enumerate\}(\[[^\]]*\])?/g, "<ol>");
   s = s.replace(/\\end\{enumerate\}/g, "</ol>");

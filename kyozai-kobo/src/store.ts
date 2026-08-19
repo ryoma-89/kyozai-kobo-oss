@@ -13,6 +13,7 @@ export interface RemoteBumps {
   graphs: number;
   settings: number;
   ai_job: number;
+  ai_chat: number;
   codex: number;
   server: number;
 }
@@ -178,6 +179,7 @@ export const useApp = create<AppStore>((set, get) => ({
     graphs: 0,
     settings: 0,
     ai_job: 0,
+    ai_chat: 0,
     codex: 0,
     server: 0,
   },

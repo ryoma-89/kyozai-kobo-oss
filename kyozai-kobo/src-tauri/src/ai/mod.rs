@@ -4571,7 +4571,7 @@ fn spatial_result_to_document(result: &Value) -> Value {
 }
 
 fn graph_result_to_project(result: &GraphAiResult) -> Value {
-    let expressions: Vec<Value> = result.expressions.iter().enumerate().map(|(index, expression)| {
+    let expressions: Vec<Value> = result.expressions.iter().map(|expression| {
         json!({
             "id": expression.id,
             "input": expression.expression,
@@ -4584,8 +4584,7 @@ fn graph_result_to_project(result: &GraphAiResult) -> Value {
             "fillOpacity": 0.25,
             "fillStyle": "solid",
             "tmin": 0.0,
-            "tmax": std::f64::consts::TAU,
-            "sortOrder": index
+            "tmax": std::f64::consts::TAU
         })
     }).collect();
     let points: Vec<Value> = result.points.iter().map(|point| json!({
@@ -6915,4 +6914,60 @@ pub fn mark_inserted(
     .map_err(err_str)?;
     tx.commit().map_err(err_str)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_graph_project_uses_only_canonical_expression_fields() {
+        let result = GraphAiResult {
+            schema_version: 1,
+            detected_type: "function_graph".into(),
+            title: "状態推移".into(),
+            expressions: vec![GraphAiExpression {
+                id: "state-1".into(),
+                expression: "y=x".into(),
+                style: GraphAiStyle {
+                    line_type: "solid".into(),
+                    line_width: 2.0,
+                    color: "#2563eb".into(),
+                },
+            }],
+            viewport: GraphAiViewport {
+                x_min: -1.0,
+                x_max: 1.0,
+                y_min: -1.0,
+                y_max: 1.0,
+            },
+            axes: GraphAiAxes {
+                show_x: true,
+                show_y: true,
+                show_grid: false,
+            },
+            points: vec![],
+            lines: vec![],
+            regions: vec![],
+            labels: vec![],
+            warnings: vec![],
+            uncertain_fragments: vec![],
+        };
+
+        let project = graph_result_to_project(&result);
+        let expression = project["expressions"][0]
+            .as_object()
+            .expect("式はオブジェクト");
+        assert!(!expression.contains_key("sortOrder"));
+        assert_eq!(
+            expression.keys().cloned().collect::<std::collections::BTreeSet<_>>(),
+            [
+                "color", "fillColor", "fillOpacity", "fillStyle", "id", "input",
+                "lineStyle", "lineWidth", "name", "tmax", "tmin", "visible",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+        );
+    }
 }

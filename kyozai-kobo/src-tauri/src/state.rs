@@ -31,6 +31,8 @@ pub struct AppState {
     pub codex: crate::codex::CodexManager,
     /// AI変換ジョブのキュー
     pub ai: crate::ai::AiRunner,
+    /// 既存機能をToolとして操作するAIチャットの実行・キャンセル管理
+    pub ai_chat: crate::ai_chat::AiChatRunner,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
             server: Default::default(),
             codex: Default::default(),
             ai: Default::default(),
+            ai_chat: Default::default(),
         }
     }
 
@@ -90,6 +93,13 @@ impl AppState {
     /// AI変換ジョブの成果物（プレビューPDF等）保存先
     pub fn ai_jobs_dir(&self) -> PathBuf {
         let dir = self.data_dir.join("ai_jobs");
+        std::fs::create_dir_all(&dir).ok();
+        dir
+    }
+
+    /// AIチャットへ添付した画像。セッション単位で隔離し、モデルへはこの配下だけを渡す。
+    pub fn ai_chat_dir(&self) -> PathBuf {
+        let dir = self.data_dir.join("ai_chat");
         std::fs::create_dir_all(&dir).ok();
         dir
     }

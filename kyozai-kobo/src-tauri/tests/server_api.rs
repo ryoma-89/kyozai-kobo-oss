@@ -22,6 +22,34 @@ fn make_state() -> (tempdir::TempDir, Arc<AppState>) {
     (dir, state)
 }
 
+fn insert_chat_test_problem(state: &Arc<AppState>) -> i64 {
+    let conn = state.conn.lock().unwrap();
+    conn.execute("INSERT INTO subjects(name,sort_order) VALUES ('数学',1)", [])
+        .unwrap();
+    let subject_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO fields(subject_id,name,sort_order) VALUES (?1,'数学I',1)",
+        [subject_id],
+    )
+    .unwrap();
+    let field_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO units(field_id,name,sort_order) VALUES (?1,'二次関数',1)",
+        [field_id],
+    )
+    .unwrap();
+    let unit_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO problems
+         (unit_id,title,statement_latex,statement_latex_two_column,answer_latex,explanation_latex,
+          answer_completed,explanation_completed,difficulty,is_required,memo,created_at,updated_at,version)
+         VALUES (?1,'元の題名','\\(x^2=1\\)','', '解答済み','解説済み',1,1,'標準',0,'','2026-08-19','2026-08-19',1)",
+        [unit_id],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
 async fn body_json(res: axum::response::Response) -> Value {
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
@@ -2480,6 +2508,37 @@ fn part_preview_document_reflects_single_and_two_column_layouts() {
 }
 
 #[test]
+fn problem_preview_document_reflects_single_and_two_column_layouts() {
+    use kyozai_kobo_lib::commands::latex::build_problem_preview_doc;
+
+    let template =
+        "\\documentclass{ujarticle}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
+    let single = build_problem_preview_doc(
+        template,
+        "問題文",
+        "解答",
+        "解説",
+        "single_column",
+    );
+    assert!(single.contains("問題文"));
+    assert!(single.contains("【解答】"));
+    assert!(single.contains("【解説】"));
+    assert!(!single.contains("\\begin{multicols}{2}"));
+
+    let two_column = build_problem_preview_doc(
+        template,
+        "問題文",
+        "解答",
+        "解説",
+        "two_column",
+    );
+    assert!(two_column.contains("\\usepackage{multicol}"));
+    assert!(two_column.contains("\\begin{multicols}{2}"));
+    assert!(two_column.contains("\\setlength{\\columnseprule}{0.4pt}"));
+    assert!(two_column.contains("\\end{multicols}"));
+}
+
+#[test]
 fn ai_generation_guidance_has_a_bounded_length() {
     use kyozai_kobo_lib::ai::{create_job, CreateJobPayload};
 
@@ -2668,7 +2727,7 @@ fn schema_migration_sets_user_version() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     for table in ["projects", "templates"] {
         let count: i64 = conn
             .query_row(
@@ -2762,7 +2821,7 @@ fn schema_migration_from_v4_adds_part_unit_before_creating_its_index() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 
     for table in ["parts", "part_versions"] {
         let count: i64 = migrated
@@ -2830,7 +2889,7 @@ fn schema_migration_from_v6_backfills_both_problem_statement_layouts() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let bank_two: String = migrated
         .query_row(
             "SELECT statement_latex_two_column FROM problems WHERE id=1",
@@ -2893,7 +2952,7 @@ fn schema_migration_from_v7_adds_problem_completion_flags() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     for table in ["problems", "problem_versions"] {
         let flags: (i64, i64) = migrated
             .query_row(
@@ -2956,7 +3015,7 @@ fn schema_migration_from_v8_adds_ai_job_inserted_state() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let inserted_at: String = migrated
         .query_row(
             "SELECT inserted_at FROM ai_conversion_jobs WHERE job_uuid='legacy-job'",
@@ -4291,4 +4350,175 @@ fn startup_repair_recovers_stuck_compiling_jobs() {
     };
     assert_eq!(status_of(stuck), "completed", "compiling残骸が復旧されない");
     assert_eq!(status_of(interrupted), "failed", "実行中ジョブが失敗へ畳まれない");
+}
+
+#[test]
+fn interrupted_chat_action_group_is_applied_and_can_be_undone() {
+    let (_dir, state) = make_state();
+    let problem_id = insert_chat_test_problem(&state);
+    let session = kyozai_kobo_lib::ai_chat::create_session(&state, Some(json!({}))).unwrap();
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    kyozai_kobo_lib::ai_chat::execute_non_ai_tool_for_test(
+        &state,
+        &session_id,
+        "update_problem",
+        json!({"problem_id":problem_id,"title":"途中まで変更済み"}),
+    )
+    .unwrap();
+    let group_id: i64 = {
+        let conn = state.conn.lock().unwrap();
+        let id = conn
+            .query_row(
+                "SELECT id FROM ai_action_groups WHERE session_id=?1 ORDER BY id DESC LIMIT 1",
+                [&session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE ai_action_groups SET status='running' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE ai_chat_sessions SET status='cancelling' WHERE id=?1",
+            [&session_id],
+        )
+        .unwrap();
+        id
+    };
+
+    kyozai_kobo_lib::ai_chat::repair_interrupted_sessions(&state);
+    let group_status: String = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT status FROM ai_action_groups WHERE id=?1",
+            [group_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(group_status, "applied");
+
+    kyozai_kobo_lib::ai_chat::undo(&state, session_id).unwrap();
+    let restored = kyozai_kobo_lib::commands::problems::get_problem(&state, problem_id).unwrap();
+    assert_eq!(restored.title, "元の題名");
+}
+
+#[test]
+fn dangerous_generated_problem_latex_is_rejected_before_save() {
+    let (_dir, state) = make_state();
+    let problem_id = insert_chat_test_problem(&state);
+    let before = kyozai_kobo_lib::commands::problems::get_problem(&state, problem_id).unwrap();
+
+    let blocked = kyozai_kobo_lib::ai_chat::validate_generated_problem_latex_for_test(
+        &json!({"compileStatus":"blocked","outputLatex":"\\write18{blocked}"}),
+        "解答",
+    )
+    .unwrap_err();
+    assert_eq!(
+        blocked,
+        "危険なLaTeX記述が残っています。修正して再コンパイルしてください"
+    );
+    let rescanned = kyozai_kobo_lib::ai_chat::validate_generated_problem_latex_for_test(
+        &json!({"compileStatus":"ok","outputLatex":"\\input{secret}"}),
+        "解説",
+    )
+    .unwrap_err();
+    assert!(rescanned.contains("解説に危険なLaTeX"));
+
+    let after = kyozai_kobo_lib::commands::problems::get_problem(&state, problem_id).unwrap();
+    assert_eq!(after.answer_latex, before.answer_latex);
+    assert_eq!(after.explanation_latex, before.explanation_latex);
+    assert_eq!(after.version, before.version);
+}
+
+#[test]
+fn interrupted_chat_session_is_repaired_and_accepts_new_message_validation() {
+    let (_dir, state) = make_state();
+    let session = kyozai_kobo_lib::ai_chat::create_session(&state, Some(json!({}))).unwrap();
+    let session_id = session["id"].as_str().unwrap().to_string();
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_chat_sessions SET status='running' WHERE id=?1",
+            [&session_id],
+        )
+        .unwrap();
+    }
+
+    kyozai_kobo_lib::ai_chat::repair_interrupted_sessions(&state);
+    let status = dispatch(
+        &state,
+        "ai_chat_session_status",
+        json!({"sessionId":session_id}),
+        Origin::Desktop,
+    )
+    .unwrap();
+    assert_eq!(status["status"], "failed");
+    let repaired = kyozai_kobo_lib::ai_chat::get_session(&state, &session_id).unwrap();
+    assert_eq!(repaired["lastError"], "アプリ再起動により中断されました");
+
+    // 存在しない添付の検査まで進めれば、古いrunning状態による拒否は解消している。
+    let error = kyozai_kobo_lib::ai_chat::send_message(
+        &state,
+        session_id,
+        "再開".into(),
+        vec!["missing.png".into()],
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("画像 missing.png が見つかりません"));
+    assert!(!error.contains("AIが処理中"));
+}
+
+#[test]
+fn chat_title_only_update_preserves_problem_completion_flags() {
+    let (_dir, state) = make_state();
+    let problem_id = insert_chat_test_problem(&state);
+    let session = kyozai_kobo_lib::ai_chat::create_session(&state, Some(json!({}))).unwrap();
+    let session_id = session["id"].as_str().unwrap();
+
+    kyozai_kobo_lib::ai_chat::execute_non_ai_tool_for_test(
+        &state,
+        session_id,
+        "update_problem",
+        json!({"problem_id":problem_id,"title":"題名だけ変更"}),
+    )
+    .unwrap();
+    let updated = kyozai_kobo_lib::commands::problems::get_problem(&state, problem_id).unwrap();
+    assert_eq!(updated.title, "題名だけ変更");
+    assert!(updated.answer_completed, "解答の完成フラグが落ちている");
+    assert!(updated.explanation_completed, "解説の完成フラグが落ちている");
+}
+
+#[test]
+fn invalid_ai_chat_web_settings_return_specific_errors() {
+    let (_dir, state) = make_state();
+    for (key, value, expected) in [
+        ("ai_chat_enabled", "yes", "AIチャットの有効設定"),
+        ("ai_chat_execution_mode", "dangerous", "AIチャットの実行モード"),
+        ("ai_chat_max_tool_calls", "100", "AIチャットのTool数上限"),
+    ] {
+        let error = kyozai_kobo_lib::commands::settings::set_web_settings(
+            &state,
+            std::collections::HashMap::from([(key.to_string(), value.to_string())]),
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{key}のエラー文が不適切: {error}");
+        assert!(!error.contains("ブラウザから変更できない設定"));
+    }
+}
+
+#[test]
+fn chat_history_commands_reject_invalid_session_ids() {
+    let (_dir, state) = make_state();
+    for error in [
+        kyozai_kobo_lib::ai_chat::undo(&state, "../bad".into()).unwrap_err(),
+        kyozai_kobo_lib::ai_chat::redo(&state, "../bad".into()).unwrap_err(),
+        kyozai_kobo_lib::ai_chat::get_history(&state, "../bad".into(), None).unwrap_err(),
+    ] {
+        assert_eq!(error, "チャットIDが不正です");
+    }
 }

@@ -699,3 +699,43 @@ export interface AiJob {
   updatedAt: string;
   completedAt: string;
 }
+
+// ---- AIチャット / 既存機能Tool Agent ----
+
+export type AiChatStatus = "idle" | "running" | "cancelling" | "awaiting_confirmation" | "failed";
+export type AiChatExecutionMode = "suggest" | "confirm" | "auto";
+
+export interface AiChatAttachment {
+  name: string;
+  stored_name: string;
+}
+
+export interface AiChatToolCall {
+  call_id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface AiChatMessage {
+  id: number;
+  sessionId: string;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  attachments: AiChatAttachment[];
+  metadata: Record<string, unknown>;
+  status: "running" | "completed" | "failed" | "cancelled" | "awaiting_confirmation";
+  createdAt: string;
+}
+
+export interface AiChatSession {
+  id: string;
+  title: string;
+  status: AiChatStatus;
+  executionMode: AiChatExecutionMode;
+  context: Record<string, unknown>;
+  pendingCalls: AiChatToolCall[];
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: AiChatMessage[];
+}

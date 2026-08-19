@@ -1446,6 +1446,23 @@ pub fn test_compile_template(
 /// テンプレートに定義された \usepackage や独自コマンドがそのまま使えるため、
 /// プレビューと冊子出力でコンパイル環境が一致する。
 pub fn build_preview_doc(effective_template: &str, statement: &str, answer: &str, explanation: &str) -> String {
+    build_problem_preview_doc(
+        effective_template,
+        statement,
+        answer,
+        explanation,
+        "single_column",
+    )
+}
+
+/// 問題プレビューを、教材出力と同じmulticols構造を使って一段組・二段組に組版する。
+pub fn build_problem_preview_doc(
+    effective_template: &str,
+    statement: &str,
+    answer: &str,
+    explanation: &str,
+    layout_mode: &str,
+) -> String {
     use super::templates::KNOWN_PLACEHOLDERS;
     // プリアンブル（\begin{document} まで）を抽出。無ければ既定テンプレートのものを使う
     let preamble_src = match effective_template.find("\\begin{document}") {
@@ -1462,6 +1479,9 @@ pub fn build_preview_doc(effective_template: &str, statement: &str, answer: &str
 
     let mut doc = preamble;
     doc.push_str("\\pagestyle{empty}\n\\begin{document}\n");
+    if layout_mode == "two_column" {
+        doc.push_str(TWO_COL_BEGIN);
+    }
     doc.push_str(statement);
     doc.push('\n');
     if !answer.trim().is_empty() {
@@ -1474,8 +1494,11 @@ pub fn build_preview_doc(effective_template: &str, statement: &str, answer: &str
         doc.push_str(explanation);
         doc.push('\n');
     }
+    if layout_mode == "two_column" {
+        doc.push_str(TWO_COL_END);
+    }
     doc.push_str("\\end{document}\n");
-    doc
+    ensure_multicol_support(doc)
 }
 
 /// テンプレートのプリアンブルを使って、編集中の部品だけを確認する完全なLaTeX文書を作る。
@@ -1577,12 +1600,22 @@ pub fn compile_problem_preview(
     statement: String,
     answer: String,
     explanation: String,
+    layout_mode: String,
 ) -> Result<CompileResult, String> {
+    if !matches!(layout_mode.as_str(), "single_column" | "two_column") {
+        return Err("問題プレビューの段組は single_column / two_column のいずれかです".into());
+    }
     let conn = state.conn.lock().map_err(err_str)?;
 
     let (template_id, effective_tpl) = resolve_preview_template(&conn);
 
-    let doc = build_preview_doc(&effective_tpl, &statement, &answer, &explanation);
+    let doc = build_problem_preview_doc(
+        &effective_tpl,
+        &statement,
+        &answer,
+        &explanation,
+        &layout_mode,
+    );
 
     let build_dir = std::env::temp_dir()
         .join("kyozai-kobo-build")
