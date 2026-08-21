@@ -23,6 +23,22 @@ use std::time::{Duration, Instant};
 const MAX_ATTACHMENTS: usize = 8;
 const MAX_MESSAGE_CHARS: usize = 20_000;
 const MAX_TOOL_RESULT_CHARS: usize = 30_000;
+/// instruction は既存AIジョブの solutionGuidance / explanationGuidance /
+/// revisionGuidance へ渡る。ai::create_job 側が1,000文字で弾くため、
+/// Tool側でも同じ上限で検査し、plannerが書き直せるエラーを返す。
+const MAX_TOOL_INSTRUCTION_CHARS: usize = 1_000;
+
+fn checked_instruction(value: &str, label: &str) -> Result<(), String> {
+    if value.chars().count() > MAX_TOOL_INSTRUCTION_CHARS {
+        return Err(format!(
+            "{}は{}文字以内で指定してください（現在{}文字）。要点だけに絞って書き直してください",
+            label,
+            MAX_TOOL_INSTRUCTION_CHARS,
+            value.chars().count()
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Default)]
 pub struct AiChatRunner {
@@ -240,6 +256,7 @@ const AGENT_INSTRUCTIONS: &str = r#"あなたは教材工房のAIエージェン
 - 状態推移図、樹形図、フロー図など本文中の概念図は、revise_problem_contentで編集可能なTikZとして対象欄へ直接追加する。create_graph / create_2d_figure / create_3d_figureはグラフ・図形ライブラリへ保存する操作であり、問題の欄へは挿入しない。
 - 削除や階層変更のToolは公開されていない。できない操作は理由を説明する。
 - 1回の出力で依存関係のないToolはまとめてよいが、作成されたIDが必要な後続Toolは次のターンへ分ける。
+- instructionは1,000文字以内に収める。長い要求は要点へ絞るか、複数回のToolへ分ける。
 - assistant_messageは日本語で簡潔に書く。内部JSONや引数一覧をそのまま見せない。
 "#;
 
@@ -257,7 +274,7 @@ fn tool_catalog() -> &'static str {
 - update_part [WRITE]: part_idの指定されたタイトル・分類・LaTeX等だけ更新（未指定欄は保持）。
 - generate_solution [WRITE]: 既存の検査・試験コンパイル付きAIジョブで解答を生成し保存。
 - generate_explanation [WRITE]: 既存解答に沿う詳しい解説を生成し保存。
-- revise_problem_content [WRITE]: problem_id/target_field/instructionで既存の解答または解説を必要最小限だけ修正し、検査・試験コンパイル後に保存。本文中の状態推移図・樹形図・フロー図はこのToolでTikZとして追加する。
+- revise_problem_content [WRITE]: problem_id/target_field/instructionで既存の解答または解説を必要最小限だけ修正し、検査・試験コンパイル後に保存。本文中の状態推移図・樹形図・フロー図はこのToolでTikZとして追加する。（instructionは1,000文字以内）
 - create_material [WRITE]: material_nameで教材を作成。
 - add_problem_to_material [WRITE]: material_idへproblem_idsをスナップショット追加。
 - reorder_material_problems [WRITE]: ordered_item_idsで教材全項目を並べ替え。
@@ -2365,6 +2382,7 @@ fn generate_problem_content_tool(
         current.statement_latex.clone()
     };
     let guidance = call.arguments.instruction.clone().unwrap_or_default();
+    checked_instruction(&guidance, if explanation { "解説の指示" } else { "解答の方針" })?;
     let job = ai::create_job(
         state,
         ai::CreateJobPayload {
@@ -2460,9 +2478,7 @@ fn revise_problem_content_tool(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or("instructionが必要です")?;
-    if instruction.chars().count() > MAX_MESSAGE_CHARS {
-        return Err("instructionが長すぎます".into());
-    }
+    checked_instruction(instruction, "修正指示")?;
     let target_field = call.arguments.target_field.as_deref().ok_or("target_fieldが必要です")?;
     let current = commands::problems::get_problem(state, problem_id)?;
     let before = problem_snapshot(state, problem_id)?;
@@ -3171,6 +3187,18 @@ mod tests {
         assert_eq!(completion_flags_after_change(true, true, true, false), (false, true));
         assert_eq!(completion_flags_after_change(true, true, false, true), (true, false));
         assert_eq!(completion_flags_after_change(true, true, true, true), (false, false));
+    }
+
+    #[test]
+    fn instruction_limit_matches_the_ai_job_guidance_limit() {
+        // ai::create_job 側は solutionGuidance / explanationGuidance /
+        // revisionGuidance を1,000文字で弾く。Tool側が20,000文字まで通していたため、
+        // 1,001〜20,000文字の指示がジョブ生成時に初めて失敗していた。
+        assert_eq!(MAX_TOOL_INSTRUCTION_CHARS, 1_000);
+        assert!(checked_instruction(&"あ".repeat(1_000), "修正指示").is_ok());
+        let error = checked_instruction(&"あ".repeat(1_001), "修正指示").unwrap_err();
+        assert!(error.contains("1000文字以内"), "{error}");
+        assert!(error.contains("1001文字"), "{error}");
     }
 
     #[test]

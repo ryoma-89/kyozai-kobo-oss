@@ -1651,7 +1651,7 @@ iframe[title*="PDF"] {
 @media (max-width: 820px) {
   .ai-chat-panel {
     position: fixed;
-    inset: calc(40px + env(safe-area-inset-top, 0px)) env(safe-area-inset-right, 0px) calc(66px + env(safe-area-inset-bottom, 0px)) auto;
+    inset: calc(44px + env(safe-area-inset-top, 0px)) env(safe-area-inset-right, 0px) calc(66px + env(safe-area-inset-bottom, 0px)) auto;
     z-index: 65;
     width: min(94vw, 430px) !important;
     max-width: 94vw;
@@ -1666,5 +1666,19 @@ iframe[title*="PDF"] {
      基底定義より後ろのここで16pxへ上げる。 */
   .ai-chat-input {
     font-size: 16px;
+  }
+}
+
+/* 電話サイズのAIチャット */
+@media (max-width: 600px) {
+  /* 375px幅では width:min(94vw,430px) が353pxとなり、左に23pxだけ下の画面が
+     覗いて中途半端に見える。電話では全幅にし、左の境界線と影も落とす。 */
+  .ai-chat-panel {
+    right: env(safe-area-inset-right, 0px);
+    left: env(safe-area-inset-left, 0px);
+    width: auto !important;
+    max-width: none;
+    border-left: none;
+    box-shadow: none;
   }
 }
