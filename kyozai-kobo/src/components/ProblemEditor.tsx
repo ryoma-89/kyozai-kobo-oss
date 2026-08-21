@@ -1137,22 +1137,25 @@ export function ProblemEditor() {
 
         {/* 挿入補助 */}
         <div
-          className="flex flex-wrap gap-1 border-b px-2 py-1"
+          className="latex-snippet-bar flex flex-wrap gap-1 border-b px-2 py-1"
           style={{ borderColor: "var(--border)" }}
         >
-          {SNIPPETS.map((s) => (
-            <button
-              key={s.label}
-              onClick={() => insertSnippet(s.text, s.cursorOffset)}
-              className="rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors"
-              style={{ borderColor: "var(--border)", color: "var(--muted)", background: "var(--panel-2)" }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
-              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
-              title={s.text}
-            >
-              {s.label}
-            </button>
-          ))}
+          {/* 狭い画面では、この並びだけを1行の横スクロールにして編集領域の高さを守る */}
+          <span className="latex-snippet-scroll flex flex-wrap gap-1">
+            {SNIPPETS.map((s) => (
+              <button
+                key={s.label}
+                onClick={() => insertSnippet(s.text, s.cursorOffset)}
+                className="latex-snippet rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors"
+                style={{ borderColor: "var(--border)", color: "var(--muted)", background: "var(--panel-2)" }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
+                title={s.text}
+              >
+                {s.label}
+              </button>
+            ))}
+          </span>
           <button onClick={onInsertGraph} disabled={graphBusy} className="btn btn-outline btn-sm">
             {graphBusy ? "グラフ連携中..." : "2D・3Dグラフを挿入"}
           </button>

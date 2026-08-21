@@ -765,6 +765,68 @@ textarea::placeholder {
     padding-top: 0.4rem;
     padding-bottom: 0.4rem;
   }
+
+  /* ---- 指で確実に押せる最小サイズ ----
+     iOSのタップ目標は44px四方が目安。実測では .btn-sm が29〜31px、
+     タブが32px、チェックボックスが18pxしかなく、押し損ねが起きていた。
+     横幅に余裕が無い箇所は縦方向と当たり判定で稼ぐ。 */
+  .btn {
+    min-height: 40px;
+  }
+  .btn-sm {
+    min-height: 34px;
+  }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .input,
+  .select {
+    min-height: 40px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  /* タグの削除✕は9×17pxしかなく指では押せない。文字の大きさは変えずに、
+     はみ出した擬似要素で当たり判定だけを広げる（隣のチップとは重ならない）。 */
+  .chip {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+  }
+  .chip button {
+    position: relative;
+  }
+  .chip button::after {
+    content: "";
+    position: absolute;
+    inset: -11px;
+  }
+
+  /* ツリーの行操作は6個で行幅の半分を占めるため横には広げられない。
+     行の高さいっぱいまで縦に伸ばして押しやすくする。 */
+  .tree-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    min-height: 36px;
+    padding: 0 0.35rem;
+  }
+
+  /* LaTeX挿入補助は本文入力の主要導線。折り返す配置なので縦に大きくしてよい。 */
+  .latex-snippet-bar {
+    gap: 0.3rem !important;
+  }
+  .latex-snippet {
+    min-height: 34px;
+    padding-right: 0.6rem !important;
+    padding-left: 0.6rem !important;
+    font-size: 13px !important;
+  }
 }
 
 /* 狭い画面: エディタ＋プレビューを縦積みに */
@@ -1067,6 +1129,26 @@ textarea::placeholder {
   /* 部品エディタのメタ情報（種類/カテゴリ/出力先）は縦積みに */
   .parts-meta-grid {
     grid-template-columns: 1fr !important;
+  }
+
+  /* LaTeX挿入補助は17個あり、指サイズにすると折り返しで画面の3分の1を占めてしまう。
+     補助ボタンの並びだけを1行の横スクロールにして、本文編集の高さを確保する。
+     グラフ挿入・再編集は同じ行に残さず、下へ折り返して常に見える位置に置く。 */
+  .latex-snippet-scroll {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .latex-snippet-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  .latex-snippet-scroll > * {
+    flex: 0 0 auto;
   }
   /* 指向けにやや大きい角丸（iOS風の柔らかさ） */
   .card {
@@ -1578,5 +1660,11 @@ iframe[title*="PDF"] {
   }
   .ai-chat-resizer {
     display: none;
+  }
+  /* .ai-chat-input は font: inherit のため14pxになる。iOS Safariは
+     16px未満の入力欄にフォーカスすると画面を自動ズームしてしまうので、
+     基底定義より後ろのここで16pxへ上げる。 */
+  .ai-chat-input {
+    font-size: 16px;
   }
 }
