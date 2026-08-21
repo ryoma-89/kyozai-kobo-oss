@@ -690,16 +690,20 @@ export function AiConvertDialog({
   };
 
   const uncertainList = job?.uncertainFragments ?? [];
-  const hasBlockingWarnings = (job?.warnings ?? []).some((warning) => warning.severity === "error");
+  const reviewWarnings = job?.warnings ?? [];
   const allConfirmed =
     uncertainList.length === 0 ||
     overrideUncertain ||
     uncertainList.every((u) => confirmedUncertain[u.id]);
 
   const guardInsert = async (): Promise<boolean> => {
-    if (allConfirmed) return true;
+    if (allConfirmed && reviewWarnings.length === 0) return true;
+    const reviewItems = [
+      reviewWarnings.length > 0 ? `警告 ${reviewWarnings.length}件` : "",
+      !allConfirmed ? "未確認の「要確認箇所」" : "",
+    ].filter(Boolean).join("・");
     return await confirm(
-      "未確認の「要確認箇所」が残っています。\nこのまま挿入しますか？（内容をよく確認してください）",
+      `${reviewItems}が残っています。\n内容を確認したうえで、このまま挿入・保存しますか？`,
     );
   };
 
@@ -1950,7 +1954,6 @@ export function AiConvertDialog({
             onClick={useProblemLayouts}
             disabled={
               busy ||
-              hasBlockingWarnings ||
               problemDrafts.length !== 1 ||
               !problemDrafts[0]?.statementLatex.trim() ||
               !problemDrafts[0]?.statementLatexTwoColumn.trim() ||
@@ -1965,7 +1968,6 @@ export function AiConvertDialog({
             onClick={() => setShowUnitPicker(true)}
             disabled={
               busy ||
-              hasBlockingWarnings ||
               problemDrafts.some(
                 (problem) =>
                   !problem.title.trim() ||
@@ -1984,7 +1986,7 @@ export function AiConvertDialog({
               <button
                 key={t.field}
                 onClick={() => doInsert(t)}
-                disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+                disabled={busy || !latex.trim() || job?.status === "failed"}
                 className="btn btn-solid btn-sm"
               >
                 {mode === "revise_source" ? `${t.label}を置き換える` : `${t.label}へ挿入`}
@@ -1993,7 +1995,7 @@ export function AiConvertDialog({
             {(insertTargets ?? []).length === 0 && persistentRevisionLabel() && (
               <button
                 onClick={applyPersistentRevision}
-                disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+                disabled={busy || !latex.trim() || job?.status === "failed"}
                 className="btn btn-solid btn-sm"
               >
                 {persistentRevisionLabel()}を置き換える
@@ -2001,14 +2003,14 @@ export function AiConvertDialog({
             )}
             <button
               onClick={saveAsPart}
-              disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+              disabled={busy || !latex.trim() || job?.status === "failed"}
               className="btn btn-outline btn-sm"
             >
               部品として保存
             </button>
             <button
               onClick={() => setShowUnitPicker(true)}
-              disabled={busy || hasBlockingWarnings || !latex.trim() || job?.status === "failed"}
+              disabled={busy || !latex.trim() || job?.status === "failed"}
               className="btn btn-outline btn-sm"
             >
               新規問題として保存

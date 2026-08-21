@@ -953,6 +953,24 @@ f(2)=\lim_{x\to2+0}f(x)=8+2\alpha
         r#"$\lim_{n\to\infty}a_n=2$である。"#
     )
     .is_empty());
+    let continuous_range_with_system = r#"線分が動いてできる立体の体積を求めよ。
+解答では、$f_x$は区間$[x,1]$で連続であることを用いる。
+\[
+X(x,z)\in D\Longleftrightarrow
+\left\{
+\begin{aligned}
+0&<x<1\\
+0&\leqq z\leqq f_x(s)
+\end{aligned}
+\right.
+\]"#;
+    assert!(scan_limit_formula_structure(
+        continuous_range_with_system,
+        continuous_range_with_system
+    )
+    .iter()
+    .all(|warning| warning.code != "ONE_SIDED_LIMIT_FORMULA_MISSING"),
+    "連続な関数の値域と連立条件を区分関数の接続条件として誤検出しないこと");
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\lim_{h\\to-0}"));
 }
 
@@ -1433,6 +1451,28 @@ p^2+q^2=5
         compound_warnings.is_empty(),
         "複合問題の回帰スナップショットに構造警告: {:?}",
         compound_warnings
+            .iter()
+            .map(|warning| (&warning.code, &warning.message))
+            .collect::<Vec<_>>()
+    );
+    let spatial_segment_volume_problem = r#"$xyz$空間で点Pは$x$軸上、点Qは$yz$平面上を動く。
+線分PQが通過してできる立体の体積を求めよ。"#;
+    let xz_cross_section_snapshot = compound_snapshot
+        .replacen("$xy$平面上の任意の点を$X(x,y)$とする。", "$xz$平面上の任意の点を$X(x,z)$とする。", 1)
+        .replace("X(x,y)\\in D", "X(x,z)\\in D");
+    let xz_warnings = scan_trajectory_solution_structure(
+        spatial_segment_volume_problem,
+        &xz_cross_section_snapshot,
+    );
+    assert!(
+        xz_warnings.iter().all(|warning| !matches!(
+            warning.code.as_str(),
+            "TRAJECTORY_SWEPT_MEMBERSHIP"
+                | "TRAJECTORY_SWEPT_POINT_SETUP"
+                | "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"
+        )),
+        "xz平面で調べる空間問題をxy平面の答案として誤検出: {:?}",
+        xz_warnings
             .iter()
             .map(|warning| (&warning.code, &warning.message))
             .collect::<Vec<_>>()
@@ -4220,7 +4260,7 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
 }
 
 #[test]
-fn ai_job_errors_distinguish_answer_format_from_dangerous_latex() {
+fn ai_job_content_warning_requires_confirmation_but_does_not_block_confirmed_save() {
     let (_dir, state) = make_state();
     let job_id = insert_completed_ai_job(&state, "completed", "ok");
     {
@@ -4243,7 +4283,7 @@ fn ai_job_errors_distinguish_answer_format_from_dangerous_latex() {
     let format_error = dispatch(
         &state,
         "ai_insert_into_target_problem",
-        json!({"jobId": job_id, "confirmed": true}),
+        json!({"jobId": job_id, "confirmed": false}),
         Origin::Desktop,
     )
     .unwrap_err();
@@ -4251,18 +4291,40 @@ fn ai_job_errors_distinguish_answer_format_from_dangerous_latex() {
     assert!(!format_error.contains("危険なLaTeX記述"));
     assert!(format_error.contains("問題文の点名と座標文字を保持してください"));
 
+    let saved_part_id = kyozai_kobo_lib::ai::save_as_part(
+        &state,
+        job_id,
+        "確認済みのAI答案".into(),
+        None,
+        true,
+    )
+    .expect("答案内容の警告は、利用者が確認した後の保存を妨げないこと");
+    let saved_latex: String = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT latex_source FROM parts WHERE id=?1",
+            [saved_part_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_latex, "$x^2$");
+
+    let security_job_id = insert_completed_ai_job(&state, "completed", "ok");
+
     {
         let conn = state.conn.lock().unwrap();
         conn.execute(
             "UPDATE ai_conversion_jobs SET output_latex='\\write18{blocked}' WHERE id=?1",
-            [job_id],
+            [security_job_id],
         )
         .unwrap();
     }
     let security_error = dispatch(
         &state,
         "ai_insert_into_target_problem",
-        json!({"jobId": job_id, "confirmed": true}),
+        json!({"jobId": security_job_id, "confirmed": true}),
         Origin::Desktop,
     )
     .unwrap_err();

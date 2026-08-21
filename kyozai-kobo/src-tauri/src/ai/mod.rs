@@ -2039,6 +2039,51 @@ fn swept_region_auxiliary_point_name(text: &str) -> char {
         .unwrap_or('X')
 }
 
+/// `X(x,z)\in D` や `M(x,y,z)\in R` のような所属条件から、
+/// 点名と座標列を取り出す。通過領域は必ずしも xy 平面内とは限らないため、
+/// 検査側で座標平面を固定しない。
+fn swept_region_membership_signature(
+    compact: &str,
+    region_symbol: char,
+) -> Option<(char, String)> {
+    for (position, point_name) in compact.char_indices() {
+        if !point_name.is_ascii_uppercase() {
+            continue;
+        }
+        let after_name = &compact[position + point_name.len_utf8()..];
+        let Some(after_open) = after_name.strip_prefix('(') else {
+            continue;
+        };
+        let Some(close_position) = after_open.find(')') else {
+            continue;
+        };
+        let coordinates = &after_open[..close_position];
+        if coordinates.is_empty()
+            || coordinates.len() > 64
+            || !coordinates.contains(',')
+            || coordinates.contains("\\in")
+        {
+            continue;
+        }
+        let after_coordinate = &after_open[close_position + 1..];
+        let expected_membership = format!("\\in{region_symbol}");
+        if after_coordinate.starts_with(&expected_membership) {
+            return Some((point_name, coordinates.to_string()));
+        }
+    }
+    None
+}
+
+fn coordinate_space_label(coordinates: &str) -> String {
+    match coordinates {
+        "x,y" => "xy平面".into(),
+        "x,z" => "xz平面".into(),
+        "y,z" => "yz平面".into(),
+        "x,y,z" => "xyz空間".into(),
+        _ => "座標空間".into(),
+    }
+}
+
 /// 問題文ですでに与えられた、軌跡を求める点名を可能な範囲で取り出す。
 /// 中点・動点の明示を優先し、その後「点Qの軌跡」の形を調べる。
 pub fn trajectory_target_point_name(text: &str) -> Option<char> {
@@ -2170,7 +2215,7 @@ fn push_missing_coordinate_setup_warning(
 fn opening_declares_swept_region_point(
     latex: &str,
     point_name: char,
-    _region_symbol: char,
+    coordinates: &str,
 ) -> bool {
     let opening_end = [
         latex.find("\\["),
@@ -2183,13 +2228,10 @@ fn opening_declares_swept_region_point(
     .min()
     .unwrap_or(latex.len());
     let opening = compact_latex_structure(&latex[..opening_end]).replace('$', "");
-    opening.contains(&format!(
-        "xy平面上の任意の点を{}(x,y)とする",
-        point_name
-    )) || opening.contains(&format!(
-        "xy平面上の点を{}(x,y)とする",
-        point_name
-    ))
+    let point_coordinate = format!("{}({})", point_name, coordinates);
+    opening.contains(&format!("任意の点を{}とする", point_coordinate))
+        || opening.contains(&format!("平面上の点を{}とする", point_coordinate))
+        || opening.contains(&format!("空間上の点を{}とする", point_coordinate))
 }
 
 fn opening_assumes_swept_region_membership(
@@ -2509,7 +2551,8 @@ pub fn scan_trajectory_solution_structure(problem_text: &str, latex: &str) -> Ve
     let strict_point_locus = requires_strict_point_locus_structure(problem_context);
     let prefer_swept_membership = prefers_swept_region_membership_structure(problem_context);
     let membership_equivalence = strict_point_locus || prefer_swept_membership;
-    let defined_region_symbol = problem_defined_region_symbol(problem_context);
+    let defined_region_symbol = problem_defined_region_symbol(problem_context)
+        .or_else(|| problem_defined_region_symbol(latex));
 
     if membership_equivalence && !latex.contains("\\Longleftrightarrow") {
         warnings.push(trajectory_warning(
@@ -2581,7 +2624,6 @@ pub fn scan_trajectory_solution_structure(problem_text: &str, latex: &str) -> Ve
     }
 
     if prefer_swept_membership {
-        let point_name = swept_region_auxiliary_point_name(problem_context);
         let actual_discriminant_conflict =
             defined_region_symbol == Some('D') && latex.contains("判別式");
         let region_symbol = if actual_discriminant_conflict {
@@ -2589,7 +2631,21 @@ pub fn scan_trajectory_solution_structure(problem_text: &str, latex: &str) -> Ve
         } else {
             defined_region_symbol.unwrap_or('R')
         };
-        let membership = format!("{}(x,y)\\in{}", point_name, region_symbol);
+        let (point_name, point_coordinates) = swept_region_membership_signature(
+            &compact,
+            region_symbol,
+        )
+        .unwrap_or_else(|| {
+            (
+                swept_region_auxiliary_point_name(problem_context),
+                "x,y".into(),
+            )
+        });
+        let coordinate_space = coordinate_space_label(&point_coordinates);
+        let membership = format!(
+            "{}({})\\in{}",
+            point_name, point_coordinates, region_symbol
+        );
         let membership_starts_equivalence = compact.find(&membership).is_some_and(|position| {
             let after_membership = &compact[position + membership.len()..];
             let equivalence = after_membership.find("\\Longleftrightarrow");
@@ -2600,17 +2656,22 @@ pub fn scan_trajectory_solution_structure(problem_text: &str, latex: &str) -> Ve
             warnings.push(trajectory_warning(
                 "TRAJECTORY_SWEPT_MEMBERSHIP",
                 &format!(
-                    "xy平面上の任意の点を既存記号と衝突しない{}(x,y)とし、{}(x,y)\\in {}から線分上の存在条件を同値変形してください",
-                    point_name, point_name, region_symbol
+                    "{}上の任意の点を既存記号と衝突しない{}({})とし、{}({})\\in {}から線分上の存在条件を同値変形してください",
+                    coordinate_space,
+                    point_name,
+                    point_coordinates,
+                    point_name,
+                    point_coordinates,
+                    region_symbol
                 ),
             ));
         }
-        if !opening_declares_swept_region_point(latex, point_name, region_symbol) {
+        if !opening_declares_swept_region_point(latex, point_name, &point_coordinates) {
             warnings.push(trajectory_warning(
                 "TRAJECTORY_SWEPT_POINT_SETUP",
                 &format!(
-                    "所属条件の前に『xy平面上の任意の点を{}(x,y)とする』と定義してください",
-                    point_name
+                    "所属条件の前に『{}上の任意の点を{}({})とする』と定義してください",
+                    coordinate_space, point_name, point_coordinates
                 ),
             ));
         }
@@ -3104,11 +3165,8 @@ fn is_piecewise_boundary_condition_problem(text: &str) -> bool {
     let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
     let asks_boundary_condition = text.contains("微分可能") || text.contains("連続");
     let has_piecewise_definition = compact.contains("\\begin{cases}")
-        || compact.contains("\\left\\{")
-        || (compact.contains("x<")
-            && (compact.contains("x\\geqq")
-                || compact.contains("x\\ge")
-                || compact.contains("x>=")));
+        || ((text.contains("区分関数") || text.contains("場合分け"))
+            && compact.contains("\\left\\{"));
     asks_boundary_condition && has_piecewise_definition
 }
 
@@ -6437,25 +6495,27 @@ fn ensure_job_confirmable(
     {
         return Err("危険なLaTeX記述が残っています。修正して再コンパイルしてください".into());
     }
-    if warnings.iter().any(|warning| warning.severity == "error") {
-        let details = warnings
-            .iter()
-            .filter(|warning| warning.severity == "error")
-            .take(3)
-            .map(|warning| warning.message.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(format!(
-            "答案形式の検査エラーが残っています。AI変換の結果を開いて修正し、再コンパイルしてください。\n{details}"
-        ));
-    }
     let uncertain: Vec<UncertainFragment> = serde_json::from_str(&uncertain_json)
         .map_err(|_| "要確認データが壊れています".to_string())?;
     if compile_status != "ok" {
         return Err("最新のLaTeXを正常に試験コンパイルしてから保存してください".into());
     }
-    if !confirmed && (!warnings.is_empty() || !uncertain.is_empty()) {
-        return Err("警告・要確認箇所・コンパイル結果を確認してから保存してください".into());
+    if !confirmed {
+        if warnings.iter().any(|warning| warning.severity == "error") {
+            let details = warnings
+                .iter()
+                .filter(|warning| warning.severity == "error")
+                .take(3)
+                .map(|warning| warning.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!(
+                "答案形式の検査エラーが残っています。内容を確認し、問題なければ確認済みとして保存してください。\n{details}"
+            ));
+        }
+        if !warnings.is_empty() || !uncertain.is_empty() {
+            return Err("警告・要確認箇所・コンパイル結果を確認してから保存してください".into());
+        }
     }
     Ok(latex)
 }

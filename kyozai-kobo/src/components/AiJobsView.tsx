@@ -7,6 +7,7 @@ import {
   aiInsertIntoTargetProblem,
   aiListJobs,
   aiRetryJob,
+  aiUpdateJobLatex,
 } from "../api";
 import { useApp } from "../store";
 import type { AiJob, AiJobStatus } from "../types";
@@ -212,7 +213,14 @@ export function AiJobsView() {
 
   const onOpen = async (job: AiJob) => {
     try {
-      setReviewJob(await aiGetJob(job.id));
+      // 保存済みジョブにも現在の検査規則を適用し、旧バージョンの誤警告を
+      // 開いた直後から残さない。同一LaTeXの更新ではコンパイル結果は維持される。
+      if (job.status === "completed" && job.outputLatex.trim()) {
+        await aiUpdateJobLatex(job.id, job.outputLatex);
+      }
+      const refreshedJob = await aiGetJob(job.id);
+      setReviewJob(refreshedJob);
+      setJobs((current) => current.map((item) => item.id === job.id ? refreshedJob : item));
     } catch (e) {
       showToast(String(e), "error");
     }
