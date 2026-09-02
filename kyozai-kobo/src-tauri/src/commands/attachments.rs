@@ -5,7 +5,11 @@ use rusqlite::params;
 use std::path::Path;
 
 /// ファイルをアプリ管理領域へコピーして問題に添付する
-pub fn add_attachment(state: &AppState, problem_id: i64, source_path: String) -> Result<Attachment, String> {
+pub fn add_attachment(
+    state: &AppState,
+    problem_id: i64,
+    source_path: String,
+) -> Result<Attachment, String> {
     let src = Path::new(&source_path);
     if !src.exists() {
         return Err("ファイルが見つかりません".into());
@@ -63,8 +67,11 @@ pub fn remove_attachment(state: &AppState, attachment_id: i64) -> Result<(), Str
             |row| row.get(0),
         )
         .map_err(err_str)?;
-    tx.execute("DELETE FROM attachments WHERE id=?1", params![attachment_id])
-        .map_err(err_str)?;
+    tx.execute(
+        "DELETE FROM attachments WHERE id=?1",
+        params![attachment_id],
+    )
+    .map_err(err_str)?;
     tx.execute(
         "UPDATE problems SET updated_at=?1, version=version+1 WHERE id=?2",
         params![now_str(), problem_id],

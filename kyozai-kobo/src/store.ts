@@ -1,12 +1,13 @@
 import { create } from "zustand";
-import type { CompleteGraphWebSessionResult, CompileResult, GraphWebSession, SubjectNode } from "./types";
-import { getTree } from "./api";
+import type { BankNode, CompleteGraphWebSessionResult, CompileResult, GraphWebSession, SubjectNode } from "./types";
+import { getBankTree, getTree } from "./api";
 
-export type View = "bank" | "search" | "projects" | "parts" | "templates" | "graphs" | "ai" | "settings";
+export type View = "bank" | "patterns" | "search" | "projects" | "parts" | "templates" | "graphs" | "ai" | "settings";
 
 /** 他端末からの変更イベントで増える更新カウンター（各画面が変化を監視して再読込する） */
 export interface RemoteBumps {
   problems: number;
+  patterns: number;
   projects: number;
   parts: number;
   templates: number;
@@ -48,12 +49,18 @@ interface AppStore {
   setView: (v: View) => void;
 
   tree: SubjectNode[];
+  bankTree: BankNode[];
   refreshTree: () => Promise<void>;
 
+  selectedBankNodeId: number | null;
+  selectBankNode: (id: number | null) => void;
+  /** Parts・旧AIコンテキスト用の互換Unit ID。 */
   selectedUnitId: number | null;
   selectUnit: (id: number | null) => void;
   selectedProblemId: number | null;
   selectProblem: (id: number | null) => void;
+  selectedPatternId: number | null;
+  selectPattern: (id: number | null) => void;
   selectedProjectId: number | null;
   selectProject: (id: number | null) => void;
   pendingProjectReviewFix: ProjectReviewFix | null;
@@ -73,7 +80,9 @@ interface AppStore {
   resolveConfirm: (ok: boolean) => void;
 
   /** 問題バンクの編集画面へ移動して問題を開く */
-  openProblemInBank: (unitId: number, problemId: number) => void;
+  openProblemInBank: (bankNodeId: number, problemId: number) => void;
+  /** 定石ライブラリへ移動して定石を開く */
+  openPattern: (patternId: number) => void;
 
   /** 直近のLaTeXコンパイル結果（下部ログパネルに表示） */
   lastCompile: LastCompile | null;
@@ -105,24 +114,48 @@ interface AppStore {
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
+function findBankNode(nodes: BankNode[], predicate: (node: BankNode) => boolean): BankNode | null {
+  for (const node of nodes) {
+    if (predicate(node)) return node;
+    const nested = findBankNode(node.children, predicate);
+    if (nested) return nested;
+  }
+  return null;
+}
+
 export const useApp = create<AppStore>((set, get) => ({
   view: "bank",
   setView: (v) => set({ view: v }),
 
   tree: [],
+  bankTree: [],
   refreshTree: async () => {
     try {
-      const tree = await getTree();
-      set({ tree });
+      const [tree, bankTree] = await Promise.all([getTree(), getBankTree()]);
+      set({ tree, bankTree });
     } catch (e) {
       get().showToast(String(e), "error");
     }
   },
 
+  selectedBankNodeId: null,
+  selectBankNode: (id) => {
+    const node = id == null ? null : findBankNode(get().bankTree, (candidate) => candidate.id === id);
+    set({
+      selectedBankNodeId: id,
+      selectedUnitId: node?.legacy_unit_id ?? null,
+      selectedProblemId: null,
+    });
+  },
   selectedUnitId: null,
-  selectUnit: (id) => set({ selectedUnitId: id, selectedProblemId: null }),
+  selectUnit: (id) => {
+    const node = id == null ? null : findBankNode(get().bankTree, (candidate) => candidate.legacy_unit_id === id);
+    set({ selectedUnitId: id, selectedBankNodeId: node?.id ?? null, selectedProblemId: null });
+  },
   selectedProblemId: null,
   selectProblem: (id) => set({ selectedProblemId: id }),
+  selectedPatternId: null,
+  selectPattern: (id) => set({ selectedPatternId: id }),
   selectedProjectId: null,
   selectProject: (id) => set({ selectedProjectId: id }),
   pendingProjectReviewFix: null,
@@ -156,12 +189,16 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ confirmState: null });
   },
 
-  openProblemInBank: (unitId, problemId) =>
+  openProblemInBank: (bankNodeId, problemId) => {
+    const node = findBankNode(get().bankTree, (candidate) => candidate.id === bankNodeId);
     set({
       view: "bank",
-      selectedUnitId: unitId,
+      selectedBankNodeId: bankNodeId,
+      selectedUnitId: node?.legacy_unit_id ?? null,
       selectedProblemId: problemId,
-    }),
+    });
+  },
+  openPattern: (patternId) => set({ view: "patterns", selectedPatternId: patternId }),
 
   lastCompile: null,
   setLastCompile: (r) => set({ lastCompile: r }),
@@ -173,6 +210,7 @@ export const useApp = create<AppStore>((set, get) => ({
 
   bumps: {
     problems: 0,
+    patterns: 0,
     projects: 0,
     parts: 0,
     templates: 0,

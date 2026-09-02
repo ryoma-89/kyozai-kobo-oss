@@ -67,7 +67,9 @@ fn run_capture(cmd: &mut Command) -> Result<String, String> {
 fn contains_serve_target(value: &Value, port: u16) -> bool {
     match value {
         Value::String(text) => contains_serve_target_text(text, port),
-        Value::Array(values) => values.iter().any(|value| contains_serve_target(value, port)),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| contains_serve_target(value, port)),
         Value::Object(values) => values
             .values()
             .any(|value| contains_serve_target(value, port)),
@@ -76,8 +78,7 @@ fn contains_serve_target(value: &Value, port: u16) -> bool {
 }
 
 fn contains_serve_target_text(text: &str, port: u16) -> bool {
-    text.contains(&format!("127.0.0.1:{}", port))
-        || text.contains(&format!("localhost:{}", port))
+    text.contains(&format!("127.0.0.1:{}", port)) || text.contains(&format!("localhost:{}", port))
 }
 
 fn parse_serve_status_json(output: &str, port: u16) -> Result<(String, bool), String> {
@@ -154,11 +155,10 @@ pub fn tailscale_status(state: &AppState) -> Result<Value, String> {
         .trim_end_matches('.')
         .to_string();
 
-    let (serve_status, serve_configured, serve_status_error) =
-        match read_serve_status(&ts, port) {
-            Ok((status, configured)) => (status, configured, None),
-            Err(error) => (String::new(), false, Some(error)),
-        };
+    let (serve_status, serve_configured, serve_status_error) = match read_serve_status(&ts, port) {
+        Ok((status, configured)) => (status, configured, None),
+        Err(error) => (String::new(), false, Some(error)),
+    };
 
     let https_url = if dns_name.is_empty() {
         String::new()
@@ -257,9 +257,10 @@ pub fn autostart_set(enabled: bool) -> Result<bool, String> {
             }
             Ok(true)
         } else {
-            let out = no_window(Command::new("reg").args(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]))
-                .output()
-                .map_err(|e| e.to_string())?;
+            let out =
+                no_window(Command::new("reg").args(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]))
+                    .output()
+                    .map_err(|e| e.to_string())?;
             // 値が無い場合の削除失敗は成功扱い
             let _ = out;
             Ok(false)

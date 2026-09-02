@@ -15,7 +15,11 @@ use std::path::PathBuf;
 /// 旧APIと同等のヘルパー: テンプレートで冊子全体の .tex を生成
 fn build_tex(name: &str, settings: &ProjectSettings, items: &[ProjectItem], kind: &str) -> String {
     let bodies = render_bodies(items, settings);
-    let tpl = if kind == "answers" { DEFAULT_ANSWER_TEMPLATE } else { DEFAULT_PROBLEM_TEMPLATE };
+    let tpl = if kind == "answers" {
+        DEFAULT_ANSWER_TEMPLATE
+    } else {
+        DEFAULT_PROBLEM_TEMPLATE
+    };
     render_document(tpl, kind, name, settings, &bodies)
 }
 
@@ -28,8 +32,11 @@ fn setup() -> (tempdir::TempDir, rusqlite::Connection) {
 /// 階層と問題を1問作って各IDを返す
 fn seed(conn: &rusqlite::Connection) -> (i64, i64, i64, i64) {
     let now = db::now_str();
-    conn.execute("INSERT INTO subjects (name, sort_order) VALUES ('数学', 1)", [])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO subjects (name, sort_order) VALUES ('数学', 1)",
+        [],
+    )
+    .unwrap();
     let subject_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO fields (subject_id, name, sort_order) VALUES (?1, '数I', 1)",
@@ -87,13 +94,22 @@ fn schema_and_hierarchy() {
 
     // 単元削除で問題もCASCADE削除される（外部キー整合性）
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM problems WHERE id=?1", params![problem_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM problems WHERE id=?1",
+            params![problem_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 1);
-    conn.execute("DELETE FROM subjects WHERE id=?1", params![subject_id]).unwrap();
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM problems", [], |r| r.get(0)).unwrap();
+    conn.execute("DELETE FROM subjects WHERE id=?1", params![subject_id])
+        .unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM problems", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 0, "科目削除で配下の問題もCASCADE削除されるべき");
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM units", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM units", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 0);
     let _ = unit_id;
 }
@@ -148,7 +164,8 @@ fn snapshot_is_immutable_after_bank_update() {
     assert!(item.source_exists);
 
     // 元問題を削除してもスナップショットは残る (ON DELETE SET NULL)
-    conn.execute("DELETE FROM problems WHERE id=?1", params![problem_id]).unwrap();
+    conn.execute("DELETE FROM problems WHERE id=?1", params![problem_id])
+        .unwrap();
     let items = items_of(&conn, project_id).unwrap();
     assert_eq!(items.len(), 1);
     assert!(!items[0].source_exists);
@@ -202,14 +219,26 @@ fn tex_generation_problems_and_answers() {
 
     let tex_p = build_tex("テスト教材", &settings, &items, "problems");
     assert!(tex_p.contains("\\documentclass[uplatex,a4paper,11pt]{ujarticle}"));
-    assert!(tex_p.contains("\\textbf{問題1}"), "問題番号「問題1」が出力されていない");
-    assert!(tex_p.contains("\\textbf{問題2}"), "見出しを挟んでも連番が継続すべき");
+    assert!(
+        tex_p.contains("\\textbf{問題1}"),
+        "問題番号「問題1」が出力されていない"
+    );
+    assert!(
+        tex_p.contains("\\textbf{問題2}"),
+        "見出しを挟んでも連番が継続すべき"
+    );
     assert!(tex_p.contains("x^2 - 4x + 7"));
     assert!(tex_p.contains("\\section*{第2節}"));
     assert!(tex_p.contains("氏名"));
-    assert!(tex_p.contains("二次関数 夏期講習"), "{{{{TITLE}}}} が置換されていない");
+    assert!(
+        tex_p.contains("二次関数 夏期講習"),
+        "{{{{TITLE}}}} が置換されていない"
+    );
     assert!(!tex_p.contains("{{BODY}}"), "プレースホルダが残っている");
-    assert!(!tex_p.contains("【解答】"), "問題冊子に解答が含まれてはいけない");
+    assert!(
+        !tex_p.contains("【解答】"),
+        "問題冊子に解答が含まれてはいけない"
+    );
     assert!(!tex_p.contains("\\begin{tcolorbox}"));
 
     let tex_a = build_tex("テスト教材", &settings, &items, "answers");
@@ -225,7 +254,8 @@ fn tex_generation_problems_and_answers() {
     boxed_settings.box_statement_in_answers = true;
     let tex_boxed = build_tex("テスト教材", &boxed_settings, &items, "answers");
     assert!(tex_boxed.contains("\\begin{tcolorbox}[enhanced"));
-    assert!(tex_boxed.contains("attach boxed title to top left={xshift=4mm,yshift*=-\\tcboxedtitleheight/2}"));
+    assert!(tex_boxed
+        .contains("attach boxed title to top left={xshift=4mm,yshift*=-\\tcboxedtitleheight/2}"));
     assert!(tex_boxed.contains("boxed title style={colback=white,colframe=white"));
     assert!(tex_boxed.contains("title={\\textbf{問題1}}"));
 
@@ -240,7 +270,10 @@ fn tex_generation_problems_and_answers() {
     s3.two_column_mode = "all".into();
     let tex_a3 = build_tex("テスト教材", &s3, &items, "answers");
     assert!(tex_a3.contains("\\begin{multicols}{2}"));
-    assert!(tex_a3.contains("\\setlength{\\columnseprule}{0.4pt}"), "2段組に縦線が入っていない");
+    assert!(
+        tex_a3.contains("\\setlength{\\columnseprule}{0.4pt}"),
+        "2段組に縦線が入っていない"
+    );
     assert_eq!(tex_a3.matches("\\begin{multicols}{2}").count(), 1);
     // 問題文もmulticols内に含まれる
     let mc_start = tex_a3.find("\\begin{multicols}{2}").unwrap();
@@ -284,16 +317,28 @@ fn tex_generation_problems_and_answers() {
     s6.show_title = false;
     s6.show_header = false;
     let tex_p6 = build_tex("テスト教材", &s6, &items, "problems");
-    assert!(!tex_p6.contains("二次関数 夏期講習"), "タイトルが出力されている");
+    assert!(
+        !tex_p6.contains("二次関数 夏期講習"),
+        "タイトルが出力されている"
+    );
     assert!(!tex_p6.contains("{{TITLE}}"));
     // タイトルのみ非表示の場合、タイトルブロックは空になる（ヘッダーには残ってよい）
     let mut s6b = default_settings();
     s6b.show_title = false;
     let tex_p6b = build_tex("テスト教材", &s6b, &items, "problems");
-    assert!(tex_p6b.contains("{\\LARGE \\bfseries  \\par}"), "タイトルブロックが空になっていない");
+    assert!(
+        tex_p6b.contains("{\\LARGE \\bfseries  \\par}"),
+        "タイトルブロックが空になっていない"
+    );
     let tex_a6b = build_tex("テスト教材", &s6b, &items, "answers");
-    assert!(!tex_a6b.contains("二次関数 夏期講習　解答"), "解答冊子タイトルが残っている");
-    assert!(!tex_a6b.contains("　解答 \\par}"), "解答冊子の「解答」だけが残っている");
+    assert!(
+        !tex_a6b.contains("二次関数 夏期講習　解答"),
+        "解答冊子タイトルが残っている"
+    );
+    assert!(
+        !tex_a6b.contains("　解答 \\par}"),
+        "解答冊子の「解答」だけが残っている"
+    );
     assert!(!tex_a6b.contains("{{ANSWER_TITLE}}"));
 
     // ヘッダー非表示（fancyhdrの罫線も消える）
@@ -302,7 +347,10 @@ fn tex_generation_problems_and_answers() {
     s7.show_header = false;
     let tex_p7 = build_tex("テスト教材", &s7, &items, "problems");
     assert!(!tex_p7.contains("講座名"));
-    assert!(tex_p7.contains("\\renewcommand{\\headrulewidth}{0pt}"), "ヘッダー罫線が消えていない");
+    assert!(
+        tex_p7.contains("\\renewcommand{\\headrulewidth}{0pt}"),
+        "ヘッダー罫線が消えていない"
+    );
     // 表示時はヘッダーが入る
     let mut s8 = default_settings();
     s8.header_left = "講座名".into();
@@ -327,15 +375,23 @@ fn problem_statement_variant_follows_each_booklets_actual_column_width() {
 
     let mut two_column_problem_settings = settings.clone();
     two_column_problem_settings.problem_two_column = true;
-    let two_column_problem =
-        build_tex("表示形式テスト", &two_column_problem_settings, &items, "problems");
+    let two_column_problem = build_tex(
+        "表示形式テスト",
+        &two_column_problem_settings,
+        &items,
+        "problems",
+    );
     assert!(two_column_problem.contains("TWO-COLUMN-STATEMENT"));
     assert!(!two_column_problem.contains("SINGLE-COLUMN-STATEMENT"));
 
     let mut all_two_column_answer_settings = settings.clone();
     all_two_column_answer_settings.two_column_mode = "all".into();
-    let all_two_column_answer =
-        build_tex("表示形式テスト", &all_two_column_answer_settings, &items, "answers");
+    let all_two_column_answer = build_tex(
+        "表示形式テスト",
+        &all_two_column_answer_settings,
+        &items,
+        "answers",
+    );
     assert!(all_two_column_answer.contains("TWO-COLUMN-STATEMENT"));
     assert!(!all_two_column_answer.contains("SINGLE-COLUMN-STATEMENT"));
 
@@ -409,8 +465,10 @@ fn part_layout_mode_wraps_only_two_column_parts_without_nested_multicols() {
         "問題冊子全体の二段組内に部品の multicols を入れ子にしない"
     );
     let problem_two_start = problem_tex.find("\\begin{multicols}{2}").unwrap();
-    let problem_two_end =
-        problem_tex[problem_two_start..].find("\\end{multicols}").unwrap() + problem_two_start;
+    let problem_two_end = problem_tex[problem_two_start..]
+        .find("\\end{multicols}")
+        .unwrap()
+        + problem_two_start;
     assert!(problem_tex[problem_two_start..problem_two_end].contains("TWO-COLUMN-PART"));
     assert!(problem_tex[problem_two_start..problem_two_end].contains("SINGLE-COLUMN-PART"));
 }
@@ -450,8 +508,14 @@ fn template_markers_and_custom_placeholders() {
     // APP_BODYマーカー方式のテンプレート
     let tpl = "\\documentclass{ujarticle}\n\\begin{document}\n% APP_BODY_START\n古い本文\n% APP_BODY_END\n\\end{document}\n";
     let doc = render_document(tpl, "problems", "マーカーテスト", &settings, &bodies);
-    assert!(doc.contains("x^2 - 4x + 7"), "マーカー間に本文が挿入されていない");
-    assert!(!doc.contains("古い本文"), "マーカー間の旧内容が置換されていない");
+    assert!(
+        doc.contains("x^2 - 4x + 7"),
+        "マーカー間に本文が挿入されていない"
+    );
+    assert!(
+        !doc.contains("古い本文"),
+        "マーカー間の旧内容が置換されていない"
+    );
 
     // {{BODY}}のみのテンプレートを解答冊子に使った場合は解答が入る
     let tpl2 = "\\begin{document}\n{{BODY}}\n\\end{document}";
@@ -464,7 +528,10 @@ fn template_markers_and_custom_placeholders() {
     no_title_settings.show_title = false;
     let old_answer_tpl = DEFAULT_ANSWER_TEMPLATE.replace("{{ANSWER_TITLE}}", "{{TITLE}}　解答");
     let old_doc = render_document(&old_answer_tpl, "answers", "t", &no_title_settings, &bodies);
-    assert!(!old_doc.contains("　解答 \\par}"), "古い解答テンプレートで「解答」だけが残っている");
+    assert!(
+        !old_doc.contains("　解答 \\par}"),
+        "古い解答テンプレートで「解答」だけが残っている"
+    );
 
     let mut boxed_settings = settings.clone();
     boxed_settings.box_statement_in_answers = true;
@@ -479,7 +546,10 @@ fn template_markers_and_custom_placeholders() {
     let doc3 = render_document(tpl3, "answers", "t", &settings, &bodies);
     let sep = doc3.find("===").unwrap();
     assert!(doc3[..sep].contains("【解答】"));
-    assert!(!doc3[..sep].contains("【解説】"), "解説がANSWER_BODY側に含まれている");
+    assert!(
+        !doc3[..sep].contains("【解説】"),
+        "解説がANSWER_BODY側に含まれている"
+    );
     assert!(doc3[sep..].contains("【解説】"));
 }
 
@@ -487,7 +557,9 @@ fn template_markers_and_custom_placeholders() {
 fn template_validation_and_seed() {
     let (_dir, conn) = setup();
     seed_default_template(&conn).unwrap();
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM templates", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM templates", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 1);
     // 既定テンプレートは警告なし
     let w = validate_templates("", DEFAULT_PROBLEM_TEMPLATE, DEFAULT_ANSWER_TEMPLATE);
@@ -502,10 +574,18 @@ fn template_validation_and_seed() {
         assert!(!tpl.contains("\\usepackage{float}"));
     }
     // BODYなしテンプレートは警告あり
-    let w2 = validate_templates("", "\\begin{document}\\end{document}", DEFAULT_ANSWER_TEMPLATE);
+    let w2 = validate_templates(
+        "",
+        "\\begin{document}\\end{document}",
+        DEFAULT_ANSWER_TEMPLATE,
+    );
     assert!(!w2.is_empty());
     // 不明プレースホルダ警告
-    let w3 = validate_templates("", DEFAULT_PROBLEM_TEMPLATE, &format!("{}\n{{{{UNKNOWN_PH}}}}", DEFAULT_ANSWER_TEMPLATE));
+    let w3 = validate_templates(
+        "",
+        DEFAULT_PROBLEM_TEMPLATE,
+        &format!("{}\n{{{{UNKNOWN_PH}}}}", DEFAULT_ANSWER_TEMPLATE),
+    );
     assert!(w3.iter().any(|w| w.contains("UNKNOWN_PH")));
 }
 
@@ -569,7 +649,11 @@ fn template_snapshot_is_immutable() {
 
     // スナップショットは旧内容のまま
     let snap: String = conn
-        .query_row("SELECT snap_tpl_problem FROM projects WHERE id=?1", params![project_id], |r| r.get(0))
+        .query_row(
+            "SELECT snap_tpl_problem FROM projects WHERE id=?1",
+            params![project_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert!(!snap.contains("変更後"));
     assert!(snap.contains("ujarticle"));
@@ -663,13 +747,8 @@ fn compile_pdf_with_real_tex() {
         compound_body
     );
     let compound_build = tempdir::TempDir::new("kyozai-compound-trajectory-pdf").unwrap();
-    let (compound_success, compound_pdf, compound_log, compound_message) = run_compile_with(
-        &uplatex,
-        &dvipdfmx,
-        compound_build.path(),
-        &compound_tex,
-    )
-    .unwrap();
+    let (compound_success, compound_pdf, compound_log, compound_message) =
+        run_compile_with(&uplatex, &dvipdfmx, compound_build.path(), &compound_tex).unwrap();
     assert!(compound_success, "{}\n{}", compound_message, compound_log);
     assert!(compound_pdf.unwrap().exists());
 
@@ -748,8 +827,14 @@ fn toc_headings_and_combined() {
     let tex = build_tex("章目次テスト", &s, &items, "problems");
     assert!(tex.contains("\\tableofcontents"), "目次が入っていない");
     assert!(tex.contains("\\section*{第1章 二次関数}"));
-    assert!(tex.contains("\\addcontentsline{toc}{section}{第1章 二次関数}"), "番号なし見出しが目次に載らない");
-    assert!(tex.contains("\\subsection*{発展問題}"), "節レベルの見出しになっていない");
+    assert!(
+        tex.contains("\\addcontentsline{toc}{section}{第1章 二次関数}"),
+        "番号なし見出しが目次に載らない"
+    );
+    assert!(
+        tex.contains("\\subsection*{発展問題}"),
+        "節レベルの見出しになっていない"
+    );
 
     // 番号付き見出し
     let mut s2 = default_settings();
@@ -762,15 +847,24 @@ fn toc_headings_and_combined() {
     let mut s3 = default_settings();
     s3.include_statement_in_answers = false;
     let tex3 = build_tex("章目次テスト", &s3, &items, "answers");
-    assert!(!tex3.contains("x^2 - 4x + 7"), "問題文が解答冊子に含まれている");
+    assert!(
+        !tex3.contains("x^2 - 4x + 7"),
+        "問題文が解答冊子に含まれている"
+    );
     assert!(tex3.contains("【解答】"));
     assert!(!tex3.contains("\\fbox{"));
 
     // 合本: 問題本文 → 改ページ → 解答見出し → 解答本文
     let tex4 = build_tex("章目次テスト", &default_settings(), &items, "combined");
     let clear = tex4.find("\\clearpage").expect("合本に改ページがない");
-    assert!(tex4[..clear].contains("x^2 - 4x + 7"), "合本の前半に問題がない");
-    assert!(tex4[clear..].contains("\\textbf{解答}"), "合本に解答見出しがない");
+    assert!(
+        tex4[..clear].contains("x^2 - 4x + 7"),
+        "合本の前半に問題がない"
+    );
+    assert!(
+        tex4[clear..].contains("\\textbf{解答}"),
+        "合本に解答見出しがない"
+    );
     assert!(tex4[clear..].contains("【解答】"), "合本の後半に解答がない");
     assert!(!tex4.contains("{{BODY}}"));
 
@@ -819,24 +913,49 @@ fn chapter_numbering_and_toc_distinction() {
     s.reset_numbering_per_chapter = true;
     s.show_toc = true;
     let tex = build_tex("章番号テスト", &s, &items, "problems");
-    assert!(tex.contains("\\textbf{問題1-1}"), "1-1形式になっていない:\n{}", tex);
+    assert!(
+        tex.contains("\\textbf{問題1-1}"),
+        "1-1形式になっていない:\n{}",
+        tex
+    );
     assert!(tex.contains("\\textbf{問題1-2}"));
     assert!(tex.contains("\\textbf{問題2-1}"), "第2章で2-1にならない");
     assert!(tex.contains("\\section{第1章}"));
-    assert!(tex.contains("\\section*{補充問題}"), "番号なし指定の章に番号が付いている");
+    assert!(
+        tex.contains("\\section*{補充問題}"),
+        "番号なし指定の章に番号が付いている"
+    );
     // 番号なし章では通し番号なしのリセット番号
-    assert!(tex.contains("\\textbf{問題1}\\par"), "番号なし章で問題1にリセットされない");
+    assert!(
+        tex.contains("\\textbf{問題1}\\par"),
+        "番号なし章で問題1にリセットされない"
+    );
 
     // 解答冊子: 見出しは番号なしコマンド（\section*）だが、章番号がある場合は
     // 見出し・目次とも「1　第1章」形式（（解答）サフィックスは付けない）
     let tex_a = build_tex("章番号テスト", &s, &items, "answers");
-    assert!(tex_a.contains("\\addcontentsline{toc}{section}{1　第1章}"), "解答側の目次に章番号が付かない");
-    assert!(!tex_a.contains("（解答）"), "目次に不要な（解答）が付いている");
-    assert!(!tex_a.contains("\\section{第1章}"), "解答側の見出しが番号付きコマンドになっている");
-    assert!(tex_a.contains("\\section*{1　第1章}"), "解答側見出しに章番号表記がない");
+    assert!(
+        tex_a.contains("\\addcontentsline{toc}{section}{1　第1章}"),
+        "解答側の目次に章番号が付かない"
+    );
+    assert!(
+        !tex_a.contains("（解答）"),
+        "目次に不要な（解答）が付いている"
+    );
+    assert!(
+        !tex_a.contains("\\section{第1章}"),
+        "解答側の見出しが番号付きコマンドになっている"
+    );
+    assert!(
+        tex_a.contains("\\section*{1　第1章}"),
+        "解答側見出しに章番号表記がない"
+    );
     // 番号なし章はそのままの見出しで目次に載る
     assert!(tex_a.contains("\\addcontentsline{toc}{section}{補充問題}"));
-    assert!(tex_a.contains("\\textbf{問題1-1}"), "解答側の問題番号が一致しない");
+    assert!(
+        tex_a.contains("\\textbf{問題1-1}"),
+        "解答側の問題番号が一致しない"
+    );
 
     // 合本: 解答編の区切りが目次に載る
     let tex_c = build_tex("章番号テスト", &s, &items, "combined");
@@ -848,7 +967,10 @@ fn chapter_numbering_and_toc_distinction() {
     s2.reset_numbering_per_chapter = false;
     let tex2 = build_tex("章番号テスト", &s2, &items, "problems");
     assert!(tex2.contains("\\textbf{問題1}\\par"));
-    assert!(tex2.contains("\\textbf{問題3}\\par"), "リセットなしで通し番号にならない");
+    assert!(
+        tex2.contains("\\textbf{問題3}\\par"),
+        "リセットなしで通し番号にならない"
+    );
     assert!(!tex2.contains("問題1-1"));
 }
 
@@ -858,9 +980,18 @@ fn preview_doc_uses_template_preamble() {
     use kyozai_kobo_lib::commands::latex::build_preview_doc;
     let tpl = "\\documentclass[uplatex]{ujarticle}\n\\usepackage{physics}\n\\usepackage{mypkg}\n\\lhead{{{HEADER_LEFT}}}\n\\newcommand{\\mycmd}{X}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
     let doc = build_preview_doc(tpl, "問題文 $\\dv{y}{x}$", "解答です", "");
-    assert!(doc.contains("\\usepackage{mypkg}"), "テンプレートのパッケージが引き継がれない");
-    assert!(doc.contains("\\newcommand{\\mycmd}"), "独自コマンドが引き継がれない");
-    assert!(!doc.contains("{{HEADER_LEFT}}"), "プレースホルダが残っている");
+    assert!(
+        doc.contains("\\usepackage{mypkg}"),
+        "テンプレートのパッケージが引き継がれない"
+    );
+    assert!(
+        doc.contains("\\newcommand{\\mycmd}"),
+        "独自コマンドが引き継がれない"
+    );
+    assert!(
+        !doc.contains("{{HEADER_LEFT}}"),
+        "プレースホルダが残っている"
+    );
     assert!(doc.contains("\\pagestyle{empty}"));
     assert!(doc.contains("問題文"));
     assert!(doc.contains("【解答】"));
@@ -879,9 +1010,14 @@ fn bank_export_import_roundtrip() {
     let (dir_a, conn_a) = setup();
     let (_s, _f, unit_id, problem_id) = seed(&conn_a);
     // タグと添付を付与
-    conn_a.execute("INSERT INTO tags (name) VALUES ('平方完成')", []).unwrap();
     conn_a
-        .execute("INSERT INTO problem_tags (problem_id, tag_id) VALUES (?1, 1)", params![problem_id])
+        .execute("INSERT INTO tags (name) VALUES ('平方完成')", [])
+        .unwrap();
+    conn_a
+        .execute(
+            "INSERT INTO problem_tags (problem_id, tag_id) VALUES (?1, 1)",
+            params![problem_id],
+        )
         .unwrap();
     let att_dir_a = dir_a.path().join("attachments");
     std::fs::create_dir_all(&att_dir_a).unwrap();
@@ -892,15 +1028,17 @@ fn bank_export_import_roundtrip() {
             params![problem_id],
         )
         .unwrap();
+    let solution_variants_json = r#"[{"id":"variant-main","strategy":{"id":"strategy-coordinate","title":"座標設定","summary":"座標を置いて計算する。","difficulty":"standard","answerLength":"medium","concepts":["座標"]},"role":"main","solution":"\\includegraphics{imgabc.png}","explanation":"図を使う解説 \\includegraphics{imgabc.png}","explanationOutdated":false}]"#;
     conn_a
         .execute(
             "UPDATE problems
              SET statement_latex = statement_latex || ' \\includegraphics{imgabc.png}',
                  statement_latex_two_column = statement_latex_two_column || ' \\includegraphics{imgabc.png}',
+                 solution_variants_json = ?2,
                  answer_completed = 1,
                  explanation_completed = 1
              WHERE id=?1",
-            params![problem_id],
+            params![problem_id, solution_variants_json],
         )
         .unwrap();
 
@@ -910,7 +1048,17 @@ fn bank_export_import_roundtrip() {
     assert_eq!(data.subjects[0].fields[0].units[0].problems.len(), 1);
     assert!(data.subjects[0].fields[0].units[0].problems[0].answer_completed);
     assert!(data.subjects[0].fields[0].units[0].problems[0].explanation_completed);
-    assert!(!data.subjects[0].fields[0].units[0].problems[0].attachments[0].data_base64.is_empty());
+    assert_eq!(
+        data.subjects[0].fields[0].units[0].problems[0]
+            .solution_variants
+            .len(),
+        1
+    );
+    assert!(
+        !data.subjects[0].fields[0].units[0].problems[0].attachments[0]
+            .data_base64
+            .is_empty()
+    );
 
     // 新しいDBへインポート
     let (dir_b, conn_b) = setup();
@@ -925,21 +1073,46 @@ fn bank_export_import_roundtrip() {
         .query_row(
             "SELECT title, statement_latex, statement_latex_two_column FROM problems LIMIT 1",
             [],
-            |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
         .unwrap();
     assert_eq!(title, "頂点を求める");
-    assert!(!statement.contains("imgabc.png"), "旧ファイル名が残っている");
+    assert!(
+        !statement.contains("imgabc.png"),
+        "旧ファイル名が残っている"
+    );
     let new_stored: String = conn_b
-        .query_row("SELECT stored_name FROM attachments LIMIT 1", [], |r| r.get(0))
+        .query_row("SELECT stored_name FROM attachments LIMIT 1", [], |r| {
+            r.get(0)
+        })
         .unwrap();
-    assert!(statement.contains(&new_stored), "新ファイル名に置換されていない");
+    assert!(
+        statement.contains(&new_stored),
+        "新ファイル名に置換されていない"
+    );
     assert!(
         statement_two_column.contains(&new_stored),
         "二段組版の添付参照が新ファイル名へ置換されていない"
     );
-    assert!(att_dir_b.join(&new_stored).exists(), "添付ファイルが復元されていない");
+    assert!(
+        att_dir_b.join(&new_stored).exists(),
+        "添付ファイルが復元されていない"
+    );
+    let imported_variants: String = conn_b
+        .query_row(
+            "SELECT solution_variants_json FROM problems LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        !imported_variants.contains("imgabc.png"),
+        "解法Variantに旧ファイル名が残っている"
+    );
+    assert!(
+        imported_variants.contains(&new_stored),
+        "解法Variantの添付参照が新しい保存名へ置換されていない"
+    );
     let tag: String = conn_b
         .query_row(
             "SELECT t.name FROM tags t JOIN problem_tags pt ON pt.tag_id=t.id LIMIT 1",
@@ -962,7 +1135,9 @@ fn bank_export_import_roundtrip() {
     assert_eq!(result2.subjects_created, 0, "同名科目が重複作成された");
     assert_eq!(result2.units_created, 0);
     assert_eq!(result2.problems_imported, 1);
-    let n: i64 = conn_b.query_row("SELECT COUNT(*) FROM problems", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn_b
+        .query_row("SELECT COUNT(*) FROM problems", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 2);
 }
 
@@ -1030,10 +1205,195 @@ fn template_validation_warns_on_double_body_insertion() {
 }
 
 fn which(name: &str) -> Option<std::path::PathBuf> {
-    let out = std::process::Command::new("where.exe").arg(name).output().ok()?;
+    let out = std::process::Command::new("where.exe")
+        .arg(name)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout);
     s.lines().next().map(|l| std::path::PathBuf::from(l.trim()))
+}
+
+/// 定石ライブラリの定石を教材へ入れたときの、スナップショット固定と組版を確認する。
+fn seed_pattern(conn: &rusqlite::Connection, title: &str) -> i64 {
+    let now = db::now_str();
+    conn.execute(
+        "INSERT INTO patterns(uuid,title,summary,pattern_type,situation,principle,cautions,examples,source_note,created_at,updated_at)
+         VALUES (?1,?2,?3,'strategy',?4,?5,?6,'','検証用',?7,?7)",
+        params![
+            uuid_like(title),
+            title,
+            "関数値の差は、導関数のとりうる値の範囲へ移すと評価できる。",
+            "二点での関数値の差を、直接計算せずに評価したいとき。",
+            "差を導関数の情報へ移す。",
+            "微分可能性を確認する。",
+            now
+        ],
+    )
+    .unwrap();
+    let pattern_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO pattern_strategies(pattern_id,title,description,condition_text,reasoning,branch_label,sort_order)
+         VALUES (?1,?2,?3,?4,?5,'',1)",
+        params![
+            pattern_id,
+            "平均値の定理で平均変化率を導関数の値に置き換える",
+            "\\(\\frac{f(b)-f(a)}{b-a}=f'(c)\\) とおく。",
+            "区間で連続かつ微分可能なとき。",
+            "導関数の範囲がそのまま差の範囲になる。"
+        ],
+    )
+    .unwrap();
+    pattern_id
+}
+
+fn uuid_like(seed: &str) -> String {
+    format!("test-pattern-{}", seed.chars().count())
+}
+
+#[test]
+fn pattern_item_keeps_its_snapshot_when_the_library_changes() {
+    let (_dir, conn) = setup();
+    let project_id = create_project(&conn, "定石教材");
+    let pattern_id = seed_pattern(&conn, "二点間の関数値の差を導関数の範囲へ移して評価する");
+
+    // add_pattern_to_project と同じ内容を直接入れる（AppStateを使わないテスト経路）。
+    let snapshot = serde_json::json!({
+        "version": 1,
+        "uuid": "test-pattern",
+        "title": "二点間の関数値の差を導関数の範囲へ移して評価する",
+        "summary": "関数値の差は、導関数のとりうる値の範囲へ移すと評価できる。",
+        "pattern_type": "strategy",
+        "situation": "二点での関数値の差を、直接計算せずに評価したいとき。",
+        "principle": "差を導関数の情報へ移す。",
+        "cautions": "微分可能性を確認する。",
+        "examples": "",
+        "source_note": "検証用",
+        "tags": [],
+        "facets": {"domains":[],"goals":[],"operations":[],"structures":[],"situations":[]},
+        "strategies": [{
+            "id": null,
+            "parent_strategy_id": null,
+            "title": "平均値の定理で平均変化率を導関数の値に置き換える",
+            "description": "\\(\\frac{f(b)-f(a)}{b-a}=f'(c)\\) とおく。",
+            "condition": "区間で連続かつ微分可能なとき。",
+            "reasoning": "導関数の範囲がそのまま差の範囲になる。",
+            "branch_label": "",
+            "sort_order": 1
+        }]
+    })
+    .to_string();
+    conn.execute(
+        "INSERT INTO project_items(project_id,item_type,sort_order,pattern_id,snap_title,snap_pattern_json,created_at)
+         VALUES (?1,'pattern',0,?2,?3,?4,?5)",
+        params![
+            project_id,
+            pattern_id,
+            "二点間の関数値の差を導関数の範囲へ移して評価する",
+            snapshot,
+            db::now_str()
+        ],
+    )
+    .unwrap();
+
+    let items = items_of(&conn, project_id).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].item_type, "pattern");
+    assert!(items[0].source_exists);
+    assert!(!items[0].pattern_updated, "追加直後は最新版と一致している");
+
+    // 定石ライブラリ側を書き換えても、教材のスナップショットは変わらない。
+    conn.execute(
+        "UPDATE patterns SET title='書き換えた定石',summary='書き換えた',version=version+1 WHERE id=?1",
+        params![pattern_id],
+    )
+    .unwrap();
+    let items = items_of(&conn, project_id).unwrap();
+    assert_eq!(
+        items[0].snap_title, "二点間の関数値の差を導関数の範囲へ移して評価する",
+        "教材側の内容は定石ライブラリの更新で変わらない"
+    );
+    assert!(items[0].pattern_updated, "新しい版があることは知らせる");
+
+    // 元の定石を消しても、スナップショットで出力できる。
+    conn.execute("DELETE FROM patterns WHERE id=?1", params![pattern_id])
+        .unwrap();
+    let items = items_of(&conn, project_id).unwrap();
+    assert!(!items[0].source_exists);
+    assert!(!items[0].pattern_updated);
+    let bodies = render_bodies(&items, &default_settings());
+    assert!(bodies.body.contains("\\begin{tcolorbox}"));
+    assert!(bodies.body.contains("平均値の定理で平均変化率を導関数の値に置き換える"));
+    assert!(
+        bodies.answer_plain.contains("\\begin{tcolorbox}"),
+        "定石カードは解答冊子にも入れる"
+    );
+}
+
+#[test]
+fn pattern_card_compiles_with_real_tex() {
+    let uplatex = which("uplatex");
+    let dvipdfmx = which("dvipdfmx");
+    let (Some(uplatex), Some(dvipdfmx)) = (uplatex, dvipdfmx) else {
+        eprintln!("TeX環境が見つからないため定石カードのPDF生成テストをスキップ");
+        return;
+    };
+    let (_dir, conn) = setup();
+    let project_id = create_project(&conn, "定石カードPDF");
+    let pattern_id = seed_pattern(&conn, "二点間の関数値の差を導関数の範囲へ移して評価する");
+    let snapshot = serde_json::json!({
+        "version": 1,
+        "uuid": "test-pattern",
+        "title": "二点間の関数値の差 \\(f(b)-f(a)\\) を導関数の範囲へ移して評価する",
+        "summary": "関数値の差は、導関数のとりうる値の範囲へ移すと評価できる。",
+        "pattern_type": "strategy",
+        "situation": "二点での関数値の差を、直接計算せずに評価したいとき。",
+        "principle": "差を導関数の情報へ移す。",
+        "cautions": "微分可能性を確認する。\n端点を含むかで不等号の向きが変わる。",
+        "examples": "\\(\\log b-\\log a\\) の評価。",
+        "source_note": "検証用",
+        "tags": [],
+        "facets": {"domains":[],"goals":[],"operations":[],"structures":[],"situations":[]},
+        "strategies": [{
+            "id": null,
+            "parent_strategy_id": null,
+            "title": "平均値の定理で平均変化率を導関数の値に置き換える",
+            "description": "\\(\\dfrac{f(b)-f(a)}{b-a}=f'(c)\\) を満たす \\(c\\) をとる。",
+            "condition": "区間で連続かつ微分可能なとき。",
+            "reasoning": "導関数の範囲がそのまま差の範囲になる。",
+            "branch_label": "",
+            "sort_order": 1
+        }, {
+            "id": null,
+            "parent_strategy_id": null,
+            "title": "関数値の差を導関数の定積分で表して挟む",
+            "description": "\\(f(b)-f(a)=\\displaystyle\\int_a^b f'(x)\\,dx\\) とする。",
+            "condition": "導関数が積分できるとき。",
+            "reasoning": "被積分関数の評価がそのまま差の評価になる。",
+            "branch_label": "",
+            "sort_order": 2
+        }]
+    })
+    .to_string();
+    conn.execute(
+        "INSERT INTO project_items(project_id,item_type,sort_order,pattern_id,snap_title,snap_pattern_json,created_at)
+         VALUES (?1,'pattern',0,?2,'定石',?3,?4)",
+        params![project_id, pattern_id, snapshot, db::now_str()],
+    )
+    .unwrap();
+    let items = items_of(&conn, project_id).unwrap();
+    let tex = build_tex("定石カードPDF", &default_settings(), &items, "problems");
+    assert!(tex.contains("\\usepackage{tcolorbox}"));
+    // スナップショットの読み違いでカードが空のまま通らないようにする。
+    assert!(tex.contains("\\begin{tcolorbox}"));
+    assert!(tex.contains("関数値の差を導関数の定積分で表して挟む"));
+
+    let build = tempdir::TempDir::new("kyozai-pattern-pdf").unwrap();
+    let (success, pdf, log, message) =
+        run_compile_with(&uplatex, &dvipdfmx, build.path(), &tex).unwrap();
+    assert!(success, "{}\n{}", message, log);
+    let pdf = pdf.expect("PDFパスが返ること");
+    assert!(std::fs::metadata(&pdf).unwrap().len() > 1000);
 }

@@ -38,6 +38,8 @@ function jobModeLabel(job: AiJob): string | null {
   const labels: Record<string, string> = {
     generate_answer: "解答生成",
     generate_explanation: "解説生成",
+    generate_strategy_explanation: "確定解答から解説生成",
+    generate_strategy_solution: "選択解法から答案生成",
     generate_topic_guide: "解説部品生成",
     generate_problem_layouts: "表示形式生成",
     problem_bank_import: "問題取込",
@@ -165,7 +167,7 @@ export function AiJobsView() {
 
   const load = async () => {
     try {
-      setJobs(await aiListJobs(100));
+      setJobs((await aiListJobs(100)).filter((job) => job.options.hideFromHistory !== true));
     } catch (e) {
       showToast(String(e), "error");
     }
@@ -233,16 +235,19 @@ export function AiJobsView() {
       ? `問題「${job.targetEntityName.trim()}」`
       : `問題 #${job.targetEntityId}`;
     const hasReviewItems = job.warnings.length > 0 || job.uncertainFragments.length > 0;
+    const backgroundExplanation = job.options.backgroundWorkflowResult === "solution_explanation";
     const accepted = await confirm(
-      `${problemName}の${label}へ生成結果を挿入しますか？\n`
-      + "既存の内容がある場合は末尾へ追記します。"
+      `${problemName}の${label}へ生成結果を${backgroundExplanation ? "反映" : "挿入"}しますか？\n`
+      + (backgroundExplanation
+        ? "生成元の解答が変更されている場合は、安全のため反映を中止します。"
+        : "既存の内容がある場合は末尾へ追記します。")
       + (hasReviewItems ? "\n警告・要確認箇所があるため、内容を確認してから実行してください。" : ""),
     );
     if (!accepted) return;
     setInsertingJobId(job.id);
     try {
       await aiInsertIntoTargetProblem(job.id, true);
-      showToast(`${problemName}の${label}へ挿入しました`);
+      showToast(`${problemName}の${label}へ${backgroundExplanation ? "反映" : "挿入"}しました`);
       await load();
     } catch (e) {
       showToast(String(e), "error");
@@ -376,7 +381,11 @@ export function AiJobsView() {
                           disabled={insertingJobId !== null}
                           className="btn btn-solid btn-sm"
                         >
-                          {insertingJobId === job.id ? "挿入中..." : `${directInsertLabel(job)}へ挿入`}
+                          {insertingJobId === job.id
+                            ? "反映中..."
+                            : job.options.backgroundWorkflowResult === "solution_explanation"
+                              ? "解説を問題へ反映"
+                              : `${directInsertLabel(job)}へ挿入`}
                         </button>
                       )}
                       <button onClick={() => onOpen(job)} className="btn btn-outline btn-sm">

@@ -32,7 +32,10 @@ fn nsis_installer_shows_prerequisites_without_installing_them() {
         "任意",
         "自動インストールされません",
     ] {
-        assert!(hook.contains(required), "インストーラー案内に {required} がありません");
+        assert!(
+            hook.contains(required),
+            "インストーラー案内に {required} がありません"
+        );
     }
     assert!(
         !hook.contains("ExecWait") && !hook.contains("nsExec") && !hook.contains("install.ps1"),

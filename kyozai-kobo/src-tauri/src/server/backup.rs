@@ -102,9 +102,7 @@ pub fn list_backups(state: &AppState) -> Result<Value, String> {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         let mut files: Vec<_> = entries
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path().extension().map(|x| x == "db").unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "db").unwrap_or(false))
             .collect();
         files.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
         for e in files {
@@ -125,11 +123,8 @@ pub fn list_backups(state: &AppState) -> Result<Value, String> {
 }
 
 fn validate_backup_file(path: &Path) -> Result<(), String> {
-    let test = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| format!("バックアップを開けません: {}", e))?;
+    let test = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("バックアップを開けません: {}", e))?;
     let integrity: String = test
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(|e| format!("整合性チェックに失敗しました: {}", e))?;
@@ -184,26 +179,22 @@ pub fn restore_backup(state: &AppState, file_name: &str) -> Result<(), String> {
             )
             .unwrap_or(0);
         if active_jobs > 0 {
-            return Err("実行中または待機中のAI変換を完了・キャンセルしてから復元してください".into());
+            return Err(
+                "実行中または待機中のAI変換を完了・キャンセルしてから復元してください".into(),
+            );
         }
     }
 
     let db_path = state.data_dir.join("kyozai-kobo.db");
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let nonce = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let safety = backups_dir(state).join(format!(
-        "kyozai-kobo-pre-restore-{}-{}.db",
-        stamp, nonce
-    ));
-    let staging = state
-        .data_dir
-        .join(format!(".kyozai-restore-{}.db", nonce));
+    let safety = backups_dir(state).join(format!("kyozai-kobo-pre-restore-{}-{}.db", stamp, nonce));
+    let staging = state.data_dir.join(format!(".kyozai-restore-{}.db", nonce));
     let old_path = state
         .data_dir
         .join(format!(".kyozai-pre-restore-live-{}.db", nonce));
 
-    std::fs::copy(&src, &staging)
-        .map_err(|e| format!("復元候補の準備に失敗: {}", e))?;
+    std::fs::copy(&src, &staging).map_err(|e| format!("復元候補の準備に失敗: {}", e))?;
     if let Err(error) = validate_backup_file(&staging) {
         std::fs::remove_file(&staging).ok();
         return Err(error);
@@ -221,10 +212,7 @@ pub fn restore_backup(state: &AppState, file_name: &str) -> Result<(), String> {
     validate_backup_file(&safety)?;
 
     // Windowsでは接続中のDBを置換できないため、一時接続へ差し替えて閉じる。
-    let old = std::mem::replace(
-        &mut *guard,
-        Connection::open_in_memory().map_err(err_str)?,
-    );
+    let old = std::mem::replace(&mut *guard, Connection::open_in_memory().map_err(err_str)?);
     drop(old);
 
     if let Err(error) = std::fs::rename(&db_path, &old_path) {

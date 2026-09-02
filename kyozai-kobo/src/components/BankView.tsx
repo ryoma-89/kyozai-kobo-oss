@@ -16,9 +16,9 @@ export function useNarrowLayout(threshold = 900): boolean {
 }
 
 /** 問題バンク画面: 左ツリー + 中央一覧/編集 + 右プレビュー
- *  狭い画面では「単元選択 → 問題一覧・編集」の1ペイン切り替え式になる */
+ *  狭い画面では「階層選択 → 問題一覧・編集」の1ペイン切り替え式になる */
 export function BankView() {
-  const { selectedProblemId, selectedUnitId, selectUnit, setContextName } = useApp();
+  const { selectedProblemId, selectedBankNodeId, selectBankNode, setContextName } = useApp();
   const narrow = useNarrowLayout();
 
   useEffect(() => {
@@ -27,10 +27,10 @@ export function BankView() {
   }, []);
 
   if (narrow) {
-    // 1ペイン: 単元未選択ならツリー、選択済みなら一覧/編集（戻るボタン付き）
+    // 1ペイン: 階層未選択ならツリー、選択済みなら一覧/編集（戻るボタン付き）
     return (
       <div className="flex h-full min-w-0 flex-col">
-        {selectedUnitId == null ? (
+        {selectedBankNodeId == null ? (
           <div className="min-h-0 flex-1" style={{ background: "var(--panel)" }}>
             <TreePanel />
           </div>
@@ -38,8 +38,8 @@ export function BankView() {
           <>
             {selectedProblemId == null && (
               <div className="border-b px-2 py-1" style={{ borderColor: "var(--border)" }}>
-                <button onClick={() => selectUnit(null)} className="btn btn-ghost btn-sm">
-                  ← 単元一覧
+                <button onClick={() => selectBankNode(null)} className="btn btn-ghost btn-sm">
+                  ← 階層一覧
                 </button>
               </div>
             )}

@@ -17,6 +17,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   addContentItem,
   addPartToProject,
+  addPatternToProject,
   addProblemToProject,
   aiCreateJob,
   compilePdf,
@@ -29,6 +30,7 @@ import {
   listGraphAssets,
   refreshItemFromBank,
   refreshPartItemFromLibrary,
+  refreshPatternItemFromLibrary,
   refreshProjectTemplate,
   removeProjectItem,
   reorderProjectItems,
@@ -65,6 +67,7 @@ import { PdfCanvasViewer } from "./PdfCanvasViewer";
 import { PdfSaveButton } from "./PdfSaveButton";
 import { Icon } from "./Icon";
 import { PartPicker } from "./PartPicker";
+import { PatternPicker } from "./PatternPicker";
 import { ProblemPicker } from "./ProblemPicker";
 import { DifficultyBadge, DifficultyRankBadge, Modal } from "./ui";
 
@@ -74,6 +77,7 @@ const ITEM_TYPE_LABEL: Record<string, string> = {
   text: "説明文",
   pagebreak: "改ページ",
   part: "部品",
+  pattern: "定石",
 };
 
 const OUTPUT_TARGET_LABEL: Record<string, string> = {
@@ -178,6 +182,7 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [showPartPicker, setShowPartPicker] = useState(false);
+  const [showPatternPicker, setShowPatternPicker] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editItem, setEditItem] = useState<ProjectItem | null>(null);
   const [editItemInitialTab, setEditItemInitialTab] = useState<
@@ -450,6 +455,17 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
       await refreshPartItemFromLibrary(item.id);
       await load();
       showToast("部品を最新版に更新しました");
+    } catch (e) {
+      showToast(String(e), "error");
+    }
+  };
+
+  const onRefreshPatternItem = async (item: ProjectItem) => {
+    if (!(await confirm("定石ライブラリの最新内容でこの定石のスナップショットを更新しますか？"))) return;
+    try {
+      await refreshPatternItemFromLibrary(item.id);
+      await load();
+      showToast("定石を最新版に更新しました");
     } catch (e) {
       showToast(String(e), "error");
     }
@@ -821,6 +837,9 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
         <button onClick={() => setShowPartPicker(true)} className="btn btn-outline btn-sm">
           ＋ 部品を追加
         </button>
+        <button onClick={() => setShowPatternPicker(true)} className="btn btn-outline btn-sm">
+          ＋ 定石を追加
+        </button>
         <button onClick={() => addContent("heading", 1)} className="btn btn-ghost btn-sm" title="章レベルの見出し（\section）">
           ＋章見出し
         </button>
@@ -960,6 +979,33 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
                                     title="部品ライブラリ側が更新されています。クリックで最新版に更新"
                                   >
                                     ライブラリ更新あり
+                                  </button>
+                                )}
+                              </>
+                            ) : item.item_type === "pattern" ? (
+                              <>
+                                <span className="badge badge-standard shrink-0">定石</span>
+                                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                                  {item.snap_title}
+                                  <span className="ml-2 text-xs font-normal" style={{ color: "var(--muted)" }}>
+                                    追加時点の内容で固定
+                                  </span>
+                                </span>
+                                {!item.source_exists && (
+                                  <span
+                                    className="badge badge-muted"
+                                    title="元の定石は削除されていますが、スナップショットで出力できます"
+                                  >
+                                    元定石削除済
+                                  </span>
+                                )}
+                                {item.pattern_updated && (
+                                  <button
+                                    onClick={() => onRefreshPatternItem(item)}
+                                    className="badge badge-warn cursor-pointer"
+                                    title="定石ライブラリ側に新しい版があります。クリックで最新版に更新"
+                                  >
+                                    新しい版があります
                                   </button>
                                 )}
                               </>
@@ -1114,6 +1160,20 @@ export function ProjectEditor({ projectId, onBack }: { projectId: number; onBack
           }}
           onPick={async (partId) => {
             await addPartToProject(project.id, partId);
+          }}
+        />
+      )}
+
+      {/* 定石追加モーダル */}
+      {showPatternPicker && (
+        <PatternPicker
+          title="教材へ追加する定石を選択"
+          onClose={async () => {
+            setShowPatternPicker(false);
+            await load();
+          }}
+          onPick={async (pattern) => {
+            await addPatternToProject(project.id, pattern.id);
           }}
         />
       )}

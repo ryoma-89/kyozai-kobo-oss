@@ -18,7 +18,7 @@ import { useApp, type ProjectReviewFix } from "../store";
 import { buildFileUrl, isTauri } from "../transport";
 import type { AiExtractedProblem, AiJob } from "../types";
 import { LatexEditor } from "./LatexEditor";
-import { UnitPicker } from "./ProblemList";
+import { BankNodePicker } from "./ProblemList";
 import { Icon } from "./Icon";
 
 /** 変換モード一覧 */
@@ -776,7 +776,7 @@ export function AiConvertDialog({
     }
   };
 
-  const saveAsProblem = async (unitId: number) => {
+  const saveAsProblem = async (bankNodeId: number) => {
     if (!job) return;
     const confirmed = await guardInsert();
     if (!confirmed) return;
@@ -790,7 +790,7 @@ export function AiConvertDialog({
         if (checkedJob.compileStatus !== "ok") {
           throw new Error("編集後の問題文をコンパイルできませんでした。内容を確認してください。");
         }
-        const ids = await aiSaveExtractedProblems(job.id, unitId, problemDrafts, confirmed);
+        const ids = await aiSaveExtractedProblems(job.id, bankNodeId, problemDrafts, confirmed);
         showToast(`${ids.length}件の問題を一括保存しました`);
         setShowUnitPicker(false);
         onClose();
@@ -800,7 +800,7 @@ export function AiConvertDialog({
       const title = window.prompt("問題のタイトル", "AI変換問題");
       if (title == null) return;
       await prepareCurrentLatexForInsert();
-      const id = await aiSaveAsProblem(job.id, unitId, title, confirmed);
+      const id = await aiSaveAsProblem(job.id, bankNodeId, title, confirmed);
       showToast(`新規問題として保存しました (ID: ${id})`);
       setShowUnitPicker(false);
       onClose();
@@ -2076,8 +2076,8 @@ export function AiConvertDialog({
       </div>
 
       {showUnitPicker && (
-        <UnitPicker
-          title={problemDrafts.length > 0 ? `${problemDrafts.length}件の保存先単元を選択` : "保存先の単元を選択"}
+        <BankNodePicker
+          title={problemDrafts.length > 0 ? `${problemDrafts.length}件の保存先階層を選択` : "保存先の階層を選択"}
           onClose={() => setShowUnitPicker(false)}
           onPick={saveAsProblem}
         />

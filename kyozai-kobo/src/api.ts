@@ -19,13 +19,31 @@ import type {
   CompleteGraphWebSessionResult,
   ImportAnalysis,
   ImportBankResult,
+  BankNode,
+  BankNodeDeleteImpact,
+  BankNodeDeleteStrategy,
   NodeKind,
   PartAttachment,
   PartFull,
   PartSearchQuery,
   PartSummary,
   PartVersionSummary,
+  PatternDeleteImpact,
+  ApplyPatternProposalPayload,
+  ApplyPatternProposalResult,
+  PatternExtractionStyle,
+  PatternProposal,
+  PatternFilterValues,
+  PatternFull,
+  PatternSearchQuery,
+  PatternSummary,
+  PatternUpdate,
+  PatternVersionFull,
+  PatternVersionSummary,
+  ProblemPatternView,
+  ImportPatternsResult,
   ProblemFull,
+  ProblemSolutionVariant,
   ProblemSummary,
   ProjectFull,
   ProjectSettings,
@@ -59,21 +77,38 @@ export const deleteTreeNode = (kind: NodeKind, id: number) =>
 export const moveTreeNode = (kind: NodeKind, id: number, delta: number) =>
   invoke<void>("move_tree_node", { kind, id, delta });
 
+// 任意深度の問題バンク正本。上の旧APIはParts・旧クライアント互換用。
+export const getBankTree = () => invoke<BankNode[]>("get_bank_tree");
+export const createBankNode = (parentId: number | null, name: string) =>
+  invoke<number>("create_bank_node", { parentId, name });
+export const renameBankNode = (id: number, name: string) =>
+  invoke<void>("rename_bank_node", { id, name });
+export const moveBankNode = (id: number, newParentId: number | null, sortOrder?: number | null) =>
+  invoke<void>("move_bank_node", { id, newParentId, sortOrder: sortOrder ?? null });
+export const reorderBankNode = (id: number, delta: number) =>
+  invoke<void>("reorder_bank_node", { id, delta });
+export const getBankNodeDeleteImpact = (id: number) =>
+  invoke<BankNodeDeleteImpact>("get_bank_node_delete_impact", { id });
+export const deleteBankNode = (id: number, strategy: BankNodeDeleteStrategy) =>
+  invoke<void>("delete_bank_node", { id, strategy });
+
 // ---- 問題 ----
-export const listProblems = (unitId: number) =>
-  invoke<ProblemSummary[]>("list_problems", { unitId });
+export const listProblems = (bankNodeId: number) =>
+  invoke<ProblemSummary[]>("list_problems", { bankNodeId });
 export const getProblem = (id: number) => invoke<ProblemFull>("get_problem", { id });
-export const createProblem = (unitId: number, title: string) =>
-  invoke<number>("create_problem", { unitId, title });
+export const createProblem = (bankNodeId: number, title: string) =>
+  invoke<number>("create_problem", { bankNodeId, title });
 /** 保存に成功すると新しいversionを返す。競合時は ConflictError */
 export const updateProblem = (payload: {
   id: number;
+  bank_node_id: number;
   unit_id: number;
   title: string;
   statement_latex: string;
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  solution_variants: ProblemSolutionVariant[];
   answer_completed: boolean;
   explanation_completed: boolean;
   difficulty: string;
@@ -94,6 +129,81 @@ export const listAllTags = () => invoke<string[]>("list_all_tags");
 export const searchProblems = (query: SearchQuery) =>
   invoke<SearchResult[]>("search_problems", { query });
 
+// ---- 定石ライブラリ ----
+export const searchPatterns = (query: PatternSearchQuery) =>
+  invoke<PatternSummary[]>("search_patterns", { query });
+export const listPatternFilterValues = () =>
+  invoke<PatternFilterValues>("list_pattern_filter_values");
+export const createPattern = (title: string, patternType = "strategy") =>
+  invoke<number>("create_pattern", { title, patternType });
+export const getPattern = (id: number) => invoke<PatternFull>("get_pattern", { id });
+export const updatePattern = (payload: PatternUpdate) =>
+  invoke<number>("update_pattern", { payload });
+export const duplicatePattern = (id: number) => invoke<number>("duplicate_pattern", { id });
+export const getPatternDeleteImpact = (patternId: number) =>
+  invoke<PatternDeleteImpact>("get_pattern_delete_impact", { patternId });
+export const deletePattern = (id: number) => invoke<void>("delete_pattern", { id });
+export const listPatternsForProblem = (problemId: number) =>
+  invoke<ProblemPatternView[]>("list_patterns_for_problem", { problemId });
+export const linkProblemPattern = (
+  problemId: number,
+  patternId: number,
+  relationType: string,
+) => invoke<void>("link_problem_pattern", { problemId, patternId, relationType });
+export const unlinkProblemPattern = (problemId: number, patternId: number) =>
+  invoke<void>("unlink_problem_pattern", { problemId, patternId });
+export const linkPatternRelation = (
+  fromPatternId: number,
+  toPatternId: number,
+  relationType = "related",
+) => invoke<void>("link_pattern_relation", { fromPatternId, toPatternId, relationType });
+export const unlinkPatternRelation = (
+  fromPatternId: number,
+  toPatternId: number,
+  relationType: string,
+) => invoke<void>("unlink_pattern_relation", { fromPatternId, toPatternId, relationType });
+export const listPatternVersions = (patternId: number) =>
+  invoke<PatternVersionSummary[]>("list_pattern_versions", { patternId });
+export const getPatternVersion = (versionId: number) =>
+  invoke<PatternVersionFull>("get_pattern_version", { versionId });
+export const restorePatternVersion = (
+  versionId: number,
+  expectedVersion?: number | null,
+) => invoke<number>("restore_pattern_version", { versionId, expectedVersion: expectedVersion ?? null });
+export const exportPatternsJson = (patternIds?: number[] | null) =>
+  invoke<string>("export_patterns_json", { patternIds: patternIds ?? null });
+export const exportPatternsFile = (patternIds: number[] | null, destPath: string) =>
+  invoke<void>("export_patterns_file", { patternIds, destPath });
+export const importPatternsJson = (jsonText: string) =>
+  invoke<ImportPatternsResult>("import_patterns_json", { jsonText });
+export const importPatternsFile = (path: string) =>
+  invoke<ImportPatternsResult>("import_patterns_file", { path });
+export const startPatternExtraction = (
+  problemId: number,
+  style?: PatternExtractionStyle,
+  instruction?: string,
+) =>
+  invoke<AiJob>("start_pattern_extraction", {
+    problemId,
+    style: style ?? null,
+    instruction: instruction ?? null,
+  });
+export const patternCardLatex = (patternId: number) =>
+  invoke<string>("pattern_card_latex", { patternId });
+export const startPatternEdit = (patternId: number, instruction: string) =>
+  invoke<AiJob>("start_pattern_edit", { patternId, instruction });
+export const applyPatternEdit = (
+  patternId: number,
+  expectedVersion: number | null,
+  proposal: PatternProposal,
+) => invoke<number>("apply_pattern_edit", { patternId, expectedVersion, proposal });
+export const startPatternImageImport = (inputNames: string[], note?: string) =>
+  invoke<AiJob>("start_pattern_image_import", { inputNames, note: note ?? null });
+export const startPatternGeneralization = (problemId: number, proposal: PatternProposal) =>
+  invoke<AiJob>("start_pattern_generalization", { problemId, proposal });
+export const applyPatternProposal = (payload: ApplyPatternProposalPayload) =>
+  invoke<ApplyPatternProposalResult>("apply_pattern_proposal", { payload });
+
 // ---- 教材プロジェクト ----
 export const listProjects = () => invoke<ProjectSummary[]>("list_projects");
 export const createProject = (name: string, templateId?: number | null) =>
@@ -113,6 +223,10 @@ export const duplicateProject = (id: number) => invoke<number>("duplicate_projec
 export const getProject = (id: number) => invoke<ProjectFull>("get_project", { id });
 export const addProblemToProject = (projectId: number, problemId: number) =>
   invoke<number>("add_problem_to_project", { projectId, problemId });
+export const addPatternToProject = (projectId: number, patternId: number) =>
+  invoke<number>("add_pattern_to_project", { projectId, patternId });
+export const refreshPatternItemFromLibrary = (itemId: number) =>
+  invoke<void>("refresh_pattern_item_from_library", { itemId });
 export const addPartToProject = (projectId: number, partId: number) =>
   invoke<number>("add_part_to_project", { projectId, partId });
 export const addContentItem = (
@@ -291,11 +405,13 @@ export const searchParts = (query: PartSearchQuery) =>
   invoke<PartSummary[]>("search_parts", { query });
 export const listAllPartTags = () => invoke<string[]>("list_all_part_tags");
 export const listPartCategories = () => invoke<string[]>("list_part_categories");
-export const createPart = (title: string) => invoke<number>("create_part", { title });
+export const createPart = (title: string, bankNodeId: number | null = null) =>
+  invoke<number>("create_part", { title, bankNodeId, unitId: null });
 export const getPart = (id: number) => invoke<PartFull>("get_part", { id });
 /** 保存に成功すると新しいversionを返す。競合時は ConflictError */
 export const updatePart = (payload: {
   id: number;
+  bank_node_id: number | null;
   unit_id: number | null;
   title: string;
   part_type: string;
@@ -319,7 +435,7 @@ export const removePartAttachment = (attachmentId: number) =>
   invoke<void>("remove_part_attachment", { attachmentId });
 
 // ---- 問題バンクの入出力・整理 ----
-export type BankScope = "all" | "subject" | "field" | "unit" | "problems";
+export type BankScope = "all" | "node" | "subject" | "field" | "unit" | "problems";
 export const exportBank = (
   scopeKind: BankScope,
   id: number | null,
@@ -327,8 +443,8 @@ export const exportBank = (
   destPath: string,
 ) => invoke<string>("export_bank", { scopeKind, id, problemIds, destPath });
 export const importBank = (path: string) => invoke<ImportBankResult>("import_bank", { path });
-export const moveProblems = (problemIds: number[], unitId: number) =>
-  invoke<void>("move_problems", { problemIds, unitId });
+export const moveProblems = (problemIds: number[], bankNodeId: number) =>
+  invoke<void>("move_problems", { problemIds, bankNodeId });
 export const deleteProblems = (problemIds: number[]) =>
   invoke<void>("delete_problems", { problemIds });
 
@@ -444,18 +560,18 @@ export const aiSaveAsPart = (
   });
 export const aiSaveAsProblem = (
   jobId: number,
-  unitId: number,
+  bankNodeId: number,
   title: string,
   confirmed: boolean,
 ) =>
-  invoke<number>("ai_save_as_problem", { jobId, unitId, title, confirmed });
+  invoke<number>("ai_save_as_problem", { jobId, bankNodeId, title, confirmed });
 export const aiSaveExtractedProblems = (
   jobId: number,
-  unitId: number,
+  bankNodeId: number,
   problems: AiExtractedProblem[],
   confirmed: boolean,
 ) =>
-  invoke<number[]>("ai_save_extracted_problems", { jobId, unitId, problems, confirmed });
+  invoke<number[]>("ai_save_extracted_problems", { jobId, bankNodeId, problems, confirmed });
 export const aiMarkInserted = (
   jobId: number,
   entityType: string,

@@ -24,8 +24,11 @@ fn make_state() -> (tempdir::TempDir, Arc<AppState>) {
 
 fn insert_chat_test_problem(state: &Arc<AppState>) -> i64 {
     let conn = state.conn.lock().unwrap();
-    conn.execute("INSERT INTO subjects(name,sort_order) VALUES ('数学',1)", [])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO subjects(name,sort_order) VALUES ('数学',1)",
+        [],
+    )
+    .unwrap();
     let subject_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO fields(subject_id,name,sort_order) VALUES (?1,'数学I',1)",
@@ -103,7 +106,10 @@ async fn pair(router: &axum::Router) -> String {
         .unwrap()
         .to_string();
     assert!(set_cookie.contains("HttpOnly"), "HttpOnlyが付くこと");
-    assert!(set_cookie.contains("SameSite=Lax"), "SameSite=Laxが付くこと");
+    assert!(
+        set_cookie.contains("SameSite=Lax"),
+        "SameSite=Laxが付くこと"
+    );
     set_cookie.split(';').next().unwrap().to_string()
 }
 
@@ -243,7 +249,12 @@ async fn paired_session_can_crud_and_detect_conflicts() {
     });
     let res = router
         .clone()
-        .oneshot(post_json("/api/invoke/update_problem", payload.clone(), Some(&cookie), true))
+        .oneshot(post_json(
+            "/api/invoke/update_problem",
+            payload.clone(),
+            Some(&cookie),
+            true,
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -267,7 +278,12 @@ async fn paired_session_can_crud_and_detect_conflicts() {
     // 同じ expected_version=1 で再保存 → 409 CONFLICT
     let res = router
         .clone()
-        .oneshot(post_json("/api/invoke/update_problem", payload, Some(&cookie), true))
+        .oneshot(post_json(
+            "/api/invoke/update_problem",
+            payload,
+            Some(&cookie),
+            true,
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
@@ -294,7 +310,10 @@ async fn web_blocked_commands_and_traversal_are_rejected() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let err = body_json(res).await;
-    assert!(err["error"].as_str().unwrap().contains("ブラウザからは利用できません"));
+    assert!(err["error"]
+        .as_str()
+        .unwrap()
+        .contains("ブラウザからは利用できません"));
 
     // ファイル配信のパストラバーサル
     let res = router
@@ -382,9 +401,8 @@ async fn web_blocked_commands_and_traversal_are_rejected() {
         .unwrap();
     assert!(disposition.starts_with("attachment;"));
     assert!(disposition.contains("filename=\"kyozai.pdf\""));
-    assert!(disposition.contains(
-        "filename*=UTF-8''%E6%95%B0%E5%AD%A6%E6%95%99%E6%9D%90_%E8%A7%A3%E7%AD%94.pdf"
-    ));
+    assert!(disposition
+        .contains("filename*=UTF-8''%E6%95%B0%E5%AD%A6%E6%95%99%E6%9D%90_%E8%A7%A3%E7%AD%94.pdf"));
     assert_eq!(
         res.headers().get(header::CACHE_CONTROL).unwrap(),
         "private, no-store"
@@ -517,7 +535,10 @@ async fn upload_rejects_fake_images() {
         .clone()
         .oneshot(
             Request::post("/api/uploads/attachment?problemId=1")
-                .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={}", boundary))
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={}", boundary),
+                )
                 .header("x-requested-with", "kyozai-kobo")
                 .header(header::HOST, "127.0.0.1:8760")
                 .header(header::COOKIE, &cookie)
@@ -528,7 +549,10 @@ async fn upload_rejects_fake_images() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let err = body_json(res).await;
-    assert!(err["error"].as_str().unwrap().contains("PNG"), "形式エラーの説明があること");
+    assert!(
+        err["error"].as_str().unwrap().contains("PNG"),
+        "形式エラーの説明があること"
+    );
 }
 
 #[test]
@@ -628,11 +652,22 @@ fn ai_output_validation() {
 
     let safe_figure = "\\noindent\\includegraphics[width=0.65\\linewidth,height=0.28\\textheight,keepaspectratio]{figure.pdf}\\par";
     assert!(scan_solution_layout(safe_figure, "two_column").is_empty());
-    let unsafe_layout = "\\begin{center}\\includegraphics[width=\\textwidth]{figure.pdf}\\end{center}";
+    let unsafe_layout =
+        "\\begin{center}\\includegraphics[width=\\textwidth]{figure.pdf}\\end{center}";
     let layout_warnings = scan_solution_layout(unsafe_layout, "two_column");
-    assert!(layout_warnings.iter().any(|warning| warning.code == "TWO_COLUMN_LAYOUT"));
-    assert!(layout_warnings.iter().any(|warning| warning.code == "FIGURE_SIZE"));
-    assert!(layout_warnings.iter().all(|warning| warning.severity == "error"));
+    assert!(layout_warnings
+        .iter()
+        .any(|warning| warning.code == "TWO_COLUMN_LAYOUT"));
+    assert!(layout_warnings
+        .iter()
+        .any(|warning| warning.code == "FIGURE_SIZE"));
+    assert!(layout_warnings
+        .iter()
+        .filter(|warning| warning.code != "FIGURE_ALIGNMENT_STYLE")
+        .all(|warning| warning.severity == "error"));
+    assert!(layout_warnings
+        .iter()
+        .any(|warning| warning.code == "FIGURE_ALIGNMENT_STYLE" && warning.severity == "warning"));
     let wide_fixed_figure =
         "\\noindent\\includegraphics[width=12cm,keepaspectratio]{figure.pdf}\\par";
     assert!(scan_solution_layout(wide_fixed_figure, "single_column").is_empty());
@@ -737,10 +772,7 @@ C(x,y)\in R
         }));
     }
     assert!(scan_solution_notation("$0\\leqq x<1$かつ$y\\geqq 2$").is_empty());
-    for quantified in [
-        "$\\exists t\\in\\mathbb{R}$",
-        "$\\forall x\\in\\mathbb{R}$",
-    ] {
+    for quantified in ["$\\exists t\\in\\mathbb{R}$", "$\\forall x\\in\\mathbb{R}$"] {
         let warnings = scan_solution_notation(quantified);
         assert!(warnings.iter().any(|warning| {
             warning.code == "QUANTIFIER_NOTATION_STYLE" && warning.severity == "error"
@@ -749,9 +781,9 @@ C(x,y)\in R
     assert!(scan_solution_notation("条件を満たす実数$t$が存在する。").is_empty());
     for decorated in ["$\\boxed{x=1}$", "\\fbox{$x=1$}", "$x=1$（答）"] {
         let warnings = scan_solution_notation(decorated);
-        assert!(warnings.iter().any(|warning| {
-            warning.code == "ANSWER_DECORATION" && warning.severity == "error"
-        }));
+        assert!(warnings
+            .iter()
+            .any(|warning| { warning.code == "ANSWER_DECORATION" && warning.severity == "error" }));
     }
     for bold_vector in [
         "$\\mathbf{a}$",
@@ -764,10 +796,10 @@ C(x,y)\in R
             warning.code == "VECTOR_NOTATION_STYLE" && warning.severity == "error"
         }));
     }
-    assert!(scan_solution_notation(
-        "$\\vec{a}$、$\\overrightarrow{AB}$、$\\vec{0}$を考える。"
-    )
-    .is_empty());
+    assert!(
+        scan_solution_notation("$\\vec{a}$、$\\overrightarrow{AB}$、$\\vec{0}$を考える。")
+            .is_empty()
+    );
     for point_with_equals in ["$M=(x,y)$とする。", "$A = \\left(1,2\\right)$とする。"] {
         let warnings = scan_solution_notation(point_with_equals);
         assert!(warnings.iter().any(|warning| {
@@ -786,10 +818,10 @@ C(x,y)\in R
             warning.code == "BRACED_SYSTEM_COMMA" && warning.severity == "error"
         }));
     }
-    assert!(scan_solution_notation(
-        r#"\left\{\begin{aligned}x&=1\\y&=2\end{aligned}\right."#
-    )
-    .is_empty());
+    assert!(
+        scan_solution_notation(r#"\left\{\begin{aligned}x&=1\\y&=2\end{aligned}\right."#)
+            .is_empty()
+    );
     for term in ["臨界点", "臨界値", "critical point", "critical value"] {
         let warnings = scan_solution_notation(term);
         assert!(warnings.iter().any(|warning| {
@@ -799,8 +831,7 @@ C(x,y)\in R
     let difference_quotient_term =
         scan_solution_notation(r#"差商$\dfrac{f(a+h)-f(a)}{h}$の極限を考える。"#);
     assert!(difference_quotient_term.iter().any(|warning| {
-        warning.code == "NON_HIGH_SCHOOL_DIFFERENCE_QUOTIENT_TERM"
-            && warning.severity == "error"
+        warning.code == "NON_HIGH_SCHOOL_DIFFERENCE_QUOTIENT_TERM" && warning.severity == "error"
     }));
     for standard_derivative_term in [
         r#"$\dfrac{f(a+h)-f(a)}{h}$は、$x=a$から$x=a+h$までの平均変化率である。"#,
@@ -821,8 +852,7 @@ C(x,y)\in R
     ] {
         let warnings = scan_solution_notation(non_high_school_binomial);
         assert!(warnings.iter().any(|warning| {
-            warning.code == "NON_HIGH_SCHOOL_BINOMIAL_NOTATION"
-                && warning.severity == "error"
+            warning.code == "NON_HIGH_SCHOOL_BINOMIAL_NOTATION" && warning.severity == "error"
         }));
     }
     for high_school_binomial in [
@@ -835,7 +865,8 @@ C(x,y)\in R
             .iter()
             .all(|warning| warning.code != "NON_HIGH_SCHOOL_BINOMIAL_NOTATION"));
     }
-    let derivative_range_without_table = r#"$f'(x)=x-1$であり、$f'(x)>0$と$f'(x)<0$となる区間を調べると、値域が求まる。"#;
+    let derivative_range_without_table =
+        r#"$f'(x)=x-1$であり、$f'(x)>0$と$f'(x)<0$となる区間を調べると、値域が求まる。"#;
     assert!(scan_solution_notation(derivative_range_without_table)
         .iter()
         .any(|warning| warning.code == "MISSING_VARIATION_TABLE"));
@@ -852,8 +883,7 @@ $1\leqq y\leqq2$では$G'(y)=2y-8<0$である。"#;
     let differentiated_quadratic_warnings =
         scan_solution_notation(differentiated_piecewise_quadratic);
     assert!(differentiated_quadratic_warnings.iter().any(|warning| {
-        warning.code == "UNNECESSARY_QUADRATIC_DIFFERENTIATION"
-            && warning.severity == "error"
+        warning.code == "UNNECESSARY_QUADRATIC_DIFFERENTIATION" && warning.severity == "error"
     }));
     assert!(differentiated_quadratic_warnings
         .iter()
@@ -920,9 +950,9 @@ x^3+\alpha x & (x\geqq2)\\
     assert!(omitted_limit_warnings
         .iter()
         .any(|warning| warning.code == "ONE_SIDED_LIMIT_FORMULA_MISSING"));
-    assert!(omitted_limit_warnings.iter().any(|warning| {
-        warning.code == "ONE_SIDED_DERIVATIVE_LIMIT_FORMULA_MISSING"
-    }));
+    assert!(omitted_limit_warnings
+        .iter()
+        .any(|warning| { warning.code == "ONE_SIDED_DERIVATIVE_LIMIT_FORMULA_MISSING" }));
 
     let explicit_limit_answer = r#"連続であるための条件は
 \[
@@ -937,11 +967,10 @@ f(2)=\lim_{x\to2+0}f(x)=8+2\alpha
 \lim_{x\to2+0}f'(x)=12+\alpha
 \]
 であるから、微分可能であるための条件は$4\beta-\alpha=12+\alpha$である。"#;
-    assert!(scan_limit_formula_structure(
-        piecewise_differentiable_problem,
-        explicit_limit_answer
-    )
-    .is_empty());
+    assert!(
+        scan_limit_formula_structure(piecewise_differentiable_problem, explicit_limit_answer)
+            .is_empty()
+    );
     assert!(scan_limit_formula_structure(
         r#"$n\to\infty$のときの数列の極限を求めよ。"#,
         "極限値は$2$である。"
@@ -964,13 +993,12 @@ X(x,z)\in D\Longleftrightarrow
 \end{aligned}
 \right.
 \]"#;
-    assert!(scan_limit_formula_structure(
-        continuous_range_with_system,
-        continuous_range_with_system
-    )
-    .iter()
-    .all(|warning| warning.code != "ONE_SIDED_LIMIT_FORMULA_MISSING"),
-    "連続な関数の値域と連立条件を区分関数の接続条件として誤検出しないこと");
+    assert!(
+        scan_limit_formula_structure(continuous_range_with_system, continuous_range_with_system)
+            .iter()
+            .all(|warning| warning.code != "ONE_SIDED_LIMIT_FORMULA_MISSING"),
+        "連続な関数の値域と連立条件を区分関数の接続条件として誤検出しないこと"
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\lim_{h\\to-0}"));
 }
 
@@ -978,34 +1006,31 @@ X(x,z)\in D\Longleftrightarrow
 fn constrained_two_variable_extremum_prompt_and_structure_regression() {
     use kyozai_kobo_lib::ai::{
         is_constrained_two_variable_extremum_problem,
-        scan_constrained_two_variable_extremum_structure,
-        scan_tikz_monochrome,
+        scan_constrained_two_variable_extremum_structure, scan_tikz_monochrome,
         should_attach_constrained_two_variable_extremum_instructions,
         CONSTRAINED_TWO_VARIABLE_EXTREMUM_INSTRUCTIONS,
     };
 
-    let circle_problem =
-        "$x^2+y^2=1$のとき、$4x+3y$の最大値と最小値を求めよ。";
+    let circle_problem = "$x^2+y^2=1$のとき、$4x+3y$の最大値と最小値を求めよ。";
     let triangle_problem = r#"$x,y$が$x\geqq0$, $y\geqq0$, $x+y\leqq1$を満たすとき、$x^2+y^2$の最大値・最小値を求めよ。"#;
     assert!(is_constrained_two_variable_extremum_problem(circle_problem));
-    assert!(is_constrained_two_variable_extremum_problem(triangle_problem));
+    assert!(is_constrained_two_variable_extremum_problem(
+        triangle_problem
+    ));
     assert!(!is_constrained_two_variable_extremum_problem(
         r#"$0\leqq x\leqq1$のとき、関数$f(x)=x^2-x$の最大値を求めよ。"#
     ));
     assert!(!is_constrained_two_variable_extremum_problem(
         "$x+y=1$を満たす点の軌跡を求めよ。"
     ));
-    assert!(should_attach_constrained_two_variable_extremum_instructions(
-        "text",
-        circle_problem
-    ));
-    assert!(!should_attach_constrained_two_variable_extremum_instructions(
-        "text",
-        "関数$f(x)$の最大値を求めよ。"
-    ));
-    assert!(should_attach_constrained_two_variable_extremum_instructions(
-        "image", ""
-    ));
+    assert!(should_attach_constrained_two_variable_extremum_instructions("text", circle_problem));
+    assert!(
+        !should_attach_constrained_two_variable_extremum_instructions(
+            "text",
+            "関数$f(x)$の最大値を求めよ。"
+        )
+    );
+    assert!(should_attach_constrained_two_variable_extremum_instructions("image", ""));
 
     for required in [
         "F(x,y)=k",
@@ -1127,27 +1152,23 @@ k=1^2-2(-2)=5
         "\\begin{tikzpicture}[x=1.05cm,y=1.05cm,>=stealth,font=\\small]\n  \\clip (-3,-0.4) rectangle (3,2.6);",
         1,
     );
-    assert!(
-        scan_constrained_two_variable_extremum_structure(
-            parabola_problem,
-            &clipped_figure_answer
-        )
-        .iter()
-        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_TIKZ_CLIPPING")
-    );
+    assert!(scan_constrained_two_variable_extremum_structure(
+        parabola_problem,
+        &clipped_figure_answer
+    )
+    .iter()
+    .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_TIKZ_CLIPPING"));
     let excess_level_curves = parabola_answer.replacen(
         "\\end{tikzpicture}",
         "  \\node at (0.4,2.2) {$k=2$};\n\\end{tikzpicture}",
         1,
     );
-    assert!(
-        scan_constrained_two_variable_extremum_structure(
-            parabola_problem,
-            &excess_level_curves
-        )
-        .iter()
-        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_EXCESS_LEVEL_CURVES")
-    );
+    assert!(scan_constrained_two_variable_extremum_structure(
+        parabola_problem,
+        &excess_level_curves
+    )
+    .iter()
+    .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_EXCESS_LEVEL_CURVES"));
     for unnecessary in [
         r#"y^2-2x\geqq-1"#,
         r#"k\leqq5"#,
@@ -1165,38 +1186,31 @@ k=1^2-2(-2)=5
     let unnecessary_range_answer = format!(
         "{parabola_answer}\nさらに、この放物線と領域が共有点をもつ$k$の範囲は$-1\\leqq k\\leqq5$である。"
     );
-    assert!(
-        scan_constrained_two_variable_extremum_structure(
-            parabola_problem,
-            &unnecessary_range_answer
-        )
-        .iter()
-        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_UNNECESSARY_VALUE_RANGE")
-    );
+    assert!(scan_constrained_two_variable_extremum_structure(
+        parabola_problem,
+        &unnecessary_range_answer
+    )
+    .iter()
+    .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_UNNECESSARY_VALUE_RANGE"));
     let value_range_problem = format!(
         "{} また、$y^2-2x$のとり得る値の範囲も求めよ。",
         parabola_problem
     );
-    assert!(
-        scan_constrained_two_variable_extremum_structure(
-            &value_range_problem,
-            &unnecessary_range_answer
-        )
-        .iter()
-        .all(|warning| warning.code != "CONSTRAINED_EXTREMUM_UNNECESSARY_VALUE_RANGE")
-    );
+    assert!(scan_constrained_two_variable_extremum_structure(
+        &value_range_problem,
+        &unnecessary_range_answer
+    )
+    .iter()
+    .all(|warning| warning.code != "CONSTRAINED_EXTREMUM_UNNECESSARY_VALUE_RANGE"));
 
-    let redundant_global_proof = format!(
-        "{parabola_answer}\nさらに、領域全体で$y^2-2x\\geqq-1$かつ$y^2-2x\\leqq5$を示す。"
-    );
-    assert!(
-        scan_constrained_two_variable_extremum_structure(
-            parabola_problem,
-            &redundant_global_proof
-        )
-        .iter()
-        .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_REDUNDANT_GLOBAL_PROOF")
-    );
+    let redundant_global_proof =
+        format!("{parabola_answer}\nさらに、領域全体で$y^2-2x\\geqq-1$かつ$y^2-2x\\leqq5$を示す。");
+    assert!(scan_constrained_two_variable_extremum_structure(
+        parabola_problem,
+        &redundant_global_proof
+    )
+    .iter()
+    .any(|warning| warning.code == "CONSTRAINED_EXTREMUM_REDUNDANT_GLOBAL_PROOF"));
 
     let comparison_needed_answer = r#"
 求める式を$k$と置くと$xy=k$であり、これは双曲線を表す。$k$の変化に伴って双曲線の形と位置が変化する。
@@ -1217,27 +1231,19 @@ $xy=k$と条件領域が共有点をもつ限界の候補が複数残るため�
         "候補をすべて目的式へ代入して比較し、",
         "候補の一部だけを調べ、",
     );
-    assert!(
-        scan_constrained_two_variable_extremum_structure(
-            comparison_problem,
-            &missing_comparison
-        )
-        .iter()
-        .any(|warning| {
-            warning.code == "CONSTRAINED_EXTREMUM_CANDIDATE_COMPARISON_MISSING"
-        })
-    );
+    assert!(scan_constrained_two_variable_extremum_structure(
+        comparison_problem,
+        &missing_comparison
+    )
+    .iter()
+    .any(|warning| { warning.code == "CONSTRAINED_EXTREMUM_CANDIDATE_COMPARISON_MISSING" }));
 
     let few_shot_output = CONSTRAINED_TWO_VARIABLE_EXTREMUM_INSTRUCTIONS
         .split("【few-shot出力例】")
         .nth(1)
         .and_then(|text| text.split("【few-shot出力例ここまで】").next())
         .expect("最大・最小用few-shotの出力例が存在すること");
-    for forbidden in [
-        r#"y^2-2x\geqq-1"#,
-        r#"k\leqq5"#,
-        r#"-1\leqq k\leqq5"#,
-    ] {
+    for forbidden in [r#"y^2-2x\geqq-1"#, r#"k\leqq5"#, r#"-1\leqq k\leqq5"#] {
         assert!(!few_shot_output.contains(forbidden));
     }
 
@@ -1276,8 +1282,8 @@ fn trajectory_region_prompt_and_structure_regression() {
     use kyozai_kobo_lib::ai::{
         is_compound_trajectory_region_problem, is_moving_figure_region_problem,
         is_trajectory_region_problem, prefers_swept_region_membership_structure,
-        requires_strict_point_locus_structure, scan_solution_notation,
-        scan_condition_quote_structure, scan_trajectory_solution_structure,
+        requires_strict_point_locus_structure, scan_condition_quote_structure,
+        scan_solution_notation, scan_trajectory_solution_structure,
         should_attach_trajectory_instructions, trajectory_target_point_name,
     };
 
@@ -1298,10 +1304,18 @@ fn trajectory_region_prompt_and_structure_regression() {
         "円$R$上の動点$Q$の軌跡を求めよ。",
     ];
     for problem in classification_cases {
-        assert!(is_trajectory_region_problem(problem), "分類できない問題: {problem}");
+        assert!(
+            is_trajectory_region_problem(problem),
+            "分類できない問題: {problem}"
+        );
     }
-    assert!(!is_trajectory_region_problem("関数$y=x^2$の最大値を求めよ。"));
-    assert!(should_attach_trajectory_instructions("text", hyperbola_problem));
+    assert!(!is_trajectory_region_problem(
+        "関数$y=x^2$の最大値を求めよ。"
+    ));
+    assert!(should_attach_trajectory_instructions(
+        "text",
+        hyperbola_problem
+    ));
     assert!(!should_attach_trajectory_instructions(
         "text",
         "関数$y=x^2$の最大値を求めよ。"
@@ -1325,14 +1339,12 @@ fn trajectory_region_prompt_and_structure_regression() {
     assert!(!prefers_swept_region_membership_structure(
         "曲線族の包絡線が囲む領域を求めよ。"
     ));
-    let maximum_as_condition =
-        "関数の最大値が1となるとき、動点$P$の軌跡を求めよ。";
+    let maximum_as_condition = "関数の最大値が1となるとき、動点$P$の軌跡を求めよ。";
     assert!(is_trajectory_region_problem(maximum_as_condition));
     assert!(!is_compound_trajectory_region_problem(maximum_as_condition));
     assert!(requires_strict_point_locus_structure(maximum_as_condition));
 
-    let defined_d_point_region =
-        "動点$P$の動く範囲を$D$とする。領域$D$を求めよ。";
+    let defined_d_point_region = "動点$P$の動く範囲を$D$とする。領域$D$を求めよ。";
     let defined_d_answer = r#"求める領域を$D$とし、動点$P$の座標を$P(x,y)$とする。
 \[
 P(x,y)\in D
@@ -1358,10 +1370,14 @@ y&\geqq0
             .map(|warning| (&warning.code, &warning.message))
             .collect::<Vec<_>>()
     );
-    let unnecessarily_renamed = defined_d_answer.replace("$D$", "$R$").replace("\\in D", "\\in R");
-    assert!(scan_trajectory_solution_structure(defined_d_point_region, &unnecessarily_renamed)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_DEFINED_REGION_SYMBOL"));
+    let unnecessarily_renamed = defined_d_answer
+        .replace("$D$", "$R$")
+        .replace("\\in D", "\\in R");
+    assert!(
+        scan_trajectory_solution_structure(defined_d_point_region, &unnecessarily_renamed)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_DEFINED_REGION_SYMBOL")
+    );
 
     for (problem, expected) in [
         ("線分$AB$の中点$M$の軌跡を求めよ。", 'M'),
@@ -1399,9 +1415,11 @@ p^2+q^2=5
             .collect::<Vec<_>>()
     );
     let renamed_coordinates = named_coordinate_answer.replacen("P(p,q)\\in R", "P(x,y)\\in R", 1);
-    assert!(scan_trajectory_solution_structure(named_coordinate_problem, &renamed_coordinates)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_POINT_NAME"));
+    assert!(
+        scan_trajectory_solution_structure(named_coordinate_problem, &renamed_coordinates)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_POINT_NAME")
+    );
 
     let snapshot = include_str!("fixtures/trajectory_hyperbola_midpoint.tex");
     let warnings = scan_trajectory_solution_structure(hyperbola_problem, snapshot);
@@ -1423,9 +1441,7 @@ p^2+q^2=5
             .collect::<Vec<_>>()
     );
     assert!(snapshot.contains("M(x,y)\\in R"));
-    assert!(snapshot.starts_with(
-        "求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。"
-    ));
+    assert!(snapshot.starts_with("求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。"));
     assert!(snapshot.contains("判別式を$D$"));
     assert!(!snapshot.contains("\\Delta"));
     assert!(!snapshot.contains("\\exists"));
@@ -1436,12 +1452,12 @@ p^2+q^2=5
     assert!(!snapshot.contains("|y|&>"));
     assert!(!snapshot.contains("すなわち"));
     assert!(snapshot.contains("\\text{「直線 }y=3x+k\\text{ が双曲線 }"));
-    assert!(snapshot.contains("\\text{その中点が }M(x,y)\\text{ となる実数 }k\\text{ が存在する」}"));
+    assert!(
+        snapshot.contains("\\text{その中点が }M(x,y)\\text{ となる実数 }k\\text{ が存在する」}")
+    );
     assert_eq!(snapshot.matches("「").count(), 3);
     assert_eq!(snapshot.matches("」").count(), 3);
-    assert!(snapshot.contains(
-        "\\text{「}\\;\n\\left\\{\n\\begin{aligned}\nD&>0"
-    ));
+    assert!(snapshot.contains("\\text{「}\\;\n\\left\\{\n\\begin{aligned}\nD&>0"));
     assert!(snapshot.contains("\\text{を満たす実数 }k\\text{ が存在する」}"));
 
     let compound_snapshot = include_str!("fixtures/moving_segment_rotation_volume.tex");
@@ -1458,7 +1474,11 @@ p^2+q^2=5
     let spatial_segment_volume_problem = r#"$xyz$空間で点Pは$x$軸上、点Qは$yz$平面上を動く。
 線分PQが通過してできる立体の体積を求めよ。"#;
     let xz_cross_section_snapshot = compound_snapshot
-        .replacen("$xy$平面上の任意の点を$X(x,y)$とする。", "$xz$平面上の任意の点を$X(x,z)$とする。", 1)
+        .replacen(
+            "$xy$平面上の任意の点を$X(x,y)$とする。",
+            "$xz$平面上の任意の点を$X(x,z)$とする。",
+            1,
+        )
         .replace("X(x,y)\\in D", "X(x,z)\\in D");
     let xz_warnings = scan_trajectory_solution_structure(
         spatial_segment_volume_problem,
@@ -1483,18 +1503,13 @@ p^2+q^2=5
     assert!(!compound_snapshot.contains("領域$D$内の任意の点を"));
     assert!(compound_snapshot.contains("X(x,y)\\in D"));
     assert!(compound_snapshot.contains("0&\\leqq t\\leqq1"));
-    assert!(compound_snapshot.contains(
-        "\\text{「}\\;\n\\left\\{\n\\begin{aligned}\n0&\\leqq\\theta"
-    ));
-    assert!(compound_snapshot.contains(
-        "\\text{を満たす実数 }\\theta,t\\text{ が存在する」}"
-    ));
-    assert!(compound_snapshot.contains(
-        "0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"
-    ));
-    assert!(compound_snapshot.contains(
-        "&\\Longleftrightarrow\n0\\leqq\\theta\\leqq\\alpha"
-    ));
+    assert!(
+        compound_snapshot.contains("\\text{「}\\;\n\\left\\{\n\\begin{aligned}\n0&\\leqq\\theta")
+    );
+    assert!(compound_snapshot.contains("\\text{を満たす実数 }\\theta,t\\text{ が存在する」}"));
+    assert!(compound_snapshot
+        .contains("0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"));
+    assert!(compound_snapshot.contains("&\\Longleftrightarrow\n0\\leqq\\theta\\leqq\\alpha"));
     assert!(compound_snapshot.matches("X(x,y)\\in D").count() >= 3);
     assert_eq!(
         compound_snapshot
@@ -1515,13 +1530,9 @@ p^2+q^2=5
         "0&\\leqq\\theta\\leqq\\alpha\\\\\ny&=f_x(\\theta)\n\\end{aligned}\n\\right.\\\\\n\\text{を満たす実数 }\\theta\\text{ が存在する」}"
     ));
     assert!(compound_snapshot.contains("$0<x<8$を固定し"));
-    assert!(compound_snapshot.contains(
-        "$0\\leqq\\theta\\leqq\\alpha<\\dfrac{\\pi}{2}$では"
-    ));
+    assert!(compound_snapshot.contains("$0\\leqq\\theta\\leqq\\alpha<\\dfrac{\\pi}{2}$では"));
     assert!(compound_snapshot.contains("\\cos^3\\beta=\\frac{x}{8}"));
-    assert!(compound_snapshot.contains(
-        "\\frac{x}{8}<\\left(\\frac{x}{8}\\right)^{1/3}<1"
-    ));
+    assert!(compound_snapshot.contains("\\frac{x}{8}<\\left(\\frac{x}{8}\\right)^{1/3}<1"));
     assert!(compound_snapshot.contains("0<\\beta<\\alpha"));
     assert!(compound_snapshot.contains("f_x'(\\theta)&>0"));
     assert!(compound_snapshot.contains("f_x'(\\beta)&=0"));
@@ -1530,9 +1541,9 @@ p^2+q^2=5
     assert!(compound_snapshot.contains("f_x'(\\theta)&&+&0&-&"));
     assert!(compound_snapshot.contains("&\\nearrow&"));
     assert!(compound_snapshot.contains("&\\searrow&0"));
-    assert!(compound_snapshot.contains(
-        "$f_x(\\theta)$は$\\theta=\\beta$のとき最大となり、最大値は"
-    ));
+    assert!(
+        compound_snapshot.contains("$f_x(\\theta)$は$\\theta=\\beta$のとき最大となり、最大値は")
+    );
     assert!(compound_snapshot.contains("$f_x$の値域は"));
     let solved_t_position = compound_snapshot
         .find("t&=\\dfrac{x}{8\\cos\\theta}")
@@ -1583,34 +1594,38 @@ p^2+q^2=5
     let renamed_region = compound_snapshot
         .replace("領域$D$", "領域$R$")
         .replace("\\in D", "\\in R");
-    assert!(scan_trajectory_solution_structure(moving_segment_volume_problem, &renamed_region)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_DEFINED_REGION_SYMBOL"));
+    assert!(
+        scan_trajectory_solution_structure(moving_segment_volume_problem, &renamed_region)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_DEFINED_REGION_SYMBOL")
+    );
 
     let stopped_after_region = compound_snapshot
         .split("この領域$D$を$x$軸のまわりに回転した立体の体積$V$は")
         .next()
         .unwrap_or_default();
-    assert!(scan_trajectory_solution_structure(moving_segment_volume_problem, stopped_after_region)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_COMPOUND_INCOMPLETE"));
-    assert!(!scan_trajectory_solution_structure(
+    assert!(scan_trajectory_solution_structure(
         moving_segment_volume_problem,
-        compound_snapshot
+        stopped_after_region
     )
     .iter()
-    .any(|warning| matches!(
-        warning.code.as_str(),
-        "TRAJECTORY_MISSING_EQUIVALENCE"
-            | "TRAJECTORY_POINT_NAME"
-            | "TRAJECTORY_SET_SYMBOL"
-            | "TRAJECTORY_SWEPT_MEMBERSHIP"
-            | "TRAJECTORY_SWEPT_POINT_SETUP"
-            | "TRAJECTORY_SWEPT_ASSUMED_MEMBERSHIP"
-            | "TRAJECTORY_SWEPT_PARAMETER_CONDITION"
-            | "TRAJECTORY_SWEPT_QUOTED_CONDITION"
-            | "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"
-    )));
+    .any(|warning| warning.code == "TRAJECTORY_COMPOUND_INCOMPLETE"));
+    assert!(
+        !scan_trajectory_solution_structure(moving_segment_volume_problem, compound_snapshot)
+            .iter()
+            .any(|warning| matches!(
+                warning.code.as_str(),
+                "TRAJECTORY_MISSING_EQUIVALENCE"
+                    | "TRAJECTORY_POINT_NAME"
+                    | "TRAJECTORY_SET_SYMBOL"
+                    | "TRAJECTORY_SWEPT_MEMBERSHIP"
+                    | "TRAJECTORY_SWEPT_POINT_SETUP"
+                    | "TRAJECTORY_SWEPT_ASSUMED_MEMBERSHIP"
+                    | "TRAJECTORY_SWEPT_PARAMETER_CONDITION"
+                    | "TRAJECTORY_SWEPT_QUOTED_CONDITION"
+                    | "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"
+            ))
+    );
 
     let missing_solved_parameter_system = compound_snapshot.replacen(
         "t&=\\dfrac{x}{8\\cos\\theta}\\\\",
@@ -1636,11 +1651,8 @@ p^2+q^2=5
     .iter()
     .any(|warning| warning.code == "TRAJECTORY_PARAMETER_ELIMINATION_FLOW"));
 
-    let detached_parameter_elimination = compound_snapshot.replacen(
-        "X(x,y)\\in D",
-        "X_0(x,y)\\in D",
-        2,
-    );
+    let detached_parameter_elimination =
+        compound_snapshot.replacen("X(x,y)\\in D", "X_0(x,y)\\in D", 2);
     assert!(scan_trajectory_solution_structure(
         moving_segment_volume_problem,
         &detached_parameter_elimination
@@ -1660,11 +1672,8 @@ p^2+q^2=5
     .iter()
     .any(|warning| warning.code == "TRAJECTORY_SWEPT_MEMBERSHIP"));
 
-    let missing_interpolation_range = compound_snapshot.replacen(
-        "0&\\leqq t\\leqq1\\\\",
-        "t&\\in\\mathbb{R}\\\\",
-        1,
-    );
+    let missing_interpolation_range =
+        compound_snapshot.replacen("0&\\leqq t\\leqq1\\\\", "t&\\in\\mathbb{R}\\\\", 1);
     assert!(scan_trajectory_solution_structure(
         moving_segment_volume_problem,
         &missing_interpolation_range
@@ -1673,20 +1682,16 @@ p^2+q^2=5
     .any(|warning| warning.code == "TRAJECTORY_SWEPT_PARAMETER_CONDITION"));
 
     let unquoted_existence = compound_snapshot
-        .replace(
-            "\\text{「}\\;\n\\left\\{",
-            "\\left\\{",
-        )
+        .replace("\\text{「}\\;\n\\left\\{", "\\left\\{")
         .replace(
             "\\text{を満たす実数 }\\theta,t\\text{ が存在する」}",
             "\\text{を満たす実数 }\\theta,t\\text{ が存在する}",
         );
-    assert!(scan_trajectory_solution_structure(
-        moving_segment_volume_problem,
-        &unquoted_existence
-    )
-    .iter()
-    .any(|warning| warning.code == "TRAJECTORY_SWEPT_QUOTED_CONDITION"));
+    assert!(
+        scan_trajectory_solution_structure(moving_segment_volume_problem, &unquoted_existence)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_SWEPT_QUOTED_CONDITION")
+    );
 
     let membership_assumed_at_opening = compound_snapshot.replacen(
         "$xy$平面上の任意の点を$X(x,y)$とする。",
@@ -1817,31 +1822,44 @@ y&=-\frac{k}{8}
     }
 
     let wrong_point = snapshot.replacen("M(x,y)\\in R", "P(x,y)\\in R", 1);
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, &wrong_point)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_POINT_NAME"));
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, &wrong_point)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_POINT_NAME")
+    );
 
     let missing_coordinate_setup = snapshot.replacen(
         "求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする。",
         "求める軌跡を$R$とする。",
         1,
     );
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, &missing_coordinate_setup)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_MISSING_COORDINATE_SETUP"));
-    assert!(scan_trajectory_solution_structure("", &missing_coordinate_setup)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_MISSING_COORDINATE_SETUP"));
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, &missing_coordinate_setup)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_MISSING_COORDINATE_SETUP")
+    );
+    assert!(
+        scan_trajectory_solution_structure("", &missing_coordinate_setup)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_MISSING_COORDINATE_SETUP")
+    );
 
     let delta = snapshot.replacen("D=(6k)^2", "\\Delta=(6k)^2", 1);
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, &delta)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_DISCRIMINANT_SYMBOL"));
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, &delta)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_DISCRIMINANT_SYMBOL")
+    );
 
-    let posthoc = format!("{}\n以上を一続きの同値変形でまとめると、次のようになる。", snapshot);
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, &posthoc)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_POSTHOC_EQUIVALENCE"));
+    let posthoc = format!(
+        "{}\n以上を一続きの同値変形でまとめると、次のようになる。",
+        snapshot
+    );
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, &posthoc)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_POSTHOC_EQUIVALENCE")
+    );
 
     for unnecessary_preface in [
         "以上の準備のもとで、軌跡の条件を同値変形すると",
@@ -1849,18 +1867,25 @@ y&=-\frac{k}{8}
     ] {
         let with_preface = snapshot.replacen(
             "\\[\n\\begin{aligned}\nM(x,y)\\in R",
-            &format!("{}\n\\[\n\\begin{{aligned}}\nM(x,y)\\in R", unnecessary_preface),
+            &format!(
+                "{}\n\\[\n\\begin{{aligned}}\nM(x,y)\\in R",
+                unnecessary_preface
+            ),
             1,
         );
-        assert!(scan_trajectory_solution_structure(hyperbola_problem, &with_preface)
-            .iter()
-            .any(|warning| warning.code == "TRAJECTORY_POSTHOC_EQUIVALENCE"));
+        assert!(
+            scan_trajectory_solution_structure(hyperbola_problem, &with_preface)
+                .iter()
+                .any(|warning| warning.code == "TRAJECTORY_POSTHOC_EQUIVALENCE")
+        );
     }
 
     let split_proof = format!("{}\n逆に、この条件から十分性を確認する。", snapshot);
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, &split_proof)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_SPLIT_NECESSITY_SUFFICIENCY"));
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, &split_proof)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_SPLIT_NECESSITY_SUFFICIENCY")
+    );
 
     let bad_existence_layout = r#"
 求める軌跡を$R$とする。
@@ -1873,14 +1898,18 @@ M(x,y)\in R
 \end{aligned}
 \]
 "#;
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, bad_existence_layout)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_EXISTENCE_LAYOUT"));
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, bad_existence_layout)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_EXISTENCE_LAYOUT")
+    );
 
     let redundant_conclusion = format!("{}\nすなわち、これは2本の半直線である。", snapshot);
-    assert!(scan_trajectory_solution_structure(hyperbola_problem, &redundant_conclusion)
-        .iter()
-        .any(|warning| warning.code == "TRAJECTORY_REDUNDANT_CONCLUSION"));
+    assert!(
+        scan_trajectory_solution_structure(hyperbola_problem, &redundant_conclusion)
+            .iter()
+            .any(|warning| warning.code == "TRAJECTORY_REDUNDANT_CONCLUSION")
+    );
 
     let structural_cases = [
         ("媒介変数$t$で表された動点$P$の軌跡を求めよ。", 'P', "R"),
@@ -2026,17 +2055,13 @@ $0\leqq x\leqq2$での値を調べる。
 fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     use kyozai_kobo_lib::ai::{
         output_schema, source_revision_prompt, validate_output, BEGINNER_SOLUTION_INSTRUCTIONS,
-        BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS, FIXED_INSTRUCTIONS,
-        CONTENT_REVIEW_FIXED_INSTRUCTIONS,
-        DUAL_PROBLEM_LAYOUT_INSTRUCTIONS,
-        PROJECT_REVIEW_FIXED_INSTRUCTIONS,
-        SOLUTION_FIXED_INSTRUCTIONS, SOURCE_REVISION_FIXED_INSTRUCTIONS,
-        TIKZ_GENERATION_INSTRUCTIONS,
-        TOPIC_METHOD_GUIDE_INSTRUCTIONS,
+        BEGINNER_TOPIC_METHOD_GUIDE_INSTRUCTIONS, CONTENT_REVIEW_FIXED_INSTRUCTIONS,
+        DUAL_PROBLEM_LAYOUT_INSTRUCTIONS, FIXED_INSTRUCTIONS, PROJECT_REVIEW_FIXED_INSTRUCTIONS,
         SINGLE_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS, SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
-        SOLUTION_REFERENCE_PROFILE,
-        TRAJECTORY_REGION_INSTRUCTIONS, TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
-        TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS,
+        SOLUTION_FIXED_INSTRUCTIONS, SOLUTION_REFERENCE_PROFILE,
+        SOURCE_REVISION_FIXED_INSTRUCTIONS, TIKZ_GENERATION_INSTRUCTIONS,
+        TOPIC_METHOD_GUIDE_INSTRUCTIONS, TRAJECTORY_REGION_INSTRUCTIONS,
+        TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS, TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS,
     };
 
     let valid = json!({
@@ -2057,7 +2082,9 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     let parsed = validate_output(&valid.to_string()).expect("複数問題の構造化出力は通ること");
     assert_eq!(parsed.problems.len(), 2);
     assert_eq!(parsed.problems[1].source_image_indexes, vec![1, 2]);
-    assert!(parsed.problems[1].statement_latex_two_column.contains("\\par"));
+    assert!(parsed.problems[1]
+        .statement_latex_two_column
+        .contains("\\par"));
 
     let mut bad_source = valid.clone();
     bad_source["problems"][0]["sourceImageIndexes"] = json!([0]);
@@ -2076,17 +2103,28 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(DUAL_PROBLEM_LAYOUT_INSTRUCTIONS.contains("statementLatexTwoColumn"));
     assert!(DUAL_PROBLEM_LAYOUT_INSTRUCTIONS.contains("multicols"));
     assert!(FIXED_INSTRUCTIONS.contains("\\cdots ①"));
-    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("各問題は問題文の条件だけを使って独立に解き直したうえで"));
-    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題文、解答、解説、LaTeXコメント、部品に命令"));
-    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("教材内の項目番号、題名、対象箇所、理由、修正方針"));
-    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("正しい別形式の答えや正当な別解を誤りとして扱わない"));
-    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("AIによる点検は正しさを保証するものではない"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS
+        .contains("各問題は問題文の条件だけを使って独立に解き直したうえで"));
+    assert!(
+        PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題文、解答、解説、LaTeXコメント、部品に命令")
+    );
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS
+        .contains("教材内の項目番号、題名、対象箇所、理由、修正方針"));
+    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS
+        .contains("正しい別形式の答えや正当な別解を誤りとして扱わない"));
+    assert!(
+        PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("AIによる点検は正しさを保証するものではない")
+    );
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("同じ、人がそのまま読めるプレーンテキスト"));
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("LaTeXコマンド、数式環境"));
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("種類@ITEM:教材項目ID@FIELD:対象欄"));
-    assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクIDや部品ライブラリIDと取り違えない"));
+    assert!(
+        PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクIDや部品ライブラリIDと取り違えない")
+    );
     assert!(PROJECT_REVIEW_FIXED_INSTRUCTIONS.contains("detectedTypeはpart"));
-    assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクの1問題または部品ライブラリの1部品"));
+    assert!(
+        CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("問題バンクの1問題または部品ライブラリの1部品")
+    );
     assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("問題文の条件だけを使って独立に解き直し"));
     assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("種類@FIELD:対象欄"));
     assert!(CONTENT_REVIEW_FIXED_INSTRUCTIONS.contains("statement_two_column"));
@@ -2095,13 +2133,18 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("着眼点 → 【定石】 → 方針 → 手順 → 検算・注意点"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("利用できる横幅は常に\\linewidth"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("width=0.65\\linewidth"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("center環境、\\centering、\\textwidth指定は使わない"));
+    assert!(
+        SOLUTION_FIXED_INSTRUCTIONS.contains("center環境、\\centering、\\textwidth指定は使わない")
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("TikZとintersections、patterns、treesライブラリ"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("編集可能なtikzpicture環境"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("問題文にない位置関係、長さ、角度、交点、補助線を勝手に追加せず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("問題文にない位置関係、長さ、角度、交点、補助線を勝手に追加せず"));
     assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("\\begin{tikzpicture}から\\end{tikzpicture}"));
     assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("intersections、patterns、trees"));
-    assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("\\documentclass、\\usepackage、\\usetikzlibrary"));
+    assert!(
+        TIKZ_GENERATION_INSTRUCTIONS.contains("\\documentclass、\\usepackage、\\usetikzlibrary")
+    );
     assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("\\clipは使用せず"));
     assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("node同士やnodeと曲線・頂点が重ならない"));
     assert!(TIKZ_GENERATION_INSTRUCTIONS.contains("黒・白・グレーだけのモノクロ"));
@@ -2112,24 +2155,32 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("図中では点名だけにする"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("主解法を含めて最大3つ"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("【参照する解答】"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("解答にない別解へ勝手に切り替えたり追加したりしない"));
+    assert!(
+        SOLUTION_FIXED_INSTRUCTIONS.contains("解答にない別解へ勝手に切り替えたり追加したりしない")
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("参照する解答を、解説全体の唯一の論証の骨格"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("参照する解答と別の構成で問題を最初から解き直したり"));
+    assert!(
+        SOLUTION_FIXED_INSTRUCTIONS.contains("参照する解答と別の構成で問題を最初から解き直したり")
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("逆向きの確認・端点確認・除外点の列挙"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("同値変形を論証の中心に置き"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("端点を含まないことや判別式が0になる場合を結論後に重複"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("端点を含まないことや判別式が0になる場合を結論後に重複"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("高校数学で標準的か判断が分かれる記号"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$a\\mid b$ は「$b$が$a$で割り切れる」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("日本の高校の教科書・授業で一般的なもの"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("方程式を満たす値は必ず「解」と呼び、「根」と呼ばない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("方程式を満たす値は必ず「解」と呼び、「根」と呼ばない"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("「異なる2実根」ではなく「異なる2つの実数解」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("「平方根」「立方根」「$n$乗根」「根号」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解答の方針」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ユーザーから「解説内容の指示」"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("解説する箇所、説明の詳しさ、観点、強調点、つまずきやすい点"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("解説する箇所、説明の詳しさ、観点、強調点、つまずきやすい点"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("未指定部分でも論理を追うために必要な説明"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("論理を飛躍させない"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("複雑な因数分解、置換後の式、場合分けの条件などを突然提示せず"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("複雑な因数分解、置換後の式、場合分けの条件などを突然提示せず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("その操作が正当である理由"));
     assert!(!SOLUTION_FIXED_INSTRUCTIONS.contains("【軌跡・領域問題専用の解答規則】"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【軌跡・領域問題専用の解答規則】"));
@@ -2138,143 +2189,99 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
         "2と3でも、$xy$平面上の任意の点の領域への所属条件をパラメータの存在条件として自然に表せる場合"
     ));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("問題文で中点が$M$なら$M(x,y)$"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "後で使用する求める点の座標は、必要最小限の準備計算より前に必ず設定"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("形式統一のために$P$など別の点名へ変更してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("求める軌跡を$R$とし、中点$M$の座標を$M(x,y)$とする"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("後で使用する求める点の座標は、必要最小限の準備計算より前に必ず設定"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("形式統一のために$P$など別の点名へ変更してはいけません"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("判別式には必ず$D$"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("判別式に$\\Delta$を使用してはいけません"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "判別式を使用しないなら、領域を最後まで$D$と表してください"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "実際に存在しない衝突を避けるための改名は禁止"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("準備計算の段階で、求める軌跡・領域の最終的な$x,y$の条件まで導いてはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("判別式を使用しないなら、領域を最後まで$D$と表してください"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("実際に存在しない衝突を避けるための改名は禁止"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("準備計算の段階で、求める軌跡・領域の最終的な$x,y$の条件まで導いてはいけません"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("M(x,y)\\in R"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("同値変形は解答末尾の要約ではなく、解答本体そのもの"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "以上の準備のもとで、軌跡の条件を同値変形すると"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "最終的な範囲が1文字だけの不等式となり、$x$でも$y$でも同程度に簡潔に書ける場合"
-    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("同値変形は解答末尾の要約ではなく、解答本体そのもの"));
+    assert!(
+        TRAJECTORY_REGION_INSTRUCTIONS.contains("以上の準備のもとで、軌跡の条件を同値変形すると")
+    );
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("最終的な範囲が1文字だけの不等式となり、$x$でも$y$でも同程度に簡潔に書ける場合"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$|x|>\\dfrac32$"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("以上を一続きの同値変形でまとめると"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$\\exists$、$\\forall$などの量化記号を使用してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("$\\exists$、$\\forall$などの量化記号を使用してはいけません"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("\\left\\{"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("存在文は連立条件の下の行へ置き"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("各条件の行末にもコンマを付けない"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("異なる2つの実数解をもつ$\\Longleftrightarrow D>0$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("異なる2つの実数解をもつ$\\Longleftrightarrow D>0$"));
     assert!(!TRAJECTORY_REGION_INSTRUCTIONS.contains("異なる2実根"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("結論後に「すなわち」"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【動く線分・図形が通過する領域】"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
         "領域への所属をパラメータの存在条件として記述するために$xy$平面上の任意の点を置くことは、必要な記号の導入"
     ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "特に動く線分では、補間パラメータによって線分上の条件を正確に保持できる"
-    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("特に動く線分では、補間パラメータによって線分上の条件を正確に保持できる"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("0&\\leqq t\\leqq1"));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "\\text{「}\\;\n\\left\\{"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "\\text{を満たす実数 }s,t\\text{ が存在する」}"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "【条件全体を1組の鉤括弧で囲む】"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "日本語と数式、点名、図形名、変数、不等式などが組み合わさって論理的に1つの条件"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "\\text{「}y=f(\\theta)\\text{ となる実数 }\\theta\\text{ が存在する」}"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "開き鉤括弧を左波括弧の直前に置き、連立式と存在文の全体を1組で囲んでください"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "冒頭で「$xy$平面上の任意の点を$X(x,y)$とする。"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "「領域$D$内の任意の点を$X(x,y)$とする」"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "【複数パラメータを1文字ずつ消去する】"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "どの文字がどの段階で消去されたかが見える同値変形へ戻してください"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "t&=T_x(s)"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "\\text{を満たす実数 }s\\text{ が存在する」}"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "増減表の前には第3段階の$s$だけの存在条件へ到達"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "増減表の後は同じ条件を値域へ変形するために1回だけ再掲"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "この範囲は十分でもある"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "線分上の条件から得られる正しい定義域"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$0\\leqq\\theta\\leqq\\cos^{-1}\\dfrac{x}{8}$"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$\\cos^{-1}$そのものを微分してはいけません"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$x=0$と$0<x\\leqq8$を分ける"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "【値域によるパラメータ消去のfew-shot】"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "t&=\\dfrac{x}{8\\cos\\theta}"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "y&=\\left(1-\\dfrac{x}{8\\cos\\theta}\\right)\\sin\\theta"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "\\text{を満たす実数 }\\theta\\text{ が存在する」}"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "この計算だけで所属条件を離れず、次の連続した同値変形へ必ず反映"
-    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("\\text{「}\\;\n\\left\\{"));
+    assert!(
+        TRAJECTORY_REGION_INSTRUCTIONS.contains("\\text{を満たす実数 }s,t\\text{ が存在する」}")
+    );
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【条件全体を1組の鉤括弧で囲む】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("日本語と数式、点名、図形名、変数、不等式などが組み合わさって論理的に1つの条件"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("\\text{「}y=f(\\theta)\\text{ となる実数 }\\theta\\text{ が存在する」}"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("開き鉤括弧を左波括弧の直前に置き、連立式と存在文の全体を1組で囲んでください"));
+    assert!(
+        TRAJECTORY_REGION_INSTRUCTIONS.contains("冒頭で「$xy$平面上の任意の点を$X(x,y)$とする。")
+    );
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("「領域$D$内の任意の点を$X(x,y)$とする」"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【複数パラメータを1文字ずつ消去する】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("どの文字がどの段階で消去されたかが見える同値変形へ戻してください"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("t&=T_x(s)"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("\\text{を満たす実数 }s\\text{ が存在する」}"));
+    assert!(
+        TRAJECTORY_REGION_INSTRUCTIONS.contains("増減表の前には第3段階の$s$だけの存在条件へ到達")
+    );
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("増減表の後は同じ条件を値域へ変形するために1回だけ再掲"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("この範囲は十分でもある"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("線分上の条件から得られる正しい定義域"));
+    assert!(
+        TRAJECTORY_REGION_INSTRUCTIONS.contains("$0\\leqq\\theta\\leqq\\cos^{-1}\\dfrac{x}{8}$")
+    );
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$\\cos^{-1}$そのものを微分してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$x=0$と$0<x\\leqq8$を分ける"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【値域によるパラメータ消去のfew-shot】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("t&=\\dfrac{x}{8\\cos\\theta}"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("y&=\\left(1-\\dfrac{x}{8\\cos\\theta}\\right)\\sin\\theta"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("\\text{を満たす実数 }\\theta\\text{ が存在する」}"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("この計算だけで所属条件を離れず、次の連続した同値変形へ必ず反映"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
         "増減表前に到達した$\\theta$だけの存在条件を、$\\theta$を消去するための起点として1回だけ再掲"
     ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$\\cos^3\\beta=\\dfrac{x}{8}$"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$0<\\beta<\\alpha$を確認"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "\\begin{array}{c|ccccc}"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "f_x'(\\theta)&&+&0&-&"
-    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$\\cos^3\\beta=\\dfrac{x}{8}$"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$0<\\beta<\\alpha$を確認"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("\\begin{array}{c|ccccc}"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("f_x'(\\theta)&&+&0&-&"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
         "定義域、導関数、導関数が0になる点の定義と区間内確認、各区間での符号、関数値、増減表、最大値と値域の順"
     ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$f_x(\\theta)$は$\\theta=\\beta$のとき最大となり、その最大値は"
-    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS
+        .contains("$f_x(\\theta)$は$\\theta=\\beta$のとき最大となり、その最大値は"));
     let range_few_shot = TRAJECTORY_REGION_INSTRUCTIONS
         .split("【値域によるパラメータ消去のfew-shot】")
         .nth(1)
@@ -2283,47 +2290,50 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     for forbidden in ["臨界点", "臨界値", "critical point", "critical value"] {
         assert!(!range_few_shot.contains(forbidden));
     }
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "V=\\pi\\int_0^8"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "【領域決定後に最終計算がある複合問題】"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "領域を求めた時点で解答を終了してはいけません"
-    ));
-    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains(
-        "$V=\\pi\\int f(x)^2\\,dx$"
-    ));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("V=\\pi\\int_0^8"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("【領域決定後に最終計算がある複合問題】"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("領域を求めた時点で解答を終了してはいけません"));
+    assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("$V=\\pi\\int f(x)^2\\,dx$"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("自力で同じ流れを再現できる粒度"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("計算量や場合分けを減らせる場合は、その方法を積極的に選んで"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("計算量や場合分けを減らせる場合は、その方法を積極的に選んで"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("通常の計算より何を省けるか"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("同型問題にも応用できる判断の仕方"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("特殊で分かりにくい技巧を使わず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("「差商」という用語は使用しない"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$x=a$から$x=a+h$までの平均変化率"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("有限の$h$に対する平均変化率と、その極限である微分係数を区別"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("二項係数は、日本の高校数学で一般的な${}_n\\mathrm{C}_r$"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$\\binom{n}{r}$、$\\dbinom{n}{r}$、$\\tbinom{n}{r}$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("有限の$h$に対する平均変化率と、その極限である微分係数を区別"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("二項係数は、日本の高校数学で一般的な${}_n\\mathrm{C}_r$"));
+    assert!(
+        SOLUTION_FIXED_INSTRUCTIONS.contains("$\\binom{n}{r}$、$\\dbinom{n}{r}$、$\\tbinom{n}{r}$")
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("${}_5\\mathrm{C}_2$"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("{}_n\\mathrm{C}_r="));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\frac{n!}{r!(n-r)!}"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\arcsin、\\arccos、\\arctan等のarcを付けた関数名は高校範囲外"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("\\arcsin、\\arccos、\\arctan等のarcを付けた関数名は高校範囲外"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず$x=\\sin y$と書き直してから"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$1=\\cos y\\dfrac{dy}{dx}$"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$x=\\cos y$、$x=\\tan y$へ戻し"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず$\\leqq$と$\\geqq$を使用"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("元の式がすでに短く十分に扱いやすい場合"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("わずかに短くするだけのために新しい文字へ置き換えず"));
+    assert!(
+        SOLUTION_FIXED_INSTRUCTIONS.contains("わずかに短くするだけのために新しい文字へ置き換えず")
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("置換によって何が簡単になったか"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("試験で提出する答案を基準"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("採点官が前後の式のつながりと用いた根拠を確認できる"));
+    assert!(
+        SOLUTION_FIXED_INSTRUCTIONS.contains("採点官が前後の式のつながりと用いた根拠を確認できる")
+    );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("暗算で一段階に確認できる自明な四則計算"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\boxed、\\fbox、\\framebox等で囲んだり"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず独立した見出し「【定石】」"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("数式の末尾や数式を閉じた直後にASCIIのピリオド"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("ベクトルは太字ではなく、必ず矢印付き"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$\\vec{a}$、2点を結ぶ有向線分は$\\overrightarrow{AB}$"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("$\\vec{a}$、2点を結ぶ有向線分は$\\overrightarrow{AB}$"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\mathbf、\\boldsymbol、\\bm、\\pmb等"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("点名と座標の組を等号で結ばない"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("$AB$の中点を$M(x,y)$とする"));
@@ -2332,29 +2342,26 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("下の式$\\leqq$対象の式$\\leqq$上の式"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("別々の不等式へ分けず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("関数を微分して増減、極値、最大・最小"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
-        "1変数の二次関数の最大・最小、値域、増減を調べるために微分してはいけません"
-    ));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
-        "平方完成して軸と頂点を求め、軸が定義域に含まれるかを確認"
-    ));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
-        "区分的な二次関数でも、各式を平方完成し、軸と各区間の位置関係"
-    ));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("導関数の符号変化と結論の対応が見やすくなるときに増減表"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
-        "1変数関数の値域または最大・最小を導関数の正負と符号変化から求める場合"
-    ));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
-        "文章で「増加し、その後減少する」と述べるだけで終えず"
-    ));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("1変数の二次関数の最大・最小、値域、増減を調べるために微分してはいけません"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("平方完成して軸と頂点を求め、軸が定義域に含まれるかを確認"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("区分的な二次関数でも、各式を平方完成し、軸と各区間の位置関係"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("導関数の符号変化と結論の対応が見やすくなるときに増減表"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("1変数関数の値域または最大・最小を導関数の正負と符号変化から求める場合"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("文章で「増加し、その後減少する」と述べるだけで終えず"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains(
         "「臨界点」「臨界値」「critical point」「critical value」は高校数学の答案・解説では使用しない"
     ));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("先に導関数を求め"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("表は論証の代わりではなく"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("二段組では列数と記述を絞って\\linewidth内"));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("増減表を加えても理解が改善しない場合は無理に入れない"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS
+        .contains("増減表を加えても理解が改善しない場合は無理に入れない"));
     assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("二段組の片方の列"));
     assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("各行が単独で列幅に収まる"));
     assert!(TWO_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("所属式を1行目へ単独"));
@@ -2362,8 +2369,10 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("\\linewidthの横幅を活かし"));
     assert!(SINGLE_COLUMN_SOLUTION_LAYOUT_INSTRUCTIONS.contains("超えそうな場合"));
     assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("問題文は二段組の片方の狭い列"));
-    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("問題の条件、数値、記号、点名、小問、選択肢"));
-    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("multicols、twocolumn、columns環境を追加してはいけません"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS
+        .contains("問題の条件、数値、記号、点名、小問、選択肢"));
+    assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS
+        .contains("multicols、twocolumn、columns環境を追加してはいけません"));
     assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("各行を単独で\\linewidth内"));
     assert!(TWO_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("原稿画像の改行が印刷上の都合"));
     assert!(SINGLE_COLUMN_PROBLEM_LAYOUT_INSTRUCTIONS.contains("一段組の広い本文"));
@@ -2420,13 +2429,10 @@ fn content_review_requires_a_saved_problem_or_part_target() {
     use kyozai_kobo_lib::ai::{create_job, CreateJobPayload};
 
     let (_dir, state) = make_state();
-    let part_id = kyozai_kobo_lib::commands::parts::create_part(
-        &state,
-        "確認対象の部品".into(),
-    )
-    .unwrap();
-    let payload = |source_type: &str, entity_type: &str, entity_id: i64, version: i64| {
-        CreateJobPayload {
+    let part_id =
+        kyozai_kobo_lib::commands::parts::create_part(&state, "確認対象の部品".into()).unwrap();
+    let payload =
+        |source_type: &str, entity_type: &str, entity_id: i64, version: i64| CreateJobPayload {
             source_type: source_type.into(),
             conversion_mode: Some("content_review".into()),
             options: Some(json!({
@@ -2439,8 +2445,7 @@ fn content_review_requires_a_saved_problem_or_part_target() {
             target_entity_type: Some(entity_type.into()),
             target_entity_id: Some(entity_id),
             target_field: Some("review".into()),
-        }
-    };
+        };
 
     let image_error = create_job(&state, payload("image", "part", part_id, 1))
         .expect_err("AIチェックは画像入力を受け付けないこと");
@@ -2457,9 +2462,7 @@ fn content_review_requires_a_saved_problem_or_part_target() {
 
 #[test]
 fn content_review_warning_codes_are_mapped_to_editable_fields() {
-    use kyozai_kobo_lib::ai::{
-        normalize_content_review_warning_codes, AiWarning,
-    };
+    use kyozai_kobo_lib::ai::{normalize_content_review_warning_codes, AiWarning};
 
     let mut problem_warnings = vec![
         AiWarning {
@@ -2490,8 +2493,7 @@ fn content_review_warning_codes_are_mapped_to_editable_fields() {
 fn subject_specific_solution_instructions_preserve_mathematics_and_separate_other_subjects() {
     use kyozai_kobo_lib::ai::{
         scan_subject_explanation_structure, scan_subject_topic_guide_structure,
-        solution_subject_fixed_instructions, SOLUTION_FIXED_INSTRUCTIONS,
-        SOLUTION_SUBJECT_VALUES,
+        solution_subject_fixed_instructions, SOLUTION_FIXED_INSTRUCTIONS, SOLUTION_SUBJECT_VALUES,
     };
 
     assert_eq!(
@@ -2522,20 +2524,20 @@ fn subject_specific_solution_instructions_preserve_mathematics_and_separate_othe
         .iter()
         .any(|warning| warning.code == "MISSING_SUBJECT_KEY_POINTS"));
 
-    let subject_guide =
-        "【概要】a【基本事項】b【要点】c【手順】d【典型例】e【よくある誤り】f";
+    let subject_guide = "【概要】a【基本事項】b【要点】c【手順】d【典型例】e【よくある誤り】f";
     assert!(scan_subject_topic_guide_structure(subject_guide).is_empty());
-    assert!(scan_subject_topic_guide_structure(&subject_guide.replace("【要点】", ""))
-        .iter()
-        .any(|warning| warning.code == "SUBJECT_TOPIC_GUIDE_MISSING_SECTIONS"));
+    assert!(
+        scan_subject_topic_guide_structure(&subject_guide.replace("【要点】", ""))
+            .iter()
+            .any(|warning| warning.code == "SUBJECT_TOPIC_GUIDE_MISSING_SECTIONS")
+    );
 }
 
 #[test]
 fn part_preview_document_reflects_single_and_two_column_layouts() {
     use kyozai_kobo_lib::commands::latex::build_part_preview_doc;
 
-    let template =
-        "\\documentclass{ujarticle}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
+    let template = "\\documentclass{ujarticle}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
     let single = build_part_preview_doc(template, "$x^2+y^2=1$", "single_column");
     assert!(single.contains("$x^2+y^2=1$"));
     assert!(!single.contains("\\begin{multicols}{2}"));
@@ -2551,27 +2553,14 @@ fn part_preview_document_reflects_single_and_two_column_layouts() {
 fn problem_preview_document_reflects_single_and_two_column_layouts() {
     use kyozai_kobo_lib::commands::latex::build_problem_preview_doc;
 
-    let template =
-        "\\documentclass{ujarticle}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
-    let single = build_problem_preview_doc(
-        template,
-        "問題文",
-        "解答",
-        "解説",
-        "single_column",
-    );
+    let template = "\\documentclass{ujarticle}\n\\begin{document}\n{{BODY}}\n\\end{document}\n";
+    let single = build_problem_preview_doc(template, "問題文", "解答", "解説", "single_column");
     assert!(single.contains("問題文"));
     assert!(single.contains("【解答】"));
     assert!(single.contains("【解説】"));
     assert!(!single.contains("\\begin{multicols}{2}"));
 
-    let two_column = build_problem_preview_doc(
-        template,
-        "問題文",
-        "解答",
-        "解説",
-        "two_column",
-    );
+    let two_column = build_problem_preview_doc(template, "問題文", "解答", "解説", "two_column");
     assert!(two_column.contains("\\usepackage{multicol}"));
     assert!(two_column.contains("\\begin{multicols}{2}"));
     assert!(two_column.contains("\\setlength{\\columnseprule}{0.4pt}"));
@@ -2605,8 +2594,11 @@ fn ai_generation_guidance_has_a_bounded_length() {
             source_type: "text".into(),
             conversion_mode: Some("generate_explanation".into()),
             options: Some(json!({"explanationGuidance": "あ".repeat(1001)})),
-            input_text: Some(r"【問題文】$x^2=1$を解け。
-【参照する解答】$x=\pm1$".into()),
+            input_text: Some(
+                r"【問題文】$x^2=1$を解け。
+【参照する解答】$x=\pm1$"
+                    .into(),
+            ),
             input_names: vec![],
             target_entity_type: None,
             target_entity_id: None,
@@ -2685,7 +2677,10 @@ fn ai_source_revision_requires_a_valid_target_and_instruction() {
 
     let missing_instruction = create_job(
         &state,
-        payload("text", json!({"revisionTarget": "part", "revisionGuidance": ""})),
+        payload(
+            "text",
+            json!({"revisionTarget": "part", "revisionGuidance": ""}),
+        ),
     )
     .expect_err("空の修正指示は拒否すること");
     assert!(missing_instruction.contains("修正指示"));
@@ -2755,10 +2750,16 @@ fn spatial_ai_output_validation_rejects_commands_unknown_fields_and_bad_coordina
         "points":[],"labels":[],"warnings":[],"uncertainFragments":[]
     }).to_string();
     assert!(validate_spatial_output(&valid).is_ok());
-    assert!(validate_spatial_output(&valid.replace("立方体", "powershell http://evil.invalid")).is_err());
+    assert!(
+        validate_spatial_output(&valid.replace("立方体", "powershell http://evil.invalid"))
+            .is_err()
+    );
     assert!(validate_spatial_output(&valid.replacen("{", "{\"unexpected\":true,", 1)).is_err());
     assert!(validate_spatial_output(&valid.replace("[-2,-2,2]", "[1000001,0,0]")).is_err());
 }
+
+/// スキーマを変更したらここだけ更新する（移行テストが全部この定数を見る）。
+const CURRENT_SCHEMA_VERSION: i64 = 15;
 
 #[test]
 fn schema_migration_sets_user_version() {
@@ -2767,11 +2768,14 @@ fn schema_migration_sets_user_version() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
     for table in ["projects", "templates"] {
         let count: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='version'", table),
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='version'",
+                    table
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -2781,7 +2785,10 @@ fn schema_migration_sets_user_version() {
     for table in ["parts", "part_versions"] {
         let count: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='unit_id'", table),
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='unit_id'",
+                    table
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -2789,6 +2796,17 @@ fn schema_migration_sets_user_version() {
         assert_eq!(count, 1, "{} must have a unit classification", table);
     }
     for table in ["problems", "problem_versions"] {
+        let variants_column: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='solution_variants_json'", table),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            variants_column, 1,
+            "{table} must store AI solution variants"
+        );
         for column in ["answer_completed", "explanation_completed"] {
             let count: i64 = conn
                 .query_row(
@@ -2861,7 +2879,7 @@ fn schema_migration_from_v4_adds_part_unit_before_creating_its_index() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
 
     for table in ["parts", "part_versions"] {
         let count: i64 = migrated
@@ -2929,7 +2947,7 @@ fn schema_migration_from_v6_backfills_both_problem_statement_layouts() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
     let bank_two: String = migrated
         .query_row(
             "SELECT statement_latex_two_column FROM problems WHERE id=1",
@@ -2963,10 +2981,7 @@ fn schema_migration_from_v7_adds_problem_completion_flags() {
     {
         let legacy = rusqlite::Connection::open(&db_path).unwrap();
         let legacy_schema = kyozai_kobo_lib::db::SCHEMA
-            .replace(
-                "    answer_completed INTEGER NOT NULL DEFAULT 0,\n",
-                "",
-            )
+            .replace("    answer_completed INTEGER NOT NULL DEFAULT 0,\n", "")
             .replace(
                 "    explanation_completed INTEGER NOT NULL DEFAULT 0,\n",
                 "",
@@ -2992,7 +3007,7 @@ fn schema_migration_from_v7_adds_problem_completion_flags() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
     for table in ["problems", "problem_versions"] {
         let flags: (i64, i64) = migrated
             .query_row(
@@ -3005,6 +3020,53 @@ fn schema_migration_from_v7_adds_problem_completion_flags() {
             )
             .unwrap();
         assert_eq!(flags, (0, 0), "{table}の既存データは未完成として移行する");
+    }
+}
+
+#[test]
+fn schema_migration_from_v10_adds_empty_solution_variants() {
+    let dir = tempdir::TempDir::new("kyozai-v10-solution-variant-migration-test").unwrap();
+    let db_path = dir.path().join("kyozai-kobo.db");
+    {
+        let legacy = rusqlite::Connection::open(&db_path).unwrap();
+        let legacy_schema = kyozai_kobo_lib::db::SCHEMA.replace(
+            "    solution_variants_json TEXT NOT NULL DEFAULT '[]',\n",
+            "",
+        );
+        legacy.execute_batch(&legacy_schema).unwrap();
+        legacy
+            .execute_batch(
+                "INSERT INTO subjects (id,name) VALUES (1,'数学');
+                 INSERT INTO fields (id,subject_id,name) VALUES (1,1,'数学II');
+                 INSERT INTO units (id,field_id,name) VALUES (1,1,'微分法');
+                 INSERT INTO problems
+                   (id,unit_id,title,answer_latex,explanation_latex,created_at,updated_at)
+                   VALUES (1,1,'旧問題','旧解答','旧解説','2026-01-01','2026-01-01');
+                 INSERT INTO problem_versions
+                   (problem_id,title,answer_latex,explanation_latex,saved_at)
+                   VALUES (1,'旧問題','旧解答','旧解説','2026-01-01');
+                 PRAGMA user_version=10;",
+            )
+            .unwrap();
+    }
+
+    let migrated = kyozai_kobo_lib::db::open_db(dir.path()).unwrap();
+    let version: i64 = migrated
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    for table in ["problems", "problem_versions"] {
+        let variants: String = migrated
+            .query_row(
+                &format!("SELECT solution_variants_json FROM {table} LIMIT 1"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            variants, "[]",
+            "{table}の既存データはlegacy/defaultとして扱える必要がある"
+        );
     }
 }
 
@@ -3055,7 +3117,7 @@ fn schema_migration_from_v8_adds_ai_job_inserted_state() {
     let version: i64 = migrated
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
     let inserted_at: String = migrated
         .query_row(
             "SELECT inserted_at FROM ai_conversion_jobs WHERE job_uuid='legacy-job'",
@@ -3063,7 +3125,10 @@ fn schema_migration_from_v8_adds_ai_job_inserted_state() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(inserted_at.is_empty(), "既存の未判定ジョブは未挿入として移行する");
+    assert!(
+        inserted_at.is_empty(),
+        "既存の未判定ジョブは未挿入として移行する"
+    );
 }
 
 #[tokio::test]
@@ -3118,7 +3183,12 @@ async fn authenticated_graph_crud_validates_json_and_detects_conflicts() {
     }});
     let updated = router
         .clone()
-        .oneshot(post_json("/api/invoke/update_graph", update_body.clone(), Some(&cookie), true))
+        .oneshot(post_json(
+            "/api/invoke/update_graph",
+            update_body.clone(),
+            Some(&cookie),
+            true,
+        ))
         .await
         .unwrap();
     assert_eq!(updated.status(), StatusCode::OK);
@@ -3126,7 +3196,12 @@ async fn authenticated_graph_crud_validates_json_and_detects_conflicts() {
 
     let stale = router
         .clone()
-        .oneshot(post_json("/api/invoke/update_graph", update_body, Some(&cookie), true))
+        .oneshot(post_json(
+            "/api/invoke/update_graph",
+            update_body,
+            Some(&cookie),
+            true,
+        ))
         .await
         .unwrap();
     assert_eq!(stale.status(), StatusCode::CONFLICT);
@@ -3153,40 +3228,83 @@ fn graph_exports_and_material_insert_are_snapshotted() {
     let graph_json = json!({
         "version":1,"appName":"MathGraph PDF Studio","expressions":[],"points":[],"labels":[],
         "range":{"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"xstep":1,"ystep":1},"paper":{}
-    }).to_string();
-    let graph_id = graphs::create_graph(&state, graphs::CreateGraphPayload {
-        title: "教材用グラフ".into(), graph_json, graph_type: None, source_type: None, warnings: None,
-    }).unwrap();
+    })
+    .to_string();
+    let graph_id = graphs::create_graph(
+        &state,
+        graphs::CreateGraphPayload {
+            title: "教材用グラフ".into(),
+            graph_json,
+            graph_type: None,
+            source_type: None,
+            warnings: None,
+        },
+    )
+    .unwrap();
     let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
     let mut files = BTreeMap::new();
     files.insert("pdf".into(), encode(b"%PDF-1.4\n%%EOF"));
-    files.insert("png".into(), encode(&[0x89,b'P',b'N',b'G',0x0d,0x0a,0x1a,0x0a,0,0,0,0]));
-    files.insert("svg".into(), encode(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"));
-    files.insert("tex".into(), encode(b"\\begin{tikzpicture}\\end{tikzpicture}"));
+    files.insert(
+        "png".into(),
+        encode(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
+    );
+    files.insert(
+        "svg".into(),
+        encode(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"),
+    );
+    files.insert(
+        "tex".into(),
+        encode(b"\\begin{tikzpicture}\\end{tikzpicture}"),
+    );
     let saved = graphs::save_graph_exports(&state, graph_id.clone(), files).unwrap();
     assert_eq!(saved.len(), 4);
 
     let project_id = projects::create_project(&state, "テスト教材".into(), None).unwrap();
-    assert!(graphs::insert_graph_to_project(&state, graph_id.clone(), project_id, Some(0))
-        .unwrap_err()
-        .starts_with("CONFLICT:"));
-    let item_id = graphs::insert_graph_to_project(&state, graph_id.clone(), project_id, Some(1)).unwrap();
+    assert!(
+        graphs::insert_graph_to_project(&state, graph_id.clone(), project_id, Some(0))
+            .unwrap_err()
+            .starts_with("CONFLICT:")
+    );
+    let item_id =
+        graphs::insert_graph_to_project(&state, graph_id.clone(), project_id, Some(1)).unwrap();
     let conn = state.conn.lock().unwrap();
-    let content: String = conn.query_row("SELECT content FROM project_items WHERE id=?1", [item_id], |r| r.get(0)).unwrap();
+    let content: String = conn
+        .query_row(
+            "SELECT content FROM project_items WHERE id=?1",
+            [item_id],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert!(content.contains("assets/graphs/snapshots/graphasset_"));
     assert!(content.contains("width=0.72\\linewidth"));
     assert!(!content.contains("\\begin{center}"));
     assert!(content.contains("height=0.28\\textheight,keepaspectratio"));
-    let usage: i64 = conn.query_row("SELECT COUNT(*) FROM graph_assets WHERE graph_id=?1", [&graph_id], |r| r.get(0)).unwrap();
-    let snapshot_pdf: String = conn.query_row(
-        "SELECT primary_asset_path FROM graph_assets WHERE graph_id=?1",
-        [&graph_id],
-        |r| r.get(0),
-    ).unwrap();
+    let usage: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM graph_assets WHERE graph_id=?1",
+            [&graph_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let snapshot_pdf: String = conn
+        .query_row(
+            "SELECT primary_asset_path FROM graph_assets WHERE graph_id=?1",
+            [&graph_id],
+            |r| r.get(0),
+        )
+        .unwrap();
     let snapshot_before = std::fs::read(&snapshot_pdf).unwrap();
     drop(conn);
-    std::fs::write(state.graph_dir(&graph_id).join("graph.pdf"), b"%PDF-1.7\nchanged").unwrap();
-    assert_eq!(std::fs::read(snapshot_pdf).unwrap(), snapshot_before, "教材snapshotは正本更新で変化しないこと");
+    std::fs::write(
+        state.graph_dir(&graph_id).join("graph.pdf"),
+        b"%PDF-1.7\nchanged",
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(snapshot_pdf).unwrap(),
+        snapshot_before,
+        "教材snapshotは正本更新で変化しないこと"
+    );
     assert_eq!(usage, 1);
 }
 
@@ -3200,41 +3318,85 @@ async fn graph_files_require_auth_and_stream_with_safe_disposition() {
     let graph_json = json!({
         "version":1,"appName":"MathGraph PDF Studio","expressions":[],"points":[],"labels":[],
         "range":{"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"xstep":1,"ystep":1},"paper":{}
-    }).to_string();
-    let graph_id = graphs::create_graph(&state, graphs::CreateGraphPayload {
-        title: "配信テスト".into(), graph_json, graph_type: None, source_type: None, warnings: None,
-    }).unwrap();
+    })
+    .to_string();
+    let graph_id = graphs::create_graph(
+        &state,
+        graphs::CreateGraphPayload {
+            title: "配信テスト".into(),
+            graph_json,
+            graph_type: None,
+            source_type: None,
+            warnings: None,
+        },
+    )
+    .unwrap();
     let mut files = BTreeMap::new();
-    files.insert("pdf".into(), base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4\n%%EOF"));
+    files.insert(
+        "pdf".into(),
+        base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4\n%%EOF"),
+    );
     graphs::save_graph_exports(&state, graph_id.clone(), files).unwrap();
     let router = build_router(state);
 
-    let unauthenticated = router.clone().oneshot(
-        Request::get(format!("/api/graphs/{graph_id}/files/pdf"))
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let unauthenticated = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/graphs/{graph_id}/files/pdf"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
 
     let cookie = pair(&router).await;
-    let authenticated = router.clone().oneshot(
-        Request::get(format!("/api/graphs/{graph_id}/files/pdf?download=1"))
-            .header(header::COOKIE, &cookie)
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let authenticated = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/graphs/{graph_id}/files/pdf?download=1"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(authenticated.status(), StatusCode::OK);
-    assert_eq!(authenticated.headers()[header::CONTENT_TYPE], "application/pdf");
-    assert_eq!(authenticated.headers()[header::CONTENT_DISPOSITION], "attachment; filename=\"graph.pdf\"");
-    let bytes = authenticated.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        authenticated.headers()[header::CONTENT_TYPE],
+        "application/pdf"
+    );
+    assert_eq!(
+        authenticated.headers()[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"graph.pdf\""
+    );
+    let bytes = authenticated
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
     assert!(bytes.starts_with(b"%PDF-"));
 
-    let zip_response = router.clone().oneshot(
-        Request::get(format!("/api/graphs/{graph_id}/files/zip?download=1"))
-            .header(header::COOKIE, &cookie)
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let zip_response = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/graphs/{graph_id}/files/zip?download=1"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(zip_response.status(), StatusCode::OK);
-    assert_eq!(zip_response.headers()[header::CONTENT_TYPE], "application/zip");
-    assert_eq!(zip_response.headers()[header::CONTENT_DISPOSITION], "attachment; filename=\"graph.zip\"");
+    assert_eq!(
+        zip_response.headers()[header::CONTENT_TYPE],
+        "application/zip"
+    );
+    assert_eq!(
+        zip_response.headers()[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"graph.zip\""
+    );
     let zip_bytes = zip_response.into_body().collect().await.unwrap().to_bytes();
     assert!(zip_bytes.starts_with(b"PK\x03\x04"));
 }
@@ -3250,37 +3412,93 @@ fn web_graph_session_fixes_target_and_rejects_stale_material() {
     let graph_json = json!({
         "version":1,"appName":"MathGraph PDF Studio","expressions":[],"points":[],"labels":[],
         "range":{"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"xstep":1,"ystep":1},"paper":{}
-    }).to_string();
-    let graph_id = graphs::create_graph(&state, graphs::CreateGraphPayload {
-        title: "session test".into(), graph_json, graph_type: None, source_type: None, warnings: None,
-    }).unwrap();
+    })
+    .to_string();
+    let graph_id = graphs::create_graph(
+        &state,
+        graphs::CreateGraphPayload {
+            title: "session test".into(),
+            graph_json,
+            graph_type: None,
+            source_type: None,
+            warnings: None,
+        },
+    )
+    .unwrap();
     let mut files = BTreeMap::new();
-    files.insert("pdf".into(), base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4\n%%EOF"));
-    files.insert("png".into(), base64::engine::general_purpose::STANDARD.encode(&[0x89,b'P',b'N',b'G',0x0d,0x0a,0x1a,0x0a,0,0,0,0]));
+    files.insert(
+        "pdf".into(),
+        base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4\n%%EOF"),
+    );
+    files.insert(
+        "png".into(),
+        base64::engine::general_purpose::STANDARD
+            .encode(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
+    );
     graphs::save_graph_exports(&state, graph_id.clone(), files).unwrap();
 
-    let session = graph_web::create_graph_web_session(&state, graph_web::CreateGraphWebSessionPayload {
-        project_id: Some(project_id), problem_id: None, item_id: None,
-        target_field: "project_text".into(), selection_start: Some(0), selection_end: Some(0),
-    }).unwrap();
+    let session = graph_web::create_graph_web_session(
+        &state,
+        graph_web::CreateGraphWebSessionPayload {
+            project_id: Some(project_id),
+            problem_id: None,
+            item_id: None,
+            target_field: "project_text".into(),
+            selection_start: Some(0),
+            selection_end: Some(0),
+        },
+    )
+    .unwrap();
     assert_eq!(session.status, "pending");
-    let completed = graph_web::complete_graph_web_session(&state, session.session_id, graph_id.clone(), 1).unwrap();
+    let completed =
+        graph_web::complete_graph_web_session(&state, session.session_id, graph_id.clone(), 1)
+            .unwrap();
     assert_eq!(completed.session.status, "completed");
-    assert!(completed.snapshot.inserted_latex.contains("assets/graphs/snapshots/graphasset_"));
-    assert!(completed.snapshot.inserted_latex.contains("width=0.72\\linewidth"));
-    assert!(!completed.snapshot.inserted_latex.contains("\\begin{center}"));
-    assert!(state.graph_assets_dir().join("snapshots").join(&completed.snapshot.asset_id).join("graph.pdf").is_file());
+    assert!(completed
+        .snapshot
+        .inserted_latex
+        .contains("assets/graphs/snapshots/graphasset_"));
+    assert!(completed
+        .snapshot
+        .inserted_latex
+        .contains("width=0.72\\linewidth"));
+    assert!(!completed
+        .snapshot
+        .inserted_latex
+        .contains("\\begin{center}"));
+    assert!(state
+        .graph_assets_dir()
+        .join("snapshots")
+        .join(&completed.snapshot.asset_id)
+        .join("graph.pdf")
+        .is_file());
 
-    let stale = graph_web::create_graph_web_session(&state, graph_web::CreateGraphWebSessionPayload {
-        project_id: Some(project_id), problem_id: None, item_id: None,
-        target_field: "project_text".into(), selection_start: None, selection_end: None,
-    }).unwrap();
-    state.conn.lock().unwrap().execute(
-        "UPDATE projects SET version=version+1 WHERE id=?1", [project_id]
-    ).unwrap();
-    assert!(graph_web::complete_graph_web_session(&state, stale.session_id, graph_id, 1)
-        .unwrap_err()
-        .starts_with("CONFLICT:"));
+    let stale = graph_web::create_graph_web_session(
+        &state,
+        graph_web::CreateGraphWebSessionPayload {
+            project_id: Some(project_id),
+            problem_id: None,
+            item_id: None,
+            target_field: "project_text".into(),
+            selection_start: None,
+            selection_end: None,
+        },
+    )
+    .unwrap();
+    state
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projects SET version=version+1 WHERE id=?1",
+            [project_id],
+        )
+        .unwrap();
+    assert!(
+        graph_web::complete_graph_web_session(&state, stale.session_id, graph_id, 1)
+            .unwrap_err()
+            .starts_with("CONFLICT:")
+    );
 }
 
 #[test]
@@ -3288,14 +3506,21 @@ fn legacy_graph_asset_is_imported_only_from_managed_storage_and_web_paths_are_re
     use kyozai_kobo_lib::commands::graphs;
 
     let (_dir, state) = make_state();
-    let project_id = kyozai_kobo_lib::commands::projects::create_project(&state, "asset test".into(), None).unwrap();
+    let project_id =
+        kyozai_kobo_lib::commands::projects::create_project(&state, "asset test".into(), None)
+            .unwrap();
     let source_dir = state.graph_assets_dir().join("legacy_asset");
     std::fs::create_dir_all(&source_dir).unwrap();
     let source = source_dir.join("graph.json");
-    std::fs::write(&source, json!({
-        "version":1,"appName":"MathGraph PDF Studio","expressions":[],"points":[],"labels":[],
-        "range":{"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"xstep":1,"ystep":1},"paper":{}
-    }).to_string()).unwrap();
+    std::fs::write(
+        &source,
+        json!({
+            "version":1,"appName":"MathGraph PDF Studio","expressions":[],"points":[],"labels":[],
+            "range":{"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"xstep":1,"ystep":1},"paper":{}
+        })
+        .to_string(),
+    )
+    .unwrap();
     {
         let conn = state.conn.lock().unwrap();
         conn.execute(
@@ -3305,15 +3530,25 @@ fn legacy_graph_asset_is_imported_only_from_managed_storage_and_web_paths_are_re
             rusqlite::params![project_id, source.to_string_lossy(), source_dir.join("graph.pdf").to_string_lossy()],
         ).unwrap();
     }
-    assert_eq!(graphs::ensure_graph_from_asset(&state, "legacy_asset".into()).unwrap(), "legacy_graph");
-    assert_eq!(graphs::get_graph(&state, "legacy_graph".into()).unwrap().summary.source_type, "import");
+    assert_eq!(
+        graphs::ensure_graph_from_asset(&state, "legacy_asset".into()).unwrap(),
+        "legacy_graph"
+    );
+    assert_eq!(
+        graphs::get_graph(&state, "legacy_graph".into())
+            .unwrap()
+            .summary
+            .source_type,
+        "import"
+    );
 
     let web = dispatch(
         &state,
         "list_graph_assets",
         json!({"projectId": project_id, "problemId": null}),
         Origin::Web,
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(web[0]["editableSourcePath"], "");
     assert_eq!(web[0]["primaryAssetPath"], "");
 
@@ -3433,8 +3668,16 @@ fn parts_can_be_classified_filtered_and_duplicated_by_unit() {
     assert_eq!(full.unit_id, Some(unit_id));
     assert_eq!(full.unit_name, "関数の増減");
 
+    let directly_classified_id =
+        parts::create_part_in_unit(&state, "単元内で新規作成".into(), Some(unit_id)).unwrap();
+    let directly_classified = parts::get_part(&state, directly_classified_id).unwrap();
+    assert_eq!(directly_classified.unit_id, Some(unit_id));
+    let unassigned_id = parts::create_part(&state, "未分類の部品".into()).unwrap();
+
     let query = PartSearchQuery {
         text: String::new(),
+        bank_node_id: None,
+        include_descendants: None,
         subject_id: Some(subject_id),
         field_id: Some(field_id),
         unit_id: Some(unit_id),
@@ -3444,11 +3687,24 @@ fn parts_can_be_classified_filtered_and_duplicated_by_unit() {
         difficulty_rank: None,
         difficulty_ranks: None,
         required_filter: None,
+        unassigned_only: None,
     };
     let found = parts::search_parts(&state, query).unwrap();
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].id, part_id);
-    assert_eq!(found[0].unit_name, "関数の増減");
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().any(|part| part.id == part_id));
+    assert!(found.iter().all(|part| part.unit_name == "関数の増減"));
+
+    let unassigned_query = serde_json::from_value::<PartSearchQuery>(json!({
+        "text": "",
+        "unassigned_only": true
+    }))
+    .unwrap();
+    let unassigned = parts::search_parts(&state, unassigned_query).unwrap();
+    assert_eq!(unassigned.len(), 1);
+    assert_eq!(unassigned[0].id, unassigned_id);
+
+    let tree = kyozai_kobo_lib::commands::tree::get_tree(&state).unwrap();
+    assert_eq!(tree[0].fields[0].units[0].part_count, 2);
 
     let duplicate_id = parts::duplicate_part(&state, part_id).unwrap();
     let duplicate = parts::get_part(&state, duplicate_id).unwrap();
@@ -3492,6 +3748,23 @@ fn problem_completion_flags_are_saved_listed_duplicated_and_restored() {
         "statement_latex_two_column": "問題文",
         "answer_latex": "解答",
         "explanation_latex": "解説",
+        "solution_variants": [{
+            "id": "variant-main",
+            "strategy": {
+                "id": "strategy-differentiation",
+                "title": "微分による単調性",
+                "summary": "差を関数として導関数の符号を調べる。",
+                "difficulty": "standard",
+                "answerLength": "medium",
+                "concepts": ["微分", "単調性"],
+                "suitability": { "examAnswer": true, "textbookExplanation": true, "alternativeSolution": false }
+            },
+            "role": "main",
+            "solution": "解答",
+            "verification": { "valid": true, "issues": [] },
+            "explanation": "解説",
+            "explanationOutdated": false
+        }],
         "answer_completed": true,
         "explanation_completed": true,
         "difficulty": "標準",
@@ -3507,20 +3780,29 @@ fn problem_completion_flags_are_saved_listed_duplicated_and_restored() {
     let full = problems::get_problem(&state, problem_id).unwrap();
     assert!(full.answer_completed);
     assert!(full.explanation_completed);
+    assert_eq!(full.solution_variants.len(), 1);
+    assert_eq!(
+        full.solution_variants[0].strategy.id,
+        "strategy-differentiation"
+    );
     let listed = problems::list_problems(&state, unit_id).unwrap();
     assert!(listed[0].answer_completed);
     assert!(listed[0].explanation_completed);
+    assert!(!listed[0].created_at.is_empty());
 
     let duplicate_id = problems::duplicate_problem(&state, problem_id).unwrap();
     let duplicate = problems::get_problem(&state, duplicate_id).unwrap();
     assert!(duplicate.answer_completed);
     assert!(duplicate.explanation_completed);
+    assert_eq!(duplicate.solution_variants.len(), 1);
+    assert_eq!(duplicate.solution_variants[0].solution, "解答");
 
     let old_version = problems::list_versions(&state, problem_id).unwrap()[0].id;
     problems::restore_version(&state, old_version).unwrap();
     let restored = problems::get_problem(&state, problem_id).unwrap();
     assert!(!restored.answer_completed);
     assert!(!restored.explanation_completed);
+    assert!(restored.solution_variants.is_empty());
 }
 
 #[test]
@@ -3534,8 +3816,7 @@ fn problem_booklet_two_column_setting_persists_and_duplicates() {
 
     let mut settings = project.settings.clone();
     settings.problem_two_column = true;
-    projects::update_project_settings(&state, project_id, settings, Some(project.version))
-        .unwrap();
+    projects::update_project_settings(&state, project_id, settings, Some(project.version)).unwrap();
     let updated = projects::get_project(&state, project_id).unwrap();
     assert!(updated.settings.problem_two_column);
 
@@ -3572,7 +3853,8 @@ fn optimistic_lock_on_parts_items_projects_and_templates() {
 
     // プロジェクト項目
     let project_id = projects::create_project(&state, "教材".into(), None).unwrap();
-    let item_id = projects::add_content_item(&state, project_id, "text".into(), "説明".into(), None).unwrap();
+    let item_id =
+        projects::add_content_item(&state, project_id, "text".into(), "説明".into(), None).unwrap();
     let upd = |expected: Option<i64>| {
         serde_json::from_value::<kyozai_kobo_lib::models::ProjectItemUpdate>(json!({
             "itemId": item_id,
@@ -3581,29 +3863,20 @@ fn optimistic_lock_on_parts_items_projects_and_templates() {
         }))
         .unwrap()
     };
-    assert_eq!(projects::update_project_item(&state, upd(Some(1))).unwrap(), 2);
+    assert_eq!(
+        projects::update_project_item(&state, upd(Some(1))).unwrap(),
+        2
+    );
     let err = projects::update_project_item(&state, upd(Some(1))).unwrap_err();
     assert!(err.starts_with("CONFLICT:2"));
 
     assert_eq!(
-        projects::update_project_meta(
-            &state,
-            project_id,
-            "updated".into(),
-            "".into(),
-            Some(1),
-        )
-        .unwrap(),
+        projects::update_project_meta(&state, project_id, "updated".into(), "".into(), Some(1),)
+            .unwrap(),
         2
     );
-    let err = projects::update_project_meta(
-        &state,
-        project_id,
-        "stale".into(),
-        "".into(),
-        Some(1),
-    )
-    .unwrap_err();
+    let err = projects::update_project_meta(&state, project_id, "stale".into(), "".into(), Some(1))
+        .unwrap_err();
     assert!(err.starts_with("CONFLICT:2"));
 
     let template_id = templates::create_template(&state, "template".into()).unwrap();
@@ -3631,28 +3904,34 @@ fn template_assets_with_same_display_name_are_immutable() {
     let template_id = templates::create_template(&state, "asset-test".into()).unwrap();
     let source = dir.path().join("figure.png");
     std::fs::write(&source, b"first-generation").unwrap();
-    let first = templates::add_template_asset(
-        &state,
-        template_id,
-        source.to_string_lossy().to_string(),
-    )
-    .unwrap();
+    let first =
+        templates::add_template_asset(&state, template_id, source.to_string_lossy().to_string())
+            .unwrap();
     std::fs::write(&source, b"second-generation").unwrap();
-    let second = templates::add_template_asset(
-        &state,
-        template_id,
-        source.to_string_lossy().to_string(),
-    )
-    .unwrap();
+    let second =
+        templates::add_template_asset(&state, template_id, source.to_string_lossy().to_string())
+            .unwrap();
 
     assert_eq!(first.file_name, second.file_name);
     assert_ne!(first.stored_name, second.stored_name);
     assert_eq!(
-        std::fs::read(state.data_dir.join("template_assets").join(&first.stored_name)).unwrap(),
+        std::fs::read(
+            state
+                .data_dir
+                .join("template_assets")
+                .join(&first.stored_name)
+        )
+        .unwrap(),
         b"first-generation"
     );
     assert_eq!(
-        std::fs::read(state.data_dir.join("template_assets").join(&second.stored_name)).unwrap(),
+        std::fs::read(
+            state
+                .data_dir
+                .join("template_assets")
+                .join(&second.stored_name)
+        )
+        .unwrap(),
         b"second-generation"
     );
 }
@@ -3781,14 +4060,9 @@ fn unchanged_ai_latex_keeps_compile_result_and_can_be_saved_as_part() {
         "同じLaTeXを再保存しただけなら挿入済み状態を維持すること"
     );
 
-    let part_id = kyozai_kobo_lib::ai::save_as_part(
-        &state,
-        job_id,
-        "直近のAI変換".into(),
-        None,
-        true,
-    )
-    .expect("同じLaTeXを再送した後も部品として保存できること");
+    let part_id =
+        kyozai_kobo_lib::ai::save_as_part(&state, job_id, "直近のAI変換".into(), None, true)
+            .expect("同じLaTeXを再送した後も部品として保存できること");
     let saved_latex: String = state
         .conn
         .lock()
@@ -3803,9 +4077,60 @@ fn unchanged_ai_latex_keeps_compile_result_and_can_be_saved_as_part() {
     let saved_job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
     assert_eq!(saved_job["targetEntityName"].as_str(), Some("直近のAI変換"));
     assert!(
-        !saved_job["insertedAt"].as_str().unwrap_or_default().is_empty(),
+        !saved_job["insertedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
         "部品として保存したジョブは挿入済みと分かること"
     );
+}
+
+#[test]
+fn generated_math_part_save_keeps_layout_and_cannot_confirm_away_style_errors() {
+    let (_dir, state) = make_state();
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs
+             SET conversion_mode='generate_topic_guide',
+                 options_json=?1,output_latex='$0\\leq x$'
+             WHERE id=?2",
+            rusqlite::params![
+                json!({"solutionSubject":"mathematics","solutionLayout":"two_column"}).to_string(),
+                job_id
+            ],
+        )
+        .unwrap();
+    }
+
+    let blocked =
+        kyozai_kobo_lib::ai::save_as_part(&state, job_id, "不正な数学部品".into(), None, true)
+            .expect_err("確認済みでも高校数学の表記エラーは保存させない");
+    assert!(blocked.contains("\\leqq"));
+
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs SET output_latex='$0\\leqq x$' WHERE id=?1",
+            [job_id],
+        )
+        .unwrap();
+    }
+    let part_id =
+        kyozai_kobo_lib::ai::save_as_part(&state, job_id, "二段組の数学部品".into(), None, true)
+            .expect("正規化済みの数学部品は保存できる");
+    let layout: String = state
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT layout_mode FROM parts WHERE id=?1",
+            [part_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(layout, "two_column");
 }
 
 #[test]
@@ -3884,15 +4209,13 @@ fn extracted_problems_are_saved_as_independent_bank_entries() {
             ExtractedProblem {
                 title: "平方完成".into(),
                 statement_latex: "$y=x^2-4x+3$の最小値を求めよ。".into(),
-                statement_latex_two_column:
-                    "$y=x^2-4x+3$ の最小値を求めよ。".into(),
+                statement_latex_two_column: "$y=x^2-4x+3$ の最小値を求めよ。".into(),
                 source_image_indexes: vec![1],
             },
             ExtractedProblem {
                 title: "放物線".into(),
                 statement_latex: "放物線$y=x^2$を平行移動せよ。".into(),
-                statement_latex_two_column:
-                    "放物線 $y=x^2$ を\n平行移動せよ。".into(),
+                statement_latex_two_column: "放物線 $y=x^2$ を\n平行移動せよ。".into(),
                 source_image_indexes: vec![1, 2],
             },
         ],
@@ -3922,7 +4245,10 @@ fn extracted_problems_are_saved_as_independent_bank_entries() {
     let saved_job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
     assert_eq!(saved_job["targetEntityName"].as_str(), Some("平方完成"));
     assert!(
-        !saved_job["insertedAt"].as_str().unwrap_or_default().is_empty(),
+        !saved_job["insertedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
         "一括保存したジョブは挿入済みと分かること"
     );
 }
@@ -3988,7 +4314,10 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
         )
         .unwrap();
     assert_eq!(answer, "既存の解答\n$x^2$");
-    assert_eq!(answer_completed, 0, "AIで解答を変更したら完成状態を解除すること");
+    assert_eq!(
+        answer_completed, 0,
+        "AIで解答を変更したら完成状態を解除すること"
+    );
     assert_eq!(
         explanation_completed, 0,
         "解答変更時は解説の完成状態も解除すること"
@@ -4006,7 +4335,10 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
     let inserted_job = kyozai_kobo_lib::ai::get_job(&state, job_id).unwrap();
     assert_eq!(inserted_job["targetEntityName"].as_str(), Some("最大値"));
     assert!(
-        !inserted_job["insertedAt"].as_str().unwrap_or_default().is_empty(),
+        !inserted_job["insertedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
         "問題へ直接挿入したジョブは挿入済みと分かること"
     );
 
@@ -4017,11 +4349,88 @@ fn completed_ai_answer_can_be_inserted_into_its_source_problem_once() {
         Origin::Desktop,
     );
     assert!(
-        duplicate
-            .unwrap_err()
-            .contains("すでに挿入"),
+        duplicate.unwrap_err().contains("すでに挿入"),
         "同じ生成結果の二重挿入を拒否すること"
     );
+}
+
+#[test]
+fn background_strategy_explanation_can_be_reviewed_and_applied_to_its_variant() {
+    let (_dir, state) = make_state();
+    let problem_id = insert_chat_test_problem(&state);
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    let strategy = json!({
+        "id":"strategy-edited",
+        "title":"現在の手動編集済み解答",
+        "summary":"確定済み解答の流れを説明する",
+        "concepts":[],
+        "suitability":{"examAnswer":true,"textbookExplanation":true,"alternativeSolution":false}
+    });
+    let variants = json!([{
+        "id":"variant-edited",
+        "strategy":strategy,
+        "role":"main",
+        "solution":"解答済み",
+        "solutionBlocks":[],
+        "explanation":"古い解説",
+        "explanationSections":[],
+        "explanationOutdated":true
+    }]);
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE problems SET explanation_latex='古い解説',solution_variants_json=?1 WHERE id=?2",
+            rusqlite::params![variants.to_string(), problem_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE ai_conversion_jobs SET conversion_mode='generate_strategy_explanation',
+             target_entity_type='problem',target_entity_id=?1,target_field='explanation_latex',
+             options_json=?2 WHERE id=?3",
+            rusqlite::params![
+                problem_id,
+                json!({
+                    "backgroundWorkflowResult":"solution_explanation",
+                    "solutionVariantId":"variant-edited",
+                    "solutionSource":"解答済み",
+                    "selectedStrategy":strategy
+                })
+                .to_string(),
+                job_id
+            ],
+        )
+        .unwrap();
+    }
+
+    dispatch(
+        &state,
+        "ai_insert_into_target_problem",
+        json!({"jobId":job_id,"confirmed":true}),
+        Origin::Desktop,
+    )
+    .expect("バックグラウンド解説を元の解法へ反映できること");
+
+    let conn = state.conn.lock().unwrap();
+    let (explanation, variants_json): (String, String) = conn
+        .query_row(
+            "SELECT explanation_latex,solution_variants_json FROM problems WHERE id=?1",
+            [problem_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        explanation, "$x^2$",
+        "既存解説への追記ではなく選択解法の解説を置き換えること"
+    );
+    let saved: Value = serde_json::from_str(&variants_json).unwrap();
+    assert_eq!(saved[0]["explanation"], "$x^2$");
+    assert_eq!(saved[0]["explanationOutdated"], false);
+    assert_eq!(saved[0]["strategy"]["difficulty"], "standard");
+    assert_eq!(saved[0]["strategy"]["answerLength"], "medium");
+    assert!(!saved[0]["explanationSections"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -4098,11 +4507,8 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
         .unwrap();
         let problem_id = conn.last_insert_rowid();
         drop(conn);
-        let part_id = kyozai_kobo_lib::commands::parts::create_part(
-            &state,
-            "修正対象の部品".into(),
-        )
-        .unwrap();
+        let part_id =
+            kyozai_kobo_lib::commands::parts::create_part(&state, "修正対象の部品".into()).unwrap();
         state
             .conn
             .lock()
@@ -4165,12 +4571,10 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
         applied_problem_job["targetEntityName"].as_str(),
         Some("修正対象")
     );
-    assert!(
-        !applied_problem_job["insertedAt"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty()
-    );
+    assert!(!applied_problem_job["insertedAt"]
+        .as_str()
+        .unwrap_or_default()
+        .is_empty());
 
     let part_job = insert_completed_ai_job(&state, "completed", "ok");
     {
@@ -4222,12 +4626,10 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
         applied_part_job["targetEntityName"].as_str(),
         Some("修正対象の部品")
     );
-    assert!(
-        !applied_part_job["insertedAt"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty()
-    );
+    assert!(!applied_part_job["insertedAt"]
+        .as_str()
+        .unwrap_or_default()
+        .is_empty());
     let duplicate_apply = apply_source_revision(&state, part_job, true)
         .expect_err("同じ修正結果を二重適用しないこと");
     assert!(duplicate_apply.contains("すでに適用"));
@@ -4257,6 +4659,61 @@ fn ai_source_revision_replaces_problem_and_part_with_version_history() {
     let stale = apply_source_revision(&state, stale_job, true)
         .expect_err("開始後に更新された問題を古い修正案で上書きしないこと");
     assert!(stale.contains("更新されています"));
+}
+
+#[test]
+fn ai_source_revision_rejects_unrequested_major_part_figure_loss() {
+    let (_dir, state) = make_state();
+    let part_id =
+        kyozai_kobo_lib::commands::parts::create_part(&state, "図を保持する部品".into()).unwrap();
+    let figures = (0..6)
+        .map(|index| {
+            format!("\\begin{{tikzpicture}}\\node at (0,0) {{{index}}};\\end{{tikzpicture}}")
+        })
+        .collect::<Vec<_>>();
+    let original = format!("{}\n{}", "既存の説明。".repeat(120), figures.join("\n"));
+    state
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE parts SET latex_source=?1 WHERE id=?2",
+            rusqlite::params![&original, part_id],
+        )
+        .unwrap();
+
+    let job_id = insert_completed_ai_job(&state, "completed", "ok");
+    state
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE ai_conversion_jobs
+             SET conversion_mode='revise_source', options_json=?1,
+                 output_latex=?2,target_entity_type='part',target_entity_id=?3,target_field='latex_source'
+             WHERE id=?4",
+            rusqlite::params![
+                json!({
+                    "revisionTarget":"part",
+                    "revisionGuidance":"二次の係数を正にして扱うよう修正して",
+                    "revisionSourceVersion":1,
+                    "solutionSubject":"mathematics",
+                    "solutionLayout":"single_column"
+                })
+                .to_string(),
+                format!("短い説明。\n{}", figures[0]),
+                part_id,
+                job_id
+            ],
+        )
+        .unwrap();
+
+    let error = kyozai_kobo_lib::ai::apply_source_revision(&state, job_id, true)
+        .expect_err("通常のAIソース修正でも未指定の図削除を拒否する");
+    assert!(error.contains("TikZ図が6個から1個"), "{error}");
+    let current = kyozai_kobo_lib::commands::parts::get_part(&state, part_id).unwrap();
+    assert_eq!(current.latex_source, original);
+    assert_eq!(current.version, 1);
 }
 
 #[test]
@@ -4291,14 +4748,9 @@ fn ai_job_content_warning_requires_confirmation_but_does_not_block_confirmed_sav
     assert!(!format_error.contains("危険なLaTeX記述"));
     assert!(format_error.contains("問題文の点名と座標文字を保持してください"));
 
-    let saved_part_id = kyozai_kobo_lib::ai::save_as_part(
-        &state,
-        job_id,
-        "確認済みのAI答案".into(),
-        None,
-        true,
-    )
-    .expect("答案内容の警告は、利用者が確認した後の保存を妨げないこと");
+    let saved_part_id =
+        kyozai_kobo_lib::ai::save_as_part(&state, job_id, "確認済みのAI答案".into(), None, true)
+            .expect("答案内容の警告は、利用者が確認した後の保存を妨げないこと");
     let saved_latex: String = state
         .conn
         .lock()
@@ -4411,7 +4863,11 @@ fn startup_repair_recovers_stuck_compiling_jobs() {
         .unwrap()
     };
     assert_eq!(status_of(stuck), "completed", "compiling残骸が復旧されない");
-    assert_eq!(status_of(interrupted), "failed", "実行中ジョブが失敗へ畳まれない");
+    assert_eq!(
+        status_of(interrupted),
+        "failed",
+        "実行中ジョブが失敗へ畳まれない"
+    );
 }
 
 #[test]
@@ -4552,7 +5008,10 @@ fn chat_title_only_update_preserves_problem_completion_flags() {
     let updated = kyozai_kobo_lib::commands::problems::get_problem(&state, problem_id).unwrap();
     assert_eq!(updated.title, "題名だけ変更");
     assert!(updated.answer_completed, "解答の完成フラグが落ちている");
-    assert!(updated.explanation_completed, "解説の完成フラグが落ちている");
+    assert!(
+        updated.explanation_completed,
+        "解説の完成フラグが落ちている"
+    );
 }
 
 #[test]
@@ -4560,7 +5019,11 @@ fn invalid_ai_chat_web_settings_return_specific_errors() {
     let (_dir, state) = make_state();
     for (key, value, expected) in [
         ("ai_chat_enabled", "yes", "AIチャットの有効設定"),
-        ("ai_chat_execution_mode", "dangerous", "AIチャットの実行モード"),
+        (
+            "ai_chat_execution_mode",
+            "dangerous",
+            "AIチャットの実行モード",
+        ),
         ("ai_chat_max_tool_calls", "100", "AIチャットのTool数上限"),
     ] {
         let error = kyozai_kobo_lib::commands::settings::set_web_settings(

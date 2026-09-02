@@ -27,6 +27,8 @@ const WEB_BLOCKED: &[&str] = &[
     "export_template",
     "export_bank",
     "import_bank",
+    "export_patterns_file",
+    "import_patterns_file",
     // Webは /api/files/build を使う（パス引数のコマンドはブラウザへ公開しない）
     "read_compiled_file",
     "detect_graph_app_path",
@@ -63,23 +65,66 @@ fn ok<T: serde::Serialize>(v: T) -> Result<Value, String> {
 /// コマンド名 → 変更イベント種別（読み取り専用コマンドは None）
 fn event_kind(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
-        "add_tree_node" | "rename_tree_node" | "delete_tree_node" | "move_tree_node" => "tree",
+        "add_tree_node" | "rename_tree_node" | "delete_tree_node" | "move_tree_node"
+        | "create_bank_node" | "rename_bank_node" | "move_bank_node" | "reorder_bank_node"
+        | "delete_bank_node" => "tree",
         "create_problem" | "update_problem" | "duplicate_problem" | "delete_problem"
         | "restore_version" | "move_problems" | "delete_problems" | "import_bank"
         | "add_attachment" | "remove_attachment" | "create_sample_data" => "problems",
-        "create_project" | "update_project_meta" | "delete_project" | "duplicate_project"
-        | "add_problem_to_project" | "add_part_to_project" | "add_content_item"
-        | "update_project_item" | "refresh_item_from_bank" | "refresh_part_item_from_library"
-        | "remove_project_item" | "reorder_project_items" | "update_project_settings"
-        | "set_project_template" | "refresh_project_template" => "projects",
-        "create_part" | "update_part" | "duplicate_part" | "delete_part"
-        | "add_part_attachment" | "remove_part_attachment" => "parts",
-        "create_template" | "update_template" | "delete_template" | "duplicate_template"
-        | "restore_template_version" | "import_template_from_tex" | "import_template_file"
-        | "add_template_asset" | "remove_template_asset" => "templates",
-        "create_graph" | "update_graph" | "duplicate_graph" | "delete_graph"
-        | "restore_graph" | "restore_graph_version" | "save_graph_exports"
-        | "complete_graph_web_session" | "ensure_graph_from_asset" => "graphs",
+        "create_project"
+        | "update_project_meta"
+        | "delete_project"
+        | "duplicate_project"
+        | "add_problem_to_project"
+        | "add_part_to_project"
+        | "add_pattern_to_project"
+        | "refresh_pattern_item_from_library"
+        | "add_content_item"
+        | "update_project_item"
+        | "refresh_item_from_bank"
+        | "refresh_part_item_from_library"
+        | "remove_project_item"
+        | "reorder_project_items"
+        | "update_project_settings"
+        | "set_project_template"
+        | "refresh_project_template" => "projects",
+        "create_part"
+        | "update_part"
+        | "duplicate_part"
+        | "delete_part"
+        | "add_part_attachment"
+        | "remove_part_attachment" => "parts",
+        "create_pattern"
+        | "update_pattern"
+        | "duplicate_pattern"
+        | "delete_pattern"
+        | "link_problem_pattern"
+        | "unlink_problem_pattern"
+        | "link_pattern_relation"
+        | "unlink_pattern_relation"
+        | "restore_pattern_version"
+        | "import_patterns_json"
+        | "import_patterns_file"
+        | "apply_pattern_proposal"
+        | "apply_pattern_edit" => "patterns",
+        "create_template"
+        | "update_template"
+        | "delete_template"
+        | "duplicate_template"
+        | "restore_template_version"
+        | "import_template_from_tex"
+        | "import_template_file"
+        | "add_template_asset"
+        | "remove_template_asset" => "templates",
+        "create_graph"
+        | "update_graph"
+        | "duplicate_graph"
+        | "delete_graph"
+        | "restore_graph"
+        | "restore_graph_version"
+        | "save_graph_exports"
+        | "complete_graph_web_session"
+        | "ensure_graph_from_asset" => "graphs",
         "insert_graph_to_project" => "projects",
         "set_settings" => "settings",
         _ => return None,
@@ -96,6 +141,8 @@ fn extract_ids(args: &Value) -> Value {
         "partId",
         "templateId",
         "itemId",
+        "bankNodeId",
+        "patternId",
         "versionId",
         "attachmentId",
         "assetId",
@@ -123,7 +170,12 @@ fn extract_ids(args: &Value) -> Value {
 
 /// コマンド名とJSON引数でサービス関数を呼び出す。
 /// 引数キーは既存フロントエンドの invoke と同じ camelCase。
-pub fn dispatch(state: &Arc<AppState>, cmd: &str, args: Value, origin: Origin) -> Result<Value, String> {
+pub fn dispatch(
+    state: &Arc<AppState>,
+    cmd: &str,
+    args: Value,
+    origin: Origin,
+) -> Result<Value, String> {
     if origin == Origin::Web && WEB_BLOCKED.contains(&cmd) {
         return Err("このコマンドはブラウザからは利用できません".into());
     }
@@ -159,18 +211,72 @@ fn dispatch_inner(
             arg(args, "id")?,
             arg(args, "name")?,
         )?),
-        "delete_tree_node" => ok(tree::delete_tree_node(state, arg(args, "kind")?, arg(args, "id")?)?),
+        "delete_tree_node" => ok(tree::delete_tree_node(
+            state,
+            arg(args, "kind")?,
+            arg(args, "id")?,
+        )?),
         "move_tree_node" => ok(tree::move_tree_node(
             state,
             arg(args, "kind")?,
             arg(args, "id")?,
             arg(args, "delta")?,
         )?),
+        "get_bank_tree" => ok(tree::get_bank_tree(state)?),
+        "create_bank_node" => ok(tree::create_bank_node(
+            state,
+            arg(args, "parentId")?,
+            arg(args, "name")?,
+        )?),
+        "rename_bank_node" => ok(tree::rename_bank_node(
+            state,
+            arg(args, "id")?,
+            arg(args, "name")?,
+        )?),
+        "move_bank_node" => ok(tree::move_bank_node(
+            state,
+            arg(args, "id")?,
+            arg(args, "newParentId")?,
+            arg(args, "sortOrder")?,
+        )?),
+        "reorder_bank_node" => ok(tree::reorder_bank_node(
+            state,
+            arg(args, "id")?,
+            arg(args, "delta")?,
+        )?),
+        "get_bank_node_delete_impact" => {
+            ok(tree::get_bank_node_delete_impact(state, arg(args, "id")?)?)
+        }
+        "delete_bank_node" => ok(tree::delete_bank_node(
+            state,
+            arg(args, "id")?,
+            arg(args, "strategy")?,
+        )?),
 
         // ---- 問題 ----
-        "list_problems" => ok(problems::list_problems(state, arg(args, "unitId")?)?),
+        "list_problems" => {
+            if let Some(bank_node_id) = arg::<Option<i64>>(args, "bankNodeId")? {
+                ok(problems::list_problems_in_bank_node(state, bank_node_id)?)
+            } else {
+                ok(problems::list_problems(state, arg(args, "unitId")?)?)
+            }
+        }
         "get_problem" => ok(problems::get_problem(state, arg(args, "id")?)?),
-        "create_problem" => ok(problems::create_problem(state, arg(args, "unitId")?, arg(args, "title")?)?),
+        "create_problem" => {
+            if let Some(bank_node_id) = arg::<Option<i64>>(args, "bankNodeId")? {
+                ok(problems::create_problem_in_bank_node(
+                    state,
+                    bank_node_id,
+                    arg(args, "title")?,
+                )?)
+            } else {
+                ok(problems::create_problem(
+                    state,
+                    arg(args, "unitId")?,
+                    arg(args, "title")?,
+                )?)
+            }
+        }
         "update_problem" => ok(problems::update_problem(state, arg(args, "payload")?)?),
         "duplicate_problem" => ok(problems::duplicate_problem(state, arg(args, "id")?)?),
         "delete_problem" => ok(problems::delete_problem(state, arg(args, "id")?)?),
@@ -180,15 +286,128 @@ fn dispatch_inner(
         "list_all_tags" => ok(problems::list_all_tags(state)?),
         "search_problems" => ok(problems::search_problems(state, arg(args, "query")?)?),
 
+        // ---- 定石ライブラリ ----
+        "search_patterns" => ok(patterns::search_patterns(state, arg(args, "query")?)?),
+        "list_pattern_filter_values" => ok(patterns::list_pattern_filter_values(state)?),
+        "create_pattern" => ok(patterns::create_pattern(
+            state,
+            arg(args, "title")?,
+            arg(args, "patternType")?,
+        )?),
+        "get_pattern" => ok(patterns::get_pattern(state, arg(args, "id")?)?),
+        "update_pattern" => ok(patterns::update_pattern(state, arg(args, "payload")?)?),
+        "duplicate_pattern" => ok(patterns::duplicate_pattern(state, arg(args, "id")?)?),
+        "get_pattern_delete_impact" => ok(patterns::get_pattern_delete_impact(
+            state,
+            arg(args, "patternId")?,
+        )?),
+        "delete_pattern" => ok(patterns::delete_pattern(state, arg(args, "id")?)?),
+        "list_patterns_for_problem" => ok(patterns::list_patterns_for_problem(
+            state,
+            arg(args, "problemId")?,
+        )?),
+        "link_problem_pattern" => ok(patterns::link_problem_pattern(
+            state,
+            arg(args, "problemId")?,
+            arg(args, "patternId")?,
+            arg(args, "relationType")?,
+        )?),
+        "unlink_problem_pattern" => ok(patterns::unlink_problem_pattern(
+            state,
+            arg(args, "problemId")?,
+            arg(args, "patternId")?,
+        )?),
+        "link_pattern_relation" => ok(patterns::link_pattern_relation(
+            state,
+            arg(args, "fromPatternId")?,
+            arg(args, "toPatternId")?,
+            arg(args, "relationType")?,
+        )?),
+        "unlink_pattern_relation" => ok(patterns::unlink_pattern_relation(
+            state,
+            arg(args, "fromPatternId")?,
+            arg(args, "toPatternId")?,
+            arg(args, "relationType")?,
+        )?),
+        "list_pattern_versions" => ok(patterns::list_pattern_versions(
+            state,
+            arg(args, "patternId")?,
+        )?),
+        "get_pattern_version" => ok(patterns::get_pattern_version(
+            state,
+            arg(args, "versionId")?,
+        )?),
+        "restore_pattern_version" => ok(patterns::restore_pattern_version(
+            state,
+            arg(args, "versionId")?,
+            arg(args, "expectedVersion")?,
+        )?),
+        "export_patterns_json" => ok(patterns::export_patterns_json(
+            state,
+            arg(args, "patternIds")?,
+        )?),
+        "export_patterns_file" => ok(patterns::export_patterns_file(
+            state,
+            arg(args, "patternIds")?,
+            arg(args, "destPath")?,
+        )?),
+        "import_patterns_json" => ok(patterns::import_patterns_json(
+            state,
+            arg(args, "jsonText")?,
+        )?),
+        "import_patterns_file" => ok(patterns::import_patterns_file(state, arg(args, "path")?)?),
+        "start_pattern_extraction" => patterns::start_pattern_extraction(
+            state,
+            arg(args, "problemId")?,
+            arg(args, "style")?,
+            arg(args, "instruction")?,
+        ),
+        "pattern_card_latex" => ok(patterns::pattern_card_latex(
+            state,
+            arg(args, "patternId")?,
+        )?),
+        "start_pattern_edit" => patterns::start_pattern_edit(
+            state,
+            arg(args, "patternId")?,
+            arg(args, "instruction")?,
+        ),
+        "apply_pattern_edit" => ok(patterns::apply_pattern_edit(
+            state,
+            arg(args, "patternId")?,
+            arg(args, "expectedVersion")?,
+            arg(args, "proposal")?,
+        )?),
+        "start_pattern_image_import" => patterns::start_pattern_image_import(
+            state,
+            arg(args, "inputNames")?,
+            arg(args, "note")?,
+        ),
+        "start_pattern_generalization" => patterns::start_pattern_generalization(
+            state,
+            arg(args, "problemId")?,
+            arg(args, "proposal")?,
+        ),
+        "apply_pattern_proposal" => ok(patterns::apply_pattern_proposal(
+            state,
+            arg(args, "payload")?,
+        )?),
+
         // ---- 教材プロジェクト ----
         "list_projects" => ok(projects::list_projects(state)?),
-        "create_project" => ok(projects::create_project(state, arg(args, "name")?, arg(args, "templateId")?)?),
+        "create_project" => ok(projects::create_project(
+            state,
+            arg(args, "name")?,
+            arg(args, "templateId")?,
+        )?),
         "set_project_template" => ok(projects::set_project_template(
             state,
             arg(args, "projectId")?,
             arg(args, "templateId")?,
         )?),
-        "refresh_project_template" => ok(projects::refresh_project_template(state, arg(args, "projectId")?)?),
+        "refresh_project_template" => ok(projects::refresh_project_template(
+            state,
+            arg(args, "projectId")?,
+        )?),
         "update_project_meta" => ok(projects::update_project_meta(
             state,
             arg(args, "id")?,
@@ -203,6 +422,15 @@ fn dispatch_inner(
             state,
             arg(args, "projectId")?,
             arg(args, "problemId")?,
+        )?),
+        "add_pattern_to_project" => ok(projects::add_pattern_to_project(
+            state,
+            arg(args, "projectId")?,
+            arg(args, "patternId")?,
+        )?),
+        "refresh_pattern_item_from_library" => ok(projects::refresh_pattern_item_from_library(
+            state,
+            arg(args, "itemId")?,
         )?),
         "add_part_to_project" => ok(projects::add_part_to_project(
             state,
@@ -221,10 +449,14 @@ fn dispatch_inner(
                 .map_err(|e| format!("引数が不正です: {}", e))?;
             ok(projects::update_project_item(state, payload)?)
         }
-        "refresh_item_from_bank" => ok(projects::refresh_item_from_bank(state, arg(args, "itemId")?)?),
-        "refresh_part_item_from_library" => {
-            ok(projects::refresh_part_item_from_library(state, arg(args, "itemId")?)?)
-        }
+        "refresh_item_from_bank" => ok(projects::refresh_item_from_bank(
+            state,
+            arg(args, "itemId")?,
+        )?),
+        "refresh_part_item_from_library" => ok(projects::refresh_part_item_from_library(
+            state,
+            arg(args, "itemId")?,
+        )?),
         "remove_project_item" => ok(projects::remove_project_item(state, arg(args, "itemId")?)?),
         "reorder_project_items" => ok(projects::reorder_project_items(
             state,
@@ -242,7 +474,15 @@ fn dispatch_inner(
         "search_parts" => ok(parts::search_parts(state, arg(args, "query")?)?),
         "list_all_part_tags" => ok(parts::list_all_part_tags(state)?),
         "list_part_categories" => ok(parts::list_part_categories(state)?),
-        "create_part" => ok(parts::create_part(state, arg(args, "title")?)?),
+        "create_part" => {
+            let bank_node_id: Option<i64> = arg(args, "bankNodeId")?;
+            let unit_id: Option<i64> = arg(args, "unitId")?;
+            ok(if bank_node_id.is_some() {
+                parts::create_part_in_bank_node(state, arg(args, "title")?, bank_node_id)?
+            } else {
+                parts::create_part_in_unit(state, arg(args, "title")?, unit_id)?
+            })
+        }
         "get_part" => ok(parts::get_part(state, arg(args, "id")?)?),
         "update_part" => ok(parts::update_part(state, arg(args, "payload")?)?),
         "duplicate_part" => ok(parts::duplicate_part(state, arg(args, "id")?)?),
@@ -253,7 +493,10 @@ fn dispatch_inner(
             arg(args, "partId")?,
             arg(args, "sourcePath")?,
         )?),
-        "remove_part_attachment" => ok(parts::remove_part_attachment(state, arg(args, "attachmentId")?)?),
+        "remove_part_attachment" => ok(parts::remove_part_attachment(
+            state,
+            arg(args, "attachmentId")?,
+        )?),
 
         // ---- テンプレート ----
         "list_templates" => ok(templates::list_templates(state)?),
@@ -262,8 +505,14 @@ fn dispatch_inner(
         "update_template" => ok(templates::update_template(state, arg(args, "payload")?)?),
         "delete_template" => ok(templates::delete_template(state, arg(args, "id")?)?),
         "duplicate_template" => ok(templates::duplicate_template(state, arg(args, "id")?)?),
-        "list_template_versions" => ok(templates::list_template_versions(state, arg(args, "templateId")?)?),
-        "restore_template_version" => ok(templates::restore_template_version(state, arg(args, "versionId")?)?),
+        "list_template_versions" => ok(templates::list_template_versions(
+            state,
+            arg(args, "templateId")?,
+        )?),
+        "restore_template_version" => ok(templates::restore_template_version(
+            state,
+            arg(args, "versionId")?,
+        )?),
         "analyze_tex_file" => ok(templates::analyze_tex_file(state, arg(args, "path")?)?),
         "import_template_from_tex" => ok(templates::import_template_from_tex(
             state,
@@ -276,8 +525,15 @@ fn dispatch_inner(
             arg(args, "templateId")?,
             arg(args, "sourcePath")?,
         )?),
-        "remove_template_asset" => ok(templates::remove_template_asset(state, arg(args, "assetId")?)?),
-        "export_template" => ok(templates::export_template(state, arg(args, "id")?, arg(args, "destPath")?)?),
+        "remove_template_asset" => ok(templates::remove_template_asset(
+            state,
+            arg(args, "assetId")?,
+        )?),
+        "export_template" => ok(templates::export_template(
+            state,
+            arg(args, "id")?,
+            arg(args, "destPath")?,
+        )?),
         "import_template_file" => ok(templates::import_template_file(state, arg(args, "path")?)?),
 
         // ---- LaTeX ----
@@ -300,9 +556,21 @@ fn dispatch_inner(
             arg(args, "latexSource")?,
             arg(args, "layoutMode")?,
         )?),
-        "generate_tex" => ok(latex::generate_tex(state, arg(args, "projectId")?, arg(args, "kind")?)?),
-        "export_tex" => ok(latex::export_tex(state, arg(args, "projectId")?, arg(args, "kind")?)?),
-        "compile_pdf" => ok(latex::compile_pdf(state, arg(args, "projectId")?, arg(args, "kind")?)?),
+        "generate_tex" => ok(latex::generate_tex(
+            state,
+            arg(args, "projectId")?,
+            arg(args, "kind")?,
+        )?),
+        "export_tex" => ok(latex::export_tex(
+            state,
+            arg(args, "projectId")?,
+            arg(args, "kind")?,
+        )?),
+        "compile_pdf" => ok(latex::compile_pdf(
+            state,
+            arg(args, "projectId")?,
+            arg(args, "kind")?,
+        )?),
         "detect_tex" => ok(latex::detect_tex(state)?),
         "read_compiled_file" => ok(latex::read_compiled_file(state, arg(args, "path")?)?),
 
@@ -315,7 +583,21 @@ fn dispatch_inner(
             arg(args, "destPath")?,
         )?),
         "import_bank" => ok(bank::import_bank(state, arg(args, "path")?)?),
-        "move_problems" => ok(bank::move_problems(state, arg(args, "problemIds")?, arg(args, "unitId")?)?),
+        "move_problems" => {
+            if let Some(bank_node_id) = arg::<Option<i64>>(args, "bankNodeId")? {
+                ok(bank::move_problems_to_bank_node(
+                    state,
+                    arg(args, "problemIds")?,
+                    bank_node_id,
+                )?)
+            } else {
+                ok(bank::move_problems(
+                    state,
+                    arg(args, "problemIds")?,
+                    arg(args, "unitId")?,
+                )?)
+            }
+        }
         "delete_problems" => ok(bank::delete_problems(state, arg(args, "problemIds")?)?),
 
         // ---- 設定・添付・サンプル ----
@@ -339,14 +621,22 @@ fn dispatch_inner(
             arg(args, "problemId")?,
             arg(args, "sourcePath")?,
         )?),
-        "remove_attachment" => ok(attachments::remove_attachment(state, arg(args, "attachmentId")?)?),
+        "remove_attachment" => ok(attachments::remove_attachment(
+            state,
+            arg(args, "attachmentId")?,
+        )?),
         "create_sample_data" => ok(sample::create_sample_data(state)?),
         "has_any_data" => ok(sample::has_any_data(state)?),
 
         // ---- グラフ作成アプリ連携（デスクトップのみ） ----
         "detect_graph_app_path" => ok(graph_integration::detect_graph_app_path(state)?),
-        "test_graph_integration_settings" => ok(graph_integration::test_graph_integration_settings(state)?),
-        "start_graph_integration" => ok(graph_integration::start_graph_integration(state, arg(args, "payload")?)?),
+        "test_graph_integration_settings" => {
+            ok(graph_integration::test_graph_integration_settings(state)?)
+        }
+        "start_graph_integration" => ok(graph_integration::start_graph_integration(
+            state,
+            arg(args, "payload")?,
+        )?),
         "poll_graph_integration" => ok(graph_integration::poll_graph_integration(
             state,
             arg(args, "requestId")?,
@@ -374,7 +664,10 @@ fn dispatch_inner(
         // ---- グラフ正本・Web編集（デスクトップ/Web共通） ----
         "list_graphs" => ok(graphs::list_graphs(state, arg(args, "includeDeleted")?)?),
         "get_graph" => ok(graphs::get_graph(state, arg(args, "id")?)?),
-        "ensure_graph_from_asset" => ok(graphs::ensure_graph_from_asset(state, arg(args, "assetId")?)?),
+        "ensure_graph_from_asset" => ok(graphs::ensure_graph_from_asset(
+            state,
+            arg(args, "assetId")?,
+        )?),
         "list_graph_versions" => ok(graphs::list_graph_versions(state, arg(args, "graphId")?)?),
         "get_graph_version" => ok(graphs::get_graph_version(state, arg(args, "versionId")?)?),
         "create_graph" => ok(graphs::create_graph(state, arg(args, "payload")?)?),
@@ -429,8 +722,9 @@ fn dispatch_inner(
         "server_settings_get" => {
             let port = crate::server::configured_port(state);
             let lan = crate::server::get_server_setting(state, "lan_mode").as_deref() == Some("1");
-            let autostart_server =
-                crate::server::get_server_setting(state, "server_autostart").as_deref() == Some("1");
+            let autostart_server = crate::server::get_server_setting(state, "server_autostart")
+                .as_deref()
+                == Some("1");
             ok(serde_json::json!({
                 "port": port,
                 "lanMode": lan,
@@ -448,7 +742,11 @@ fn dispatch_inner(
                 crate::server::set_server_setting(state, "lan_mode", if lan { "1" } else { "0" })?;
             }
             if let Some(auto) = args.get("serverAutostart").and_then(|v| v.as_bool()) {
-                crate::server::set_server_setting(state, "server_autostart", if auto { "1" } else { "0" })?;
+                crate::server::set_server_setting(
+                    state,
+                    "server_autostart",
+                    if auto { "1" } else { "0" },
+                )?;
             }
             ok(())
         }
@@ -460,10 +758,20 @@ fn dispatch_inner(
         "backup_now" => crate::server::backup::backup_now(state),
         "list_backups" => crate::server::backup::list_backups(state),
         "restore_backup" => {
-            let r = ok(crate::server::backup::restore_backup(state, &arg::<String>(args, "fileName")?)?);
+            let r = ok(crate::server::backup::restore_backup(
+                state,
+                &arg::<String>(args, "fileName")?,
+            )?);
             if r.is_ok() {
                 // 復元後は全データが変わるため各画面へ更新を通知
-                for kind in ["tree", "problems", "projects", "parts", "templates", "settings"] {
+                for kind in [
+                    "tree",
+                    "problems",
+                    "projects",
+                    "parts",
+                    "templates",
+                    "settings",
+                ] {
                     state.emit(kind, "restore_backup", Value::Null);
                 }
             }
@@ -530,20 +838,50 @@ fn dispatch_inner(
             arg(args, "category")?,
             arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
         )?),
-        "ai_save_as_problem" => ok(crate::ai::save_as_problem(
-            state,
-            arg(args, "jobId")?,
-            arg(args, "unitId")?,
-            arg::<Option<String>>(args, "title")?.unwrap_or_default(),
-            arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
-        )?),
-        "ai_save_extracted_problems" => ok(crate::ai::save_extracted_problems(
-            state,
-            arg(args, "jobId")?,
-            arg(args, "unitId")?,
-            arg(args, "problems")?,
-            arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false),
-        )?),
+        "ai_save_as_problem" => {
+            let job_id = arg(args, "jobId")?;
+            let title = arg::<Option<String>>(args, "title")?.unwrap_or_default();
+            let confirmed = arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false);
+            if let Some(bank_node_id) = arg::<Option<i64>>(args, "bankNodeId")? {
+                ok(crate::ai::save_as_problem_in_bank_node(
+                    state,
+                    job_id,
+                    bank_node_id,
+                    title,
+                    confirmed,
+                )?)
+            } else {
+                ok(crate::ai::save_as_problem(
+                    state,
+                    job_id,
+                    arg(args, "unitId")?,
+                    title,
+                    confirmed,
+                )?)
+            }
+        }
+        "ai_save_extracted_problems" => {
+            let job_id = arg(args, "jobId")?;
+            let problems = arg(args, "problems")?;
+            let confirmed = arg::<Option<bool>>(args, "confirmed")?.unwrap_or(false);
+            if let Some(bank_node_id) = arg::<Option<i64>>(args, "bankNodeId")? {
+                ok(crate::ai::save_extracted_problems_in_bank_node(
+                    state,
+                    job_id,
+                    bank_node_id,
+                    problems,
+                    confirmed,
+                )?)
+            } else {
+                ok(crate::ai::save_extracted_problems(
+                    state,
+                    job_id,
+                    arg(args, "unitId")?,
+                    problems,
+                    confirmed,
+                )?)
+            }
+        }
         "ai_mark_inserted" => ok(crate::ai::mark_inserted(
             state,
             arg(args, "jobId")?,
@@ -579,22 +917,16 @@ fn dispatch_inner(
             arg(args, "inputNames")?,
             arg(args, "context")?,
         ),
-        "ai_chat_confirm" => crate::ai_chat::confirm_pending(
-            state,
-            arg(args, "sessionId")?,
-            arg(args, "approved")?,
-        ),
-        "ai_chat_cancel" => ok(crate::ai_chat::cancel(state, arg(args, "sessionId")?)?),
-        "ai_chat_regenerate" => {
-            crate::ai_chat::regenerate(state, arg(args, "sessionId")?)
+        "ai_chat_confirm" => {
+            crate::ai_chat::confirm_pending(state, arg(args, "sessionId")?, arg(args, "approved")?)
         }
+        "ai_chat_cancel" => ok(crate::ai_chat::cancel(state, arg(args, "sessionId")?)?),
+        "ai_chat_regenerate" => crate::ai_chat::regenerate(state, arg(args, "sessionId")?),
         "ai_chat_undo" => crate::ai_chat::undo(state, arg(args, "sessionId")?),
         "ai_chat_redo" => crate::ai_chat::redo(state, arg(args, "sessionId")?),
-        "ai_chat_history" => crate::ai_chat::get_history(
-            state,
-            arg(args, "sessionId")?,
-            arg(args, "limit")?,
-        ),
+        "ai_chat_history" => {
+            crate::ai_chat::get_history(state, arg(args, "sessionId")?, arg(args, "limit")?)
+        }
         "ai_chat_read_attachment" => crate::ai_chat::read_attachment(
             state,
             arg(args, "sessionId")?,

@@ -6,6 +6,8 @@ pub mod graph_web;
 pub mod graphs;
 pub mod latex;
 pub mod parts;
+pub mod pattern_card;
+pub mod patterns;
 pub mod problems;
 pub mod projects;
 pub mod sample;

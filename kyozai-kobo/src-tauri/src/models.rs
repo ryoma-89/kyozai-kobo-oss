@@ -1,11 +1,123 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionStrategySuitability {
+    #[serde(default)]
+    pub exam_answer: bool,
+    #[serde(default)]
+    pub textbook_explanation: bool,
+    #[serde(default)]
+    pub alternative_solution: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionStrategy {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default)]
+    pub difficulty: Option<String>,
+    #[serde(default)]
+    pub answer_length: Option<String>,
+    #[serde(default)]
+    pub concepts: Vec<String>,
+    #[serde(default)]
+    pub suitability: Option<SolutionStrategySuitability>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionPlanStep {
+    pub id: String,
+    pub purpose: String,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionPlan {
+    pub strategy_id: String,
+    #[serde(default)]
+    pub outline: Vec<SolutionPlanStep>,
+    #[serde(default)]
+    pub required_conditions: Vec<String>,
+    #[serde(default)]
+    pub important_checks: Vec<String>,
+    #[serde(default)]
+    pub equality_conditions: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationIssue {
+    pub severity: String,
+    pub message: String,
+    #[serde(default)]
+    pub location: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationResult {
+    pub valid: bool,
+    #[serde(default)]
+    pub issues: Vec<VerificationIssue>,
+    #[serde(default)]
+    pub corrected_solution: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionBlock {
+    pub id: String,
+    pub content: String,
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplanationSection {
+    #[serde(default)]
+    pub solution_block_ids: Vec<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemSolutionVariant {
+    pub id: String,
+    pub strategy: SolutionStrategy,
+    pub role: String,
+    #[serde(default)]
+    pub plan: Option<SolutionPlan>,
+    #[serde(default)]
+    pub solution: String,
+    #[serde(default)]
+    pub solution_blocks: Vec<SolutionBlock>,
+    #[serde(default)]
+    pub verification: Option<VerificationResult>,
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default)]
+    pub explanation_sections: Vec<ExplanationSection>,
+    #[serde(default)]
+    pub explanation_outdated: bool,
+}
+
 #[derive(Serialize)]
 pub struct UnitNode {
     pub id: i64,
     pub name: String,
     pub sort_order: i64,
     pub problem_count: i64,
+    pub part_count: i64,
 }
 
 #[derive(Serialize)]
@@ -24,9 +136,41 @@ pub struct SubjectNode {
     pub fields: Vec<FieldNode>,
 }
 
+#[derive(Serialize, Clone)]
+pub struct BankNode {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub name: String,
+    pub sort_order: i64,
+    /// このノードに直接所属する問題数
+    pub problem_count: i64,
+    /// このノード自身と全子孫に所属する問題数
+    pub descendant_problem_count: i64,
+    /// このノードに直接所属する部品数
+    pub part_count: i64,
+    /// このノード自身と全子孫に所属する部品数
+    pub descendant_part_count: i64,
+    /// 旧Unit由来のノードだけが持つ互換ID
+    pub legacy_unit_id: Option<i64>,
+    pub children: Vec<BankNode>,
+}
+
+#[derive(Serialize)]
+pub struct BankNodeDeleteImpact {
+    pub node_id: i64,
+    pub child_node_count: i64,
+    pub direct_problem_count: i64,
+    pub descendant_problem_count: i64,
+    pub direct_part_count: i64,
+    pub descendant_part_count: i64,
+    pub parent_id: Option<i64>,
+}
+
 #[derive(Serialize)]
 pub struct ProblemSummary {
     pub id: i64,
+    pub bank_node_id: i64,
+    /// 旧API・AIとの互換用。問題バンクの正本は bank_node_id。
     pub unit_id: i64,
     pub title: String,
     pub difficulty: String,
@@ -35,6 +179,7 @@ pub struct ProblemSummary {
     pub answer_completed: bool,
     pub explanation_completed: bool,
     pub tags: Vec<String>,
+    pub created_at: String,
     pub updated_at: String,
     pub usage_count: i64,
 }
@@ -51,6 +196,8 @@ pub struct Attachment {
 #[derive(Serialize)]
 pub struct ProblemFull {
     pub id: i64,
+    pub bank_node_id: i64,
+    /// 旧API・AIとの互換用。問題バンクの正本は bank_node_id。
     pub unit_id: i64,
     pub title: String,
     /// 一段組用の問題文
@@ -59,6 +206,9 @@ pub struct ProblemFull {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    /// Strategy -> Solution -> Explanation を保持する拡張データ。
+    /// 従来の answer_latex / explanation_latex は主解法と別解を連結した互換出力として残す。
+    pub solution_variants: Vec<ProblemSolutionVariant>,
     pub answer_completed: bool,
     pub explanation_completed: bool,
     pub difficulty: String,
@@ -76,6 +226,8 @@ pub struct ProblemFull {
 #[derive(Deserialize)]
 pub struct ProblemUpdate {
     pub id: i64,
+    #[serde(default)]
+    pub bank_node_id: Option<i64>,
     pub unit_id: i64,
     pub title: String,
     /// 一段組用の問題文
@@ -84,6 +236,8 @@ pub struct ProblemUpdate {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    #[serde(default)]
+    pub solution_variants: Vec<ProblemSolutionVariant>,
     #[serde(default)]
     pub answer_completed: bool,
     #[serde(default)]
@@ -114,6 +268,7 @@ pub struct VersionFull {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    pub solution_variants: Vec<ProblemSolutionVariant>,
     pub answer_completed: bool,
     pub explanation_completed: bool,
     pub difficulty: String,
@@ -126,6 +281,10 @@ pub struct VersionFull {
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub text: String,
+    #[serde(default)]
+    pub bank_node_id: Option<i64>,
+    #[serde(default)]
+    pub include_descendants: Option<bool>,
     pub subject_id: Option<i64>,
     pub field_id: Option<i64>,
     pub unit_id: Option<i64>,
@@ -148,10 +307,386 @@ pub struct SearchResult {
     pub tags: Vec<String>,
     pub updated_at: String,
     pub usage_count: i64,
+    pub bank_node_id: i64,
+    pub bank_path: String,
     pub subject_name: String,
     pub field_name: String,
     pub unit_name: String,
     pub unit_id: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct PatternFacets {
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub goals: Vec<String>,
+    #[serde(default)]
+    pub operations: Vec<String>,
+    #[serde(default)]
+    pub structures: Vec<String>,
+    #[serde(default)]
+    pub situations: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct PatternStrategyInput {
+    #[serde(default)]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub parent_strategy_id: Option<i64>,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub condition: String,
+    #[serde(default)]
+    pub reasoning: String,
+    #[serde(default)]
+    pub branch_label: String,
+    pub sort_order: i64,
+}
+
+/// Problemから抽出した定石候補内の手法。canonicalなpattern_strategiesへは
+/// ユーザーがProposalを承認した時だけ変換される。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternProposalStrategy {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub condition: String,
+    #[serde(default)]
+    pub reasoning: String,
+    #[serde(default)]
+    pub sort_order: i64,
+}
+
+/// AIが推定した上位（より一般的な）定石の手掛かり。canonicalなpatternsへは保存せず、
+/// ユーザーがchild_patternとして承認したときだけ関連付けの材料になる。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternParentHint {
+    pub title: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// AI抽出結果の一時Proposal。ai_conversion_jobsの構造化結果として保持し、
+/// patternsテーブルへは直接保存しない。
+///
+/// rawTechnique（元問題で実際に使われた具体的操作）とgeneralized側の本文
+/// （title/summary/situation/principle/strategies）を別項目として持ち、
+/// 「この問題で何をしたか」と「他の問題でも使える判断知識」を分離する。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternProposal {
+    #[serde(default)]
+    pub proposal_id: String,
+    /// 元Problemで実際に使われた具体的手法。固有名・数値を含んでよい。
+    #[serde(default)]
+    pub raw_technique: String,
+    pub title: String,
+    pub pattern_type: String,
+    // 概要・状況・基本原則はカードに出さないため、AIは生成しない。
+    // 旧データを読み込めるように項目自体は残す。
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub situation: String,
+    #[serde(default)]
+    pub principle: String,
+    #[serde(default)]
+    pub strategies: Vec<PatternProposalStrategy>,
+    #[serde(default)]
+    pub cautions: Vec<String>,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub goals: Vec<String>,
+    #[serde(default)]
+    pub operations: Vec<String>,
+    #[serde(default)]
+    pub structures: Vec<String>,
+    #[serde(default)]
+    pub situations: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub source_type: String,
+    #[serde(default)]
+    pub matched_pattern_id: Option<i64>,
+    #[serde(default)]
+    pub matched_pattern_title: Option<String>,
+    #[serde(default)]
+    pub similarity_reason: String,
+    #[serde(default)]
+    pub action_recommendation: String,
+    /// rawTechniqueから何を取り除いて一般化したか。
+    #[serde(default)]
+    pub generalization_reason: String,
+    /// 抽象度。1=principle / 2=strategy / 3=technique / 4=specialized。
+    #[serde(default)]
+    pub specificity_level: i64,
+    /// 0.0〜1.0。他の問題へ再利用できる度合いのAI自己評価。
+    #[serde(default)]
+    pub reusability_score: f64,
+    /// 既存定石検索へ使う一般化されたキーワード。titleそのものより広く当てる。
+    #[serde(default)]
+    pub search_concepts: Vec<String>,
+    /// 元問題固有の対象へ限定されすぎているか。
+    #[serde(default)]
+    pub is_overly_specific: bool,
+    /// SituationやPurposeを失った単なる操作名になっていないか。
+    #[serde(default)]
+    pub is_overly_general: bool,
+    /// 具体・一般どちらかへ偏っている場合の理由。
+    #[serde(default)]
+    pub specificity_reason: String,
+    /// より一般的な上位定石の手掛かり。
+    #[serde(default)]
+    pub possible_parent_pattern: Option<PatternParentHint>,
+    /// 粒度の方針。generalize=もう一段一般化すべき / keep_as_is=今の粒度が定石として適切 /
+    /// split_general_and_specific=一般定石と特殊化の両方を残すべき。
+    #[serde(default)]
+    pub generalization_decision: String,
+    /// AIが推奨する保存方式。ユーザーの選択を拘束しない参考値。
+    #[serde(default)]
+    pub recommended_storage: String,
+    /// 自動再一般化を行った回数。無限ループ防止のため上限を設ける。
+    #[serde(default)]
+    pub generalization_pass_count: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternExtractionResult {
+    pub schema_version: i64,
+    pub kind: String,
+    #[serde(default)]
+    pub patterns: Vec<PatternProposal>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyPatternProposalPayload {
+    /// 抽出元Problem。画像・AI Chat・手動由来では0（Problemに紐づかない）。
+    #[serde(default)]
+    pub problem_id: i64,
+    /// 画像ファイル名やチャットセッション等、由来を1行で残すための参照。
+    #[serde(default)]
+    pub source_reference: String,
+    pub proposal: PatternProposal,
+    pub action: String,
+    #[serde(default)]
+    pub target_pattern_id: Option<i64>,
+    /// Noneなら関連付けない。指定する場合は applicable / used。
+    #[serde(default)]
+    pub link_relation_type: Option<String>,
+    /// create_child_patternのときだけ使う上位定石。specialization関連を張る。
+    #[serde(default)]
+    pub parent_pattern_id: Option<i64>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyPatternProposalResult {
+    pub pattern_id: i64,
+    pub action: String,
+    pub created: bool,
+    pub linked: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PatternStrategy {
+    pub id: i64,
+    pub pattern_id: i64,
+    pub parent_strategy_id: Option<i64>,
+    pub title: String,
+    pub description: String,
+    pub condition: String,
+    pub reasoning: String,
+    pub branch_label: String,
+    pub sort_order: i64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PatternSummary {
+    pub id: i64,
+    pub uuid: String,
+    pub title: String,
+    pub summary: String,
+    pub pattern_type: String,
+    pub tags: Vec<String>,
+    pub facets: PatternFacets,
+    pub updated_at: String,
+    pub version: i64,
+    pub strategy_count: i64,
+    pub problem_count: i64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PatternRelationView {
+    pub from_pattern_id: i64,
+    pub to_pattern_id: i64,
+    pub pattern_id: i64,
+    pub title: String,
+    pub pattern_type: String,
+    pub relation_type: String,
+    pub direction: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PatternProblemView {
+    pub problem_id: i64,
+    pub title: String,
+    pub bank_node_id: i64,
+    pub bank_path: String,
+    pub relation_type: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ProblemPatternView {
+    pub pattern_id: i64,
+    pub title: String,
+    pub summary: String,
+    pub pattern_type: String,
+    pub relation_type: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PatternFull {
+    pub id: i64,
+    pub uuid: String,
+    pub title: String,
+    pub summary: String,
+    pub pattern_type: String,
+    pub situation: String,
+    pub principle: String,
+    pub cautions: String,
+    pub examples: String,
+    pub source_note: String,
+    pub tags: Vec<String>,
+    pub facets: PatternFacets,
+    pub strategies: Vec<PatternStrategy>,
+    pub related_patterns: Vec<PatternRelationView>,
+    pub related_problems: Vec<PatternProblemView>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+
+#[derive(Deserialize)]
+pub struct PatternUpdate {
+    pub id: i64,
+    #[serde(default)]
+    pub expected_version: Option<i64>,
+    pub title: String,
+    pub summary: String,
+    pub pattern_type: String,
+    pub situation: String,
+    pub principle: String,
+    pub cautions: String,
+    pub examples: String,
+    #[serde(default)]
+    pub source_note: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub facets: PatternFacets,
+    #[serde(default)]
+    pub strategies: Vec<PatternStrategyInput>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct PatternSearchQuery {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub pattern_type: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub goal: Option<String>,
+    #[serde(default)]
+    pub operation: Option<String>,
+    #[serde(default)]
+    pub structure: Option<String>,
+    #[serde(default)]
+    pub situation: Option<String>,
+    #[serde(default)]
+    pub exclude_id: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+#[derive(Serialize, Default)]
+pub struct PatternFilterValues {
+    pub pattern_types: Vec<String>,
+    pub tags: Vec<String>,
+    pub domains: Vec<String>,
+    pub goals: Vec<String>,
+    pub operations: Vec<String>,
+    pub structures: Vec<String>,
+    pub situations: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct PatternDeleteImpact {
+    pub pattern_id: i64,
+    pub problem_count: i64,
+    pub related_pattern_count: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PatternSnapshot {
+    /// スナップショットを取った時点の定石の版。教材側で「新しい版があるか」を見るために持つ。
+    /// 版を持たない旧スナップショットは0になる。
+    #[serde(default)]
+    pub version: i64,
+    pub uuid: String,
+    pub title: String,
+    pub summary: String,
+    pub pattern_type: String,
+    pub situation: String,
+    pub principle: String,
+    pub cautions: String,
+    pub examples: String,
+    pub source_note: String,
+    pub tags: Vec<String>,
+    pub facets: PatternFacets,
+    pub strategies: Vec<PatternStrategyInput>,
+}
+
+#[derive(Serialize)]
+pub struct PatternVersionSummary {
+    pub id: i64,
+    pub pattern_id: i64,
+    pub title: String,
+    pub version: i64,
+    pub saved_at: String,
+}
+
+#[derive(Serialize)]
+pub struct PatternVersionFull {
+    pub id: i64,
+    pub pattern_id: i64,
+    pub version: i64,
+    pub saved_at: String,
+    pub snapshot: PatternSnapshot,
+}
+
+#[derive(Serialize)]
+pub struct ImportPatternsResult {
+    pub created: i64,
+    pub skipped: i64,
+    pub relations_created: i64,
+    pub problem_relations_created: i64,
 }
 
 #[derive(Serialize)]
@@ -204,6 +739,12 @@ pub struct ProjectItem {
     pub source_exists: bool,
     /// 部品ライブラリ側が更新されているか（スナップショットとの差分有無）
     pub part_updated: bool,
+    /// 定石項目の元Pattern（削除済みならNone）
+    pub pattern_id: Option<i64>,
+    /// 追加時点のPatternSnapshotのJSON。教材側の正本はこちら。
+    pub snap_pattern_json: String,
+    /// 定石ライブラリ側に新しい版があるか
+    pub pattern_updated: bool,
     /// 楽観的ロック用バージョン
     pub version: i64,
 }
@@ -396,6 +937,8 @@ pub struct PartAttachment {
 #[derive(Serialize)]
 pub struct PartSummary {
     pub id: i64,
+    pub bank_node_id: Option<i64>,
+    pub bank_path: String,
     pub unit_id: Option<i64>,
     pub unit_name: String,
     pub field_id: Option<i64>,
@@ -419,6 +962,8 @@ pub struct PartSummary {
 #[derive(Serialize)]
 pub struct PartFull {
     pub id: i64,
+    pub bank_node_id: Option<i64>,
+    pub bank_path: String,
     pub unit_id: Option<i64>,
     pub unit_name: String,
     pub field_id: Option<i64>,
@@ -447,6 +992,8 @@ pub struct PartFull {
 pub struct PartUpdate {
     pub id: i64,
     #[serde(default)]
+    pub bank_node_id: Option<i64>,
+    #[serde(default)]
     pub unit_id: Option<i64>,
     pub title: String,
     pub part_type: String,
@@ -471,6 +1018,10 @@ fn default_part_layout_mode() -> String {
 #[derive(Deserialize)]
 pub struct PartSearchQuery {
     pub text: String,
+    #[serde(default)]
+    pub bank_node_id: Option<i64>,
+    #[serde(default)]
+    pub include_descendants: Option<bool>,
     pub subject_id: Option<i64>,
     pub field_id: Option<i64>,
     pub unit_id: Option<i64>,
@@ -480,6 +1031,7 @@ pub struct PartSearchQuery {
     pub difficulty_rank: Option<String>,
     pub difficulty_ranks: Option<Vec<String>>,
     pub required_filter: Option<String>,
+    pub unassigned_only: Option<bool>,
 }
 
 #[derive(Serialize)]

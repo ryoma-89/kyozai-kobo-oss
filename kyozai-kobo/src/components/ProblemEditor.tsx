@@ -15,6 +15,7 @@ import {
   listVersions,
   removeAttachment,
   restoreVersion,
+  patternCardLatex,
   updateProblem,
   uploadAttachment,
 } from "../api";
@@ -23,19 +24,31 @@ import { moveProblems } from "../api";
 import { openAiChatForTarget } from "../aiChat";
 import { useApp } from "../store";
 import { compiledPdfUrl, ConflictError, isTauri, revokeIfBlobUrl } from "../transport";
-import type { AiJob, GraphAssetSummary, ProblemFull, VersionFull, VersionSummary } from "../types";
+import type {
+  AiJob,
+  BankNode,
+  GraphAssetSummary,
+  ProblemFull,
+  ProblemSolutionVariant,
+  VersionFull,
+  VersionSummary,
+} from "../types";
 import {
   AiConvertDialog,
   inferSolutionSubject,
   type AiConvertPreset,
   type ContentReviewFixTarget,
 } from "./AiConvertDialog";
+import { AiSolutionWorkflowDialog } from "./AiSolutionWorkflowDialog";
 import { ConflictDialog } from "./ConflictDialog";
 import { DocumentPreview, type PreviewLayout } from "./DocumentPreview";
 import { LatexEditor, type LatexEditorHandle } from "./LatexEditor";
 import { PdfCanvasViewer } from "./PdfCanvasViewer";
+import { ProblemPatternsPanel } from "./ProblemPatternsPanel";
+import { PatternExtractionDialog } from "./PatternExtractionDialog";
 import { Icon } from "./Icon";
-import { UnitPicker } from "./ProblemList";
+import { PatternPicker } from "./PatternPicker";
+import { BankNodePicker } from "./ProblemList";
 import { DIFFICULTY_RANKS, DifficultyRankBadge, Modal } from "./ui";
 
 type Tab = "statement" | "answer" | "explanation";
@@ -116,6 +129,7 @@ function editableProblemSignature(problem: ProblemFull): string {
     statement_latex_two_column: problem.statement_latex_two_column,
     answer_latex: problem.answer_latex,
     explanation_latex: problem.explanation_latex,
+    solution_variants: problem.solution_variants,
     answer_completed: problem.answer_completed,
     explanation_completed: problem.explanation_completed,
     difficulty: problem.difficulty,
@@ -126,12 +140,22 @@ function editableProblemSignature(problem: ProblemFull): string {
   });
 }
 
+function findBankPath(nodes: BankNode[], id: number, prefix: BankNode[] = []): BankNode[] {
+  for (const node of nodes) {
+    const path = [...prefix, node];
+    if (node.id === id) return path;
+    const nested = findBankPath(node.children, id, path);
+    if (nested.length) return nested;
+  }
+  return [];
+}
+
 /** 問題編集画面（中央エディタ + 右プレビュー） */
 export function ProblemEditor() {
   const {
     selectedProblemId,
     selectProblem,
-    tree,
+    bankTree,
     refreshTree,
     showToast,
     confirm,
@@ -161,6 +185,9 @@ export function ProblemEditor() {
   const [graphAssets, setGraphAssets] = useState<GraphAssetSummary[] | null>(null);
   const [zoom, setZoom] = useState(100);
   const [showAi, setShowAi] = useState(false);
+  const [patternPicker, setPatternPicker] = useState(false);
+  const [showAiSolution, setShowAiSolution] = useState(false);
+  const [showPatternExtraction, setShowPatternExtraction] = useState(false);
   const [aiPreset, setAiPreset] = useState<(AiConvertPreset & { targetTab?: Tab }) | null>(null);
   const [contentReviewJob, setContentReviewJob] = useState<AiJob | null>(null);
   const [contentReviewStarting, setContentReviewStarting] = useState(false);
@@ -367,12 +394,14 @@ export function ProblemEditor() {
     try {
       const newVersion = await updateProblem({
         id: p.id,
+        bank_node_id: p.bank_node_id,
         unit_id: p.unit_id,
         title: p.title,
         statement_latex: p.statement_latex,
         statement_latex_two_column: p.statement_latex_two_column,
         answer_latex: p.answer_latex,
         explanation_latex: p.explanation_latex,
+        solution_variants: p.solution_variants,
         answer_completed: p.answer_completed,
         explanation_completed: p.explanation_completed,
         difficulty: p.difficulty,
@@ -435,15 +464,17 @@ export function ProblemEditor() {
     } else {
       // 自分の変更をコピーとして保存し、エディタはサーバー版へ
       try {
-        const newId = await createProblem(mine.unit_id, `${mine.title} (競合コピー)`);
+        const newId = await createProblem(mine.bank_node_id, `${mine.title} (競合コピー)`);
         await updateProblem({
           id: newId,
+          bank_node_id: mine.bank_node_id,
           unit_id: mine.unit_id,
           title: `${mine.title} (競合コピー)`,
           statement_latex: mine.statement_latex,
           statement_latex_two_column: mine.statement_latex_two_column,
           answer_latex: mine.answer_latex,
           explanation_latex: mine.explanation_latex,
+          solution_variants: mine.solution_variants,
           answer_completed: mine.answer_completed,
           explanation_completed: mine.explanation_completed,
           difficulty: mine.difficulty,
@@ -519,17 +550,55 @@ export function ProblemEditor() {
   };
   const patchLatex = (target: ProblemLatexField, value: string) => {
     const changes = { [target]: value } as Partial<ProblemFull>;
-    if (target === "statement_latex" && value !== problem.statement_latex) {
+    if (
+      (target === "statement_latex" || target === "statement_latex_two_column")
+      && value !== problem[target]
+    ) {
       changes.answer_completed = false;
       changes.explanation_completed = false;
+      changes.solution_variants = (problem.solution_variants ?? []).map((variant) => ({
+        ...variant,
+        verification: undefined,
+        explanationOutdated: Boolean(variant.explanation),
+      }));
     } else if (target === "answer_latex" && value !== problem.answer_latex) {
       changes.answer_completed = false;
       changes.explanation_completed = false;
+      const variants = problem.solution_variants ?? [];
+      changes.solution_variants = variants.map((variant, index): ProblemSolutionVariant => {
+        if (variants.length === 1 && index === 0) {
+          return {
+            ...variant,
+            solution: value,
+            solutionBlocks: value.trim()
+              ? [{ id: "solution-step-1", content: value, role: "answer" }]
+              : [],
+            verification: undefined,
+            explanationOutdated: Boolean(variant.explanation),
+          };
+        }
+        return {
+          ...variant,
+          verification: undefined,
+          explanationOutdated: Boolean(variant.explanation),
+        };
+      });
     } else if (
       target === "explanation_latex"
       && value !== problem.explanation_latex
     ) {
       changes.explanation_completed = false;
+      const variants = problem.solution_variants ?? [];
+      if (variants.length === 1) {
+        changes.solution_variants = [{
+          ...variants[0],
+          explanation: value,
+          explanationSections: value.trim()
+            ? [{ solutionBlockIds: variants[0].solutionBlocks?.map((block) => block.id) ?? [], content: value }]
+            : [],
+          explanationOutdated: false,
+        }];
+      }
     }
     patch(changes);
   };
@@ -548,6 +617,19 @@ export function ProblemEditor() {
       problem[fieldKey[targetTab]].trim(),
     );
     return blocks.join("\n").trim();
+  };
+
+  const insertPatternCard = async (patternId: number) => {
+    try {
+      const latex = await patternCardLatex(patternId);
+      // 前後に空行を作り、直前の段落とカードがつながらないようにする。
+      insertSnippet(`
+${latex}
+`);
+      showToast("定石カードを挿入しました");
+    } catch (error) {
+      showToast(String(error), "error");
+    }
   };
 
   const insertSnippet = (text: string, cursorOffset?: number) => {
@@ -798,12 +880,7 @@ export function ProblemEditor() {
     }
   };
 
-  const problemSubjectName =
-    tree.find((subject) =>
-      subject.fields.some((field) =>
-        field.units.some((unit) => unit.id === problem.unit_id),
-      ),
-    )?.name ?? "";
+  const problemSubjectName = findBankPath(bankTree, problem.bank_node_id)[0]?.name ?? "";
   const problemSolutionSubject = inferSolutionSubject(problemSubjectName);
 
   const buildProblemReviewSource = (): string =>
@@ -1156,6 +1233,13 @@ export function ProblemEditor() {
               </button>
             ))}
           </span>
+          <button
+            onClick={() => setPatternPicker(true)}
+            className="btn btn-outline btn-sm"
+            title="定石ライブラリの定石を、カーソル位置へtcolorboxのカードとして挿入します"
+          >
+            定石を挿入
+          </button>
           <button onClick={onInsertGraph} disabled={graphBusy} className="btn btn-outline btn-sm">
             {graphBusy ? "グラフ連携中..." : "2D・3Dグラフを挿入"}
           </button>
@@ -1245,50 +1329,38 @@ export function ProblemEditor() {
             </button>
           )}
           <button
-            onClick={() => {
-              setAiPreset({
-                sourceType: "text",
-                text: problem.statement_latex,
-                mode: "generate_answer",
-                title: "AIで解答を生成（高校範囲）",
-                targetTab: "answer",
-                solutionSubject: problemSolutionSubject,
-              });
-              setShowAi(true);
-            }}
+            onClick={() => setShowAiSolution(true)}
             disabled={!problem.statement_latex.trim()}
             className="btn btn-outline btn-sm"
-            title="現在の問題文から高校範囲内の解答を生成"
+            title="クイック生成・AIの解法候補・自分で指定から解法を決めて答案を作成"
           >
-            <Icon name="sparkle" size={15} /> 解答を生成
+            <Icon name="sparkle" size={15} /> AI解答作成
           </button>
           <button
             onClick={() => {
-              setAiPreset({
-                sourceType: "text",
-                text: [
-                  "【問題文】",
-                  problem.statement_latex.trim(),
-                  "",
-                  "【参照する解答】",
-                  problem.answer_latex.trim(),
-                ].join("\n"),
-                mode: "generate_explanation",
-                title: "AIで詳しい解説を生成（高校範囲）",
-                targetTab: "explanation",
-                solutionSubject: problemSolutionSubject,
-              });
-              setShowAi(true);
+              if (dirtyRef.current) {
+                showToast("定石を抽出する前に、現在の変更を保存してください", "error");
+                return;
+              }
+              setShowPatternExtraction(true);
             }}
+            disabled={!problem.statement_latex.trim() && !problem.statement_latex_two_column.trim()}
+            className="btn btn-outline btn-sm"
+            title="保存済みの問題文・解答・解説から、再利用可能な定石候補を一般化して抽出"
+          >
+            <Icon name="sparkle" size={15} /> この問題から定石を抽出
+          </button>
+          <button
+            onClick={() => setShowAiSolution(true)}
             disabled={!problem.statement_latex.trim() || !problem.answer_latex.trim()}
             className="btn btn-outline btn-sm"
             title={
               problem.answer_latex.trim()
-                ? "現在の解答の解法・式番号・場合分けに沿った詳しい解説を生成"
+                ? "現在の最新版解答を固定し、選択済み解法・式番号・場合分けに沿った解説を生成"
                 : "先に解答を入力または生成してください"
             }
           >
-            <Icon name="sparkle" size={15} /> 解説を生成
+            <Icon name="sparkle" size={15} /> {problem.explanation_latex.trim() ? "解説を再生成" : "この解答から解説を生成"}
           </button>
         </div>
 
@@ -1377,6 +1449,7 @@ export function ProblemEditor() {
             className="input w-full text-xs"
             placeholder="メモ"
           />
+          <ProblemPatternsPanel problemId={problem.id} />
         </div>
       </div>
 
@@ -1560,6 +1633,31 @@ export function ProblemEditor() {
         />
       )}
 
+      {showAiSolution && (
+        <AiSolutionWorkflowDialog
+          problem={problem}
+          solutionSubject={problemSolutionSubject}
+          onChange={(solutionVariants, answerLatex, explanationLatex) => {
+            patch({
+              solution_variants: solutionVariants,
+              answer_latex: answerLatex,
+              explanation_latex: explanationLatex,
+              answer_completed: false,
+              explanation_completed: false,
+            });
+            setTab("answer");
+          }}
+          onClose={() => setShowAiSolution(false)}
+        />
+      )}
+
+      {showPatternExtraction && (
+        <PatternExtractionDialog
+          problem={problem}
+          onClose={() => setShowPatternExtraction(false)}
+        />
+      )}
+
       {graphAssets && (
         <Modal title="この問題のグラフを再編集" onClose={() => setGraphAssets(null)}>
           {graphAssets.length === 0 ? (
@@ -1599,6 +1697,11 @@ export function ProblemEditor() {
             },
             { label: "解答", mine: problem.answer_latex, server: conflict.answer_latex },
             { label: "解説", mine: problem.explanation_latex, server: conflict.explanation_latex },
+            {
+              label: "AI解法・検証情報",
+              mine: JSON.stringify(problem.solution_variants, null, 2),
+              server: JSON.stringify(conflict.solution_variants, null, 2),
+            },
             { label: "タイトル", mine: problem.title, server: conflict.title },
           ]}
           onResolve={resolveConflict}
@@ -1607,16 +1710,28 @@ export function ProblemEditor() {
       )}
 
       {/* 移動モーダル */}
+      {patternPicker && (
+        <PatternPicker
+          title="挿入する定石を選択"
+          onClose={() => setPatternPicker(false)}
+          onPick={async (pattern) => {
+            await insertPatternCard(pattern.id);
+          }}
+        />
+      )}
+
       {showMove && (
-        <UnitPicker
+        <BankNodePicker
           title={`「${problem.title}」を移動`}
-          excludeUnitId={problem.unit_id}
+          excludeBankNodeId={problem.bank_node_id}
           onClose={() => setShowMove(false)}
-          onPick={async (unitId) => {
+          onPick={async (bankNodeId) => {
             try {
-              await moveProblems([problem.id], unitId);
+              await moveProblems([problem.id], bankNodeId);
               setShowMove(false);
-              setProblem((p) => (p ? { ...p, unit_id: unitId } : p));
+              const moved = await getProblem(problem.id);
+              savedProblemRef.current = moved;
+              setProblem(moved);
               await refreshTree();
               showToast("移動しました");
             } catch (e) {
@@ -1694,6 +1809,18 @@ export function ProblemEditor() {
                         >
                           {versionView.explanation_latex}
                         </pre>
+                      </>
+                    )}
+                    {versionView.solution_variants.length > 0 && (
+                      <>
+                        <p className="section-label">AI解法</p>
+                        <div className="rounded p-2" style={{ background: "var(--panel-2)" }}>
+                          {versionView.solution_variants.map((variant) => (
+                            <p key={variant.id}>
+                              {variant.role === "main" ? "主解法" : "別解"}: {variant.strategy.title}
+                            </p>
+                          ))}
+                        </div>
                       </>
                     )}
                   </div>

@@ -132,9 +132,13 @@ struct ManifestError {
 }
 
 pub(crate) fn get_setting(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row("SELECT value FROM app_settings WHERE key=?1", params![key], |r| r.get(0))
-        .ok()
-        .filter(|v: &String| !v.trim().is_empty())
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key=?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .ok()
+    .filter(|v: &String| !v.trim().is_empty())
 }
 
 fn is_safe_token(s: &str) -> bool {
@@ -223,7 +227,10 @@ fn candidate_graph_paths(state: &AppState) -> Vec<PathBuf> {
     for root in roots {
         out.push(root.join("mathgraph-pdf-studio.exe"));
         out.push(root.join("MathGraph PDF Studio.exe"));
-        out.push(root.join("mathgraph-pdf-studio").join("mathgraph-pdf-studio.exe"));
+        out.push(
+            root.join("mathgraph-pdf-studio")
+                .join("mathgraph-pdf-studio.exe"),
+        );
         out.push(
             root.join("mathgraph-pdf-studio")
                 .join("src-tauri")
@@ -251,7 +258,10 @@ fn is_graph_executable(path: &Path) -> bool {
 }
 
 fn is_debug_graph_executable(path: &Path) -> bool {
-    let normalized = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     normalized.contains("\\target\\debug\\")
 }
 
@@ -277,7 +287,10 @@ fn resolve_graph_app_path(state: &AppState, conn: &Connection) -> Option<PathBuf
     detect_graph_app_candidate(state)
 }
 
-fn graph_asset_record(conn: &Connection, asset_id: &str) -> Result<Option<GraphAssetSummary>, String> {
+fn graph_asset_record(
+    conn: &Connection,
+    asset_id: &str,
+) -> Result<Option<GraphAssetSummary>, String> {
     conn.query_row(
         "SELECT asset_id, graph_id, display_name, project_id, problem_id, item_id,
                 source_application, editable_source_path, primary_asset_path, preview_asset_path,
@@ -308,7 +321,11 @@ fn graph_asset_record(conn: &Connection, asset_id: &str) -> Result<Option<GraphA
     .map_err(err_str)
 }
 
-fn safe_manifest_file_name(name: Option<&str>, field: &str, allowed_exts: &[&str]) -> Result<String, String> {
+fn safe_manifest_file_name(
+    name: Option<&str>,
+    field: &str,
+    allowed_exts: &[&str],
+) -> Result<String, String> {
     let name = name
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -334,7 +351,9 @@ fn safe_manifest_file_name(name: Option<&str>, field: &str, allowed_exts: &[&str
 fn checked_source_file(return_folder: &Path, name: &str) -> Result<PathBuf, String> {
     let root = return_folder.canonicalize().map_err(err_str)?;
     let src = root.join(name);
-    let canonical = src.canonicalize().map_err(|e| format!("asset not found: {name}: {e}"))?;
+    let canonical = src
+        .canonicalize()
+        .map_err(|e| format!("asset not found: {name}: {e}"))?;
     if !canonical.starts_with(&root) {
         return Err("asset path escapes the integration session".into());
     }
@@ -399,7 +418,8 @@ fn make_latex(asset_id: &str, primary_name: &str, width: &str) -> String {
 
 fn read_request(request_path: &Path) -> Result<IntegrationRequest, String> {
     let text = fs::read_to_string(request_path).map_err(err_str)?;
-    let request: IntegrationRequest = serde_json::from_str(&text).map_err(|e| format!("invalid request JSON: {e}"))?;
+    let request: IntegrationRequest =
+        serde_json::from_str(&text).map_err(|e| format!("invalid request JSON: {e}"))?;
     if request.protocol_version != PROTOCOL_VERSION {
         return Err("unsupported integration protocol version".into());
     }
@@ -458,7 +478,11 @@ fn import_completed_manifest(
         .unwrap_or_else(|| format!("graph_{}", uuid::Uuid::new_v4().simple()));
     let graph_root = state.graph_assets_dir();
     let asset_dir = graph_root.join(&asset_id);
-    let temp_dir = graph_root.join(format!("{}.tmp_{}", asset_id, uuid::Uuid::new_v4().simple()));
+    let temp_dir = graph_root.join(format!(
+        "{}.tmp_{}",
+        asset_id,
+        uuid::Uuid::new_v4().simple()
+    ));
     fs::create_dir_all(&temp_dir).map_err(err_str)?;
 
     let primary = copy_named_asset(
@@ -544,7 +568,9 @@ fn import_completed_manifest(
         .unwrap_or("")
         .to_string();
     let inserted_latex = make_latex(&asset_id, &primary_name, &width);
-    let metadata_json = serde_json::to_string(&manifest.metadata.clone().unwrap_or_else(|| json!({}))).map_err(err_str)?;
+    let metadata_json =
+        serde_json::to_string(&manifest.metadata.clone().unwrap_or_else(|| json!({})))
+            .map_err(err_str)?;
     let now = now_str();
     let created_at = conn
         .query_row(
@@ -638,7 +664,9 @@ pub fn detect_graph_app_path(state: &AppState) -> Result<Option<String>, String>
     Ok(resolve_graph_app_path(state, &conn).map(|p| p.to_string_lossy().to_string()))
 }
 
-pub fn test_graph_integration_settings(state: &AppState) -> Result<GraphIntegrationTestResult, String> {
+pub fn test_graph_integration_settings(
+    state: &AppState,
+) -> Result<GraphIntegrationTestResult, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let Some(path) = resolve_graph_app_path(state, &conn) else {
         return Ok(GraphIntegrationTestResult {
@@ -673,8 +701,9 @@ pub fn start_graph_integration(
     }
 
     let conn = state.conn.lock().map_err(err_str)?;
-    let graph_app = resolve_graph_app_path(state, &conn)
-        .ok_or_else(|| "Graph app executable was not found. Open Settings and set graph_app_path.".to_string())?;
+    let graph_app = resolve_graph_app_path(state, &conn).ok_or_else(|| {
+        "Graph app executable was not found. Open Settings and set graph_app_path.".to_string()
+    })?;
     let root = integration_root(&conn, &state);
     let requests_dir = root.join("requests");
     let sessions_dir = root.join("sessions");
@@ -702,7 +731,8 @@ pub fn start_graph_integration(
     }
 
     let preferred = get_setting(&conn, "graph_preferred_output").unwrap_or_else(|| "pdf".into());
-    let width = get_setting(&conn, "graph_insert_width").unwrap_or_else(|| "0.72\\linewidth".into());
+    let width =
+        get_setting(&conn, "graph_insert_width").unwrap_or_else(|| "0.72\\linewidth".into());
     let request = json!({
         "protocolVersion": PROTOCOL_VERSION,
         "requestId": request_id,

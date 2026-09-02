@@ -76,6 +76,14 @@ pub fn provider_for(_state: &Arc<AppState>) -> Arc<dyn LatexConversionProvider> 
     Arc::new(CodexAppServerProvider)
 }
 
+/// 経過時間の通知を5秒に1回へ間引くための粗い時刻。
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs() / 5)
+        .unwrap_or(0)
+}
+
 pub struct CodexAppServerProvider;
 
 impl LatexConversionProvider for CodexAppServerProvider {
@@ -157,6 +165,8 @@ impl LatexConversionProvider for CodexAppServerProvider {
         let mut delta_len: usize = 0;
         let mut last_progress_len: usize = 0;
         let mut last_progress_at = Instant::now();
+        let started_at = Instant::now();
+        let mut last_wait_notice: u64 = 0;
 
         loop {
             if cancel.load(Ordering::SeqCst) {
@@ -184,11 +194,26 @@ impl LatexConversionProvider for CodexAppServerProvider {
                 Ok(Ok(v)) => v,
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
                 Ok(Err(_)) => return Err("Codexとの接続が切断されました".into()),
-                Err(_) => continue, // タイムアウト → キャンセル確認へ
+                Err(_) => {
+                    // 生成前の思考時間は数分に及ぶことがあり、無表示だと停止に見える。
+                    // 出力がまだ無い間だけ、経過時間を出して進行中であることを示す。
+                    let waited = started_at.elapsed().as_secs();
+                    if delta_len == 0 && waited >= 10 && now_secs() != last_wait_notice {
+                        last_wait_notice = now_secs();
+                        progress(
+                            "converting",
+                            &format!("Codexで変換しています…（{}秒経過）", waited),
+                        );
+                    }
+                    continue; // タイムアウト → キャンセル確認へ
+                }
             };
             let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
             let params = v.get("params").cloned().unwrap_or(Value::Null);
-            let tid = params.get("threadId").and_then(|t| t.as_str()).unwrap_or("");
+            let tid = params
+                .get("threadId")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
             if !tid.is_empty() && tid != thread_id {
                 continue;
             }
@@ -220,7 +245,8 @@ impl LatexConversionProvider for CodexAppServerProvider {
                     }
                 }
                 "item/completed" => {
-                    if params.pointer("/item/type").and_then(|t| t.as_str()) == Some("agentMessage") {
+                    if params.pointer("/item/type").and_then(|t| t.as_str()) == Some("agentMessage")
+                    {
                         if let Some(text) = params.pointer("/item/text").and_then(|t| t.as_str()) {
                             last_message = text.to_string();
                         }
@@ -274,11 +300,17 @@ impl LatexConversionProvider for CodexAppServerProvider {
                             .map(|c| c.to_string())
                             .unwrap_or_default();
                         if code.contains("usageLimitExceeded") {
-                            return Err("ChatGPTの利用制限に達しました。時間をおいて再試行してください。".into());
+                            return Err(
+                                "ChatGPTの利用制限に達しました。時間をおいて再試行してください。"
+                                    .into(),
+                            );
                         }
                         return Err(format!("Codexエラー: {}", msg));
                     }
-                    progress("converting", "一時的なエラーが発生し、Codexが再試行しています…");
+                    progress(
+                        "converting",
+                        "一時的なエラーが発生し、Codexが再試行しています…",
+                    );
                 }
                 _ => {}
             }
@@ -334,15 +366,7 @@ mod tests {
             0,
             Duration::from_millis(499)
         ));
-        assert!(should_emit_delta_progress(
-            250,
-            0,
-            Duration::from_millis(1)
-        ));
-        assert!(should_emit_delta_progress(
-            1,
-            0,
-            Duration::from_millis(500)
-        ));
+        assert!(should_emit_delta_progress(250, 0, Duration::from_millis(1)));
+        assert!(should_emit_delta_progress(1, 0, Duration::from_millis(500)));
     }
 }

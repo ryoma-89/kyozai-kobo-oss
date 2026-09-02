@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { listAllPartTags, listPartCategories, searchParts } from "../api";
 import { useApp } from "../store";
-import type { DifficultyRank, PartSummary, RequiredFilter } from "../types";
+import type { BankNode, DifficultyRank, PartSummary, RequiredFilter } from "../types";
 import { DIFFICULTY_RANKS, DifficultyRankBadge, Modal, TagChips } from "./ui";
 
 const PART_TYPE_LABEL: Record<string, string> = {
@@ -20,6 +20,13 @@ const PART_TYPE_LABEL: Record<string, string> = {
   custom: "カスタム",
 };
 
+function flattenBankNodes(nodes: BankNode[], depth = 0): { node: BankNode; depth: number }[] {
+  return nodes.flatMap((node) => [
+    { node, depth },
+    ...flattenBankNodes(node.children, depth + 1),
+  ]);
+}
+
 export function PartPicker({
   onPick,
   onClose,
@@ -27,11 +34,9 @@ export function PartPicker({
   onPick: (partId: number) => Promise<void>;
   onClose: () => void;
 }) {
-  const { showToast, tree, refreshTree } = useApp();
+  const { showToast, bankTree, refreshTree } = useApp();
   const [text, setText] = useState("");
-  const [subjectId, setSubjectId] = useState<number | null>(null);
-  const [fieldId, setFieldId] = useState<number | null>(null);
-  const [unitId, setUnitId] = useState<number | null>(null);
+  const [bankNodeId, setBankNodeId] = useState<number | null>(null);
   const [partType, setPartType] = useState("");
   const [category, setCategory] = useState("");
   const [tag, setTag] = useState("");
@@ -41,14 +46,7 @@ export function PartPicker({
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("all");
   const [results, setResults] = useState<PartSummary[]>([]);
   const [addedIds, setAddedIds] = useState<number[]>([]);
-  const fields = useMemo(
-    () => tree.find((subject) => subject.id === subjectId)?.fields ?? [],
-    [tree, subjectId],
-  );
-  const units = useMemo(
-    () => fields.find((field) => field.id === fieldId)?.units ?? [],
-    [fields, fieldId],
-  );
+  const bankOptions = useMemo(() => flattenBankNodes(bankTree), [bankTree]);
 
   useEffect(() => {
     void refreshTree();
@@ -62,9 +60,8 @@ export function PartPicker({
         setResults(
           await searchParts({
             text,
-            subject_id: subjectId,
-            field_id: fieldId,
-            unit_id: unitId,
+            bank_node_id: bankNodeId,
+            include_descendants: true,
             part_type: partType || null,
             category: category || null,
             tag: tag || null,
@@ -77,7 +74,7 @@ export function PartPicker({
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [text, subjectId, fieldId, unitId, partType, category, tag, rankFilters, requiredFilter]);
+  }, [text, bankNodeId, partType, category, tag, rankFilters, requiredFilter]);
 
   const toggleRankFilter = (rank: DifficultyRank | "__unset") => {
     setRankFilters((current) =>
@@ -104,42 +101,15 @@ export function PartPicker({
           ))}
         </select>
         <select
-          value={subjectId ?? ""}
-          onChange={(e) => {
-            setSubjectId(e.target.value ? Number(e.target.value) : null);
-            setFieldId(null);
-            setUnitId(null);
-          }}
+          value={bankNodeId ?? ""}
+          onChange={(e) => setBankNodeId(e.target.value ? Number(e.target.value) : null)}
           className="select text-xs"
         >
-          <option value="">科目: すべて</option>
-          {tree.map((subject) => (
-            <option key={subject.id} value={subject.id}>{subject.name}</option>
-          ))}
-        </select>
-        <select
-          value={fieldId ?? ""}
-          onChange={(e) => {
-            setFieldId(e.target.value ? Number(e.target.value) : null);
-            setUnitId(null);
-          }}
-          className="select text-xs"
-          disabled={subjectId == null}
-        >
-          <option value="">分野: すべて</option>
-          {fields.map((field) => (
-            <option key={field.id} value={field.id}>{field.name}</option>
-          ))}
-        </select>
-        <select
-          value={unitId ?? ""}
-          onChange={(e) => setUnitId(e.target.value ? Number(e.target.value) : null)}
-          className="select text-xs"
-          disabled={fieldId == null}
-        >
-          <option value="">単元: すべて</option>
-          {units.map((unit) => (
-            <option key={unit.id} value={unit.id}>{unit.name}</option>
+          <option value="">階層: すべて</option>
+          {bankOptions.map(({ node, depth }) => (
+            <option key={node.id} value={node.id}>
+              {`${"　".repeat(depth)}${depth > 0 ? "└ " : ""}${node.name}`}
+            </option>
           ))}
         </select>
         <select value={category} onChange={(e) => setCategory(e.target.value)} className="select text-xs">
@@ -203,9 +173,7 @@ export function PartPicker({
                     {part.version}
                   </span>
                   <span className="mt-1 block truncate text-xs" style={{ color: "var(--muted)" }}>
-                    {part.unit_id == null
-                      ? "科目・分野・単元: 未分類"
-                      : `${part.subject_name} › ${part.field_name} › ${part.unit_name}`}
+                    {part.bank_path || "階層: 未分類"}
                   </span>
                   <span className="mt-1 block truncate text-xs" style={{ color: "var(--muted)" }}>
                     {part.plain_text_preview || "プレビューなし"}

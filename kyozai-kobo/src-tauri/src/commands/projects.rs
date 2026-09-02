@@ -79,10 +79,18 @@ fn snapshot_template(conn: &Connection, project_id: i64, template_id: i64) -> Re
     Ok(())
 }
 
-pub fn create_project(state: &AppState, name: String, template_id: Option<i64>) -> Result<i64, String> {
+pub fn create_project(
+    state: &AppState,
+    name: String,
+    template_id: Option<i64>,
+) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let now = now_str();
-    let name = if name.trim().is_empty() { "新しい教材".to_string() } else { name.trim().to_string() };
+    let name = if name.trim().is_empty() {
+        "新しい教材".to_string()
+    } else {
+        name.trim().to_string()
+    };
     conn.execute(
         "INSERT INTO projects (name, created_at, updated_at) VALUES (?1, ?2, ?2)",
         params![name, now],
@@ -98,7 +106,9 @@ pub fn create_project(state: &AppState, name: String, template_id: Option<i64>) 
     let tid = match template_id {
         Some(t) => Some(t),
         None => conn
-            .query_row("SELECT id FROM templates ORDER BY id LIMIT 1", [], |r| r.get::<_, i64>(0))
+            .query_row("SELECT id FROM templates ORDER BY id LIMIT 1", [], |r| {
+                r.get::<_, i64>(0)
+            })
             .ok(),
     };
     if let Some(tid) = tid {
@@ -108,7 +118,11 @@ pub fn create_project(state: &AppState, name: String, template_id: Option<i64>) 
 }
 
 /// プロジェクトの使用テンプレートを変更する（その時点の内容をスナップショット）
-pub fn set_project_template(state: &AppState, project_id: i64, template_id: i64) -> Result<(), String> {
+pub fn set_project_template(
+    state: &AppState,
+    project_id: i64,
+    template_id: i64,
+) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
     snapshot_template(&conn, project_id, template_id)?;
     touch_project(&conn, project_id).map_err(err_str)?;
@@ -119,7 +133,11 @@ pub fn set_project_template(state: &AppState, project_id: i64, template_id: i64)
 pub fn refresh_project_template(state: &AppState, project_id: i64) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let template_id: Option<i64> = conn
-        .query_row("SELECT template_id FROM projects WHERE id=?1", params![project_id], |r| r.get(0))
+        .query_row(
+            "SELECT template_id FROM projects WHERE id=?1",
+            params![project_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     let template_id = template_id.ok_or("元のテンプレートが削除されているため更新できません")?;
     snapshot_template(&conn, project_id, template_id)?;
@@ -148,7 +166,11 @@ pub fn update_project_meta(
     }
     .map_err(err_str)?;
     let current: i64 = conn
-        .query_row("SELECT version FROM projects WHERE id=?1", params![id], |r| r.get(0))
+        .query_row(
+            "SELECT version FROM projects WHERE id=?1",
+            params![id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     if changed == 0 {
         return Err(format!("CONFLICT:{}", current));
@@ -158,7 +180,8 @@ pub fn update_project_meta(
 
 pub fn delete_project(state: &AppState, id: i64) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
-    conn.execute("DELETE FROM projects WHERE id=?1", params![id]).map_err(err_str)?;
+    conn.execute("DELETE FROM projects WHERE id=?1", params![id])
+        .map_err(err_str)?;
     Ok(())
 }
 
@@ -181,8 +204,8 @@ pub fn duplicate_project(state: &AppState, id: i64) -> Result<i64, String> {
     )
     .map_err(err_str)?;
     conn.execute(
-        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, heading_level, heading_numbered, created_at)
-         SELECT ?2, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, heading_level, heading_numbered, ?3
+        "INSERT INTO project_items (project_id, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, pattern_id, snap_pattern_json, heading_level, heading_numbered, created_at)
+         SELECT ?2, item_type, sort_order, problem_id, part_id, snap_title, snap_statement, snap_statement_two_column, snap_answer, snap_explanation, snap_difficulty, snap_difficulty_rank, snap_is_required, snap_attachments, content, snap_part_type, snap_part_category, snap_part_description, snap_part_output_target, snap_part_layout_mode, snap_part_attachments, pattern_id, snap_pattern_json, heading_level, heading_numbered, ?3
          FROM project_items WHERE project_id=?1",
         params![id, new_id, now],
     )
@@ -241,10 +264,12 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
                     pr.id IS NOT NULL,
                     COALESCE(pr.title, ''), COALESCE(pr.latex_source, ''), COALESCE(pr.part_type, ''),
                     COALESCE(pr.category, ''), COALESCE(pr.description, ''), COALESCE(pr.output_target, 'both'),
-                    i.version, i.snap_part_layout_mode, COALESCE(pr.layout_mode, 'single_column')
+                    i.version, i.snap_part_layout_mode, COALESCE(pr.layout_mode, 'single_column'),
+                    i.pattern_id, i.snap_pattern_json, pt.id IS NOT NULL, COALESCE(pt.version, 0)
              FROM project_items i
              LEFT JOIN problems p ON p.id = i.problem_id
              LEFT JOIN parts pr ON pr.id = i.part_id
+             LEFT JOIN patterns pt ON pt.id = i.pattern_id
              WHERE i.project_id=?1 ORDER BY i.sort_order, i.id",
         )
         .map_err(err_str)?;
@@ -303,10 +328,26 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
                     || part_description != snap_part_description
                     || part_output_target != snap_part_output_target
                     || part_layout_mode != snap_part_layout_mode);
+            let pattern_id: Option<i64> = r.get(42)?;
+            let snap_pattern_json: String = r.get(43)?;
+            let pattern_exists: bool = r.get(44)?;
+            let library_pattern_version: i64 = r.get(45)?;
+            // 教材側はスナップショットで固定されている。定石ライブラリ側の版が進んだら知らせる。
+            let snapshot_pattern_version = serde_json::from_str::<serde_json::Value>(
+                &snap_pattern_json,
+            )
+            .ok()
+            .and_then(|value| value.get("version").and_then(serde_json::Value::as_i64))
+            .unwrap_or(0);
+            let pattern_updated = item_type == "pattern"
+                && pattern_exists
+                && library_pattern_version != snapshot_pattern_version;
             let source_exists = if item_type == "problem" {
                 problem_exists
             } else if item_type == "part" {
                 part_exists
+            } else if item_type == "pattern" {
+                pattern_exists
             } else {
                 true
             };
@@ -332,12 +373,16 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
                 snap_part_description,
                 snap_part_output_target,
                 snap_part_layout_mode,
-                snap_part_attachments: serde_json::from_str(&snap_part_attachments_json).unwrap_or_default(),
+                snap_part_attachments: serde_json::from_str(&snap_part_attachments_json)
+                    .unwrap_or_default(),
                 heading_level: r.get(21)?,
                 heading_numbered: r.get::<_, i64>(22)? != 0,
                 bank_updated,
                 source_exists,
                 part_updated,
+                pattern_id,
+                snap_pattern_json,
+                pattern_updated,
                 version: r.get(39)?,
             })
         })
@@ -421,7 +466,11 @@ pub fn get_project(state: &AppState, id: i64) -> Result<ProjectFull, String> {
 }
 
 /// 問題を教材に追加（現在の内容をスナップショットとして保存）
-pub fn add_problem_to_project(state: &AppState, project_id: i64, problem_id: i64) -> Result<i64, String> {
+pub fn add_problem_to_project(
+    state: &AppState,
+    project_id: i64,
+    problem_id: i64,
+) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let attachments = super::problems::attachments_of(&conn, problem_id).map_err(err_str)?;
     let snap: Vec<SnapAttachment> = attachments
@@ -475,10 +524,74 @@ pub fn add_part_to_project(state: &AppState, project_id: i64, part_id: i64) -> R
     if conn.changes() == 0 {
         return Err("部品が見つかりません".into());
     }
-    conn.execute("UPDATE parts SET usage_count=usage_count+1 WHERE id=?1", params![part_id])
-        .map_err(err_str)?;
+    conn.execute(
+        "UPDATE parts SET usage_count=usage_count+1 WHERE id=?1",
+        params![part_id],
+    )
+    .map_err(err_str)?;
     touch_project(&conn, project_id).map_err(err_str)?;
     Ok(conn.last_insert_rowid())
+}
+
+/// 定石ライブラリの定石を教材へ追加する。
+/// 追加時点のスナップショットを保存し、以後は定石ライブラリを更新しても教材は変わらない。
+pub fn add_pattern_to_project(
+    state: &AppState,
+    project_id: i64,
+    pattern_id: i64,
+) -> Result<i64, String> {
+    let snapshot = super::patterns::pattern_snapshot(state, pattern_id)?;
+    let snapshot_json = serde_json::to_string(&snapshot).map_err(err_str)?;
+    let conn = state.conn.lock().map_err(err_str)?;
+    let order = next_sort_order(&conn, project_id).map_err(err_str)?;
+    conn.execute(
+        "INSERT INTO project_items
+            (project_id, item_type, sort_order, pattern_id, snap_title, snap_pattern_json, created_at)
+         VALUES (?1, 'pattern', ?2, ?3, ?4, ?5, ?6)",
+        params![
+            project_id,
+            order,
+            pattern_id,
+            snapshot.title,
+            snapshot_json,
+            now_str()
+        ],
+    )
+    .map_err(err_str)?;
+    let item_id = conn.last_insert_rowid();
+    touch_project(&conn, project_id).map_err(err_str)?;
+    Ok(item_id)
+}
+
+/// 教材の定石項目を、定石ライブラリの最新版で取り直す。
+pub fn refresh_pattern_item_from_library(state: &AppState, item_id: i64) -> Result<(), String> {
+    let pattern_id: Option<i64> = {
+        let conn = state.conn.lock().map_err(err_str)?;
+        conn.query_row(
+            "SELECT pattern_id FROM project_items WHERE id=?1 AND item_type='pattern'",
+            params![item_id],
+            |r| r.get(0),
+        )
+        .map_err(err_str)?
+    };
+    let pattern_id = pattern_id.ok_or("元の定石が削除されているため更新できません")?;
+    let snapshot = super::patterns::pattern_snapshot(state, pattern_id)?;
+    let snapshot_json = serde_json::to_string(&snapshot).map_err(err_str)?;
+    let conn = state.conn.lock().map_err(err_str)?;
+    conn.execute(
+        "UPDATE project_items SET snap_title=?1, snap_pattern_json=?2 WHERE id=?3",
+        params![snapshot.title, snapshot_json, item_id],
+    )
+    .map_err(err_str)?;
+    let project_id: i64 = conn
+        .query_row(
+            "SELECT project_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
+        .map_err(err_str)?;
+    touch_project(&conn, project_id).map_err(err_str)?;
+    Ok(())
 }
 
 /// 見出し・説明文・改ページを追加（heading_level: 1=章, 2=節）
@@ -527,7 +640,11 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
     } = payload;
     let conn = state.conn.lock().map_err(err_str)?;
     let current: i64 = conn
-        .query_row("SELECT version FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT version FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     if let Some(expected) = expected_version {
         if expected != current {
@@ -535,12 +652,18 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         }
     }
     if let Some(c) = content {
-        conn.execute("UPDATE project_items SET content=?1 WHERE id=?2", params![c, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET content=?1 WHERE id=?2",
+            params![c, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(lv) = heading_level {
-        conn.execute("UPDATE project_items SET heading_level=?1 WHERE id=?2", params![lv, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET heading_level=?1 WHERE id=?2",
+            params![lv, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(hn) = heading_numbered {
         conn.execute(
@@ -550,12 +673,18 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         .map_err(err_str)?;
     }
     if let Some(v) = snap_title {
-        conn.execute("UPDATE project_items SET snap_title=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_title=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_statement {
-        conn.execute("UPDATE project_items SET snap_statement=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_statement=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_statement_two_column {
         conn.execute(
@@ -565,33 +694,54 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         .map_err(err_str)?;
     }
     if let Some(v) = snap_answer {
-        conn.execute("UPDATE project_items SET snap_answer=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_answer=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_explanation {
-        conn.execute("UPDATE project_items SET snap_explanation=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_explanation=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_difficulty_rank {
         let rank = super::problems::normalize_rank(Some(v));
-        conn.execute("UPDATE project_items SET snap_difficulty_rank=?1 WHERE id=?2", params![rank, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_difficulty_rank=?1 WHERE id=?2",
+            params![rank, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_is_required {
-        conn.execute("UPDATE project_items SET snap_is_required=?1 WHERE id=?2", params![v as i64, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_is_required=?1 WHERE id=?2",
+            params![v as i64, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_part_type {
-        conn.execute("UPDATE project_items SET snap_part_type=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_part_type=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_part_category {
-        conn.execute("UPDATE project_items SET snap_part_category=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_part_category=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_part_description {
-        conn.execute("UPDATE project_items SET snap_part_description=?1 WHERE id=?2", params![v, item_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE project_items SET snap_part_description=?1 WHERE id=?2",
+            params![v, item_id],
+        )
+        .map_err(err_str)?;
     }
     if let Some(v) = snap_part_output_target {
         conn.execute(
@@ -607,10 +757,17 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
         )
         .map_err(err_str)?;
     }
-    conn.execute("UPDATE project_items SET version=version+1 WHERE id=?1", params![item_id])
-        .map_err(err_str)?;
+    conn.execute(
+        "UPDATE project_items SET version=version+1 WHERE id=?1",
+        params![item_id],
+    )
+    .map_err(err_str)?;
     let project_id: i64 = conn
-        .query_row("SELECT project_id FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT project_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     touch_project(&conn, project_id).map_err(err_str)?;
     Ok(current + 1)
@@ -620,7 +777,11 @@ pub fn update_project_item(state: &AppState, payload: ProjectItemUpdate) -> Resu
 pub fn refresh_item_from_bank(state: &AppState, item_id: i64) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let problem_id: Option<i64> = conn
-        .query_row("SELECT problem_id FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT problem_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     let problem_id = problem_id.ok_or("元の問題が削除されているため更新できません")?;
     let attachments = super::problems::attachments_of(&conn, problem_id).map_err(err_str)?;
@@ -649,7 +810,11 @@ pub fn refresh_item_from_bank(state: &AppState, item_id: i64) -> Result<(), Stri
     )
     .map_err(err_str)?;
     let project_id: i64 = conn
-        .query_row("SELECT project_id FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT project_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     touch_project(&conn, project_id).map_err(err_str)?;
     Ok(())
@@ -659,7 +824,11 @@ pub fn refresh_item_from_bank(state: &AppState, item_id: i64) -> Result<(), Stri
 pub fn refresh_part_item_from_library(state: &AppState, item_id: i64) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let part_id: Option<i64> = conn
-        .query_row("SELECT part_id FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT part_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     let part_id = part_id.ok_or("元の部品が削除されているため更新できません")?;
     let attachments = super::parts::attachments_of(&conn, part_id).map_err(err_str)?;
@@ -689,7 +858,11 @@ pub fn refresh_part_item_from_library(state: &AppState, item_id: i64) -> Result<
     )
     .map_err(err_str)?;
     let project_id: i64 = conn
-        .query_row("SELECT project_id FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT project_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     touch_project(&conn, project_id).map_err(err_str)?;
     Ok(())
@@ -698,7 +871,11 @@ pub fn refresh_part_item_from_library(state: &AppState, item_id: i64) -> Result<
 pub fn remove_project_item(state: &AppState, item_id: i64) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let project_id: i64 = conn
-        .query_row("SELECT project_id FROM project_items WHERE id=?1", params![item_id], |r| r.get(0))
+        .query_row(
+            "SELECT project_id FROM project_items WHERE id=?1",
+            params![item_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     conn.execute("DELETE FROM project_items WHERE id=?1", params![item_id])
         .map_err(err_str)?;
@@ -706,7 +883,11 @@ pub fn remove_project_item(state: &AppState, item_id: i64) -> Result<(), String>
     Ok(())
 }
 
-pub fn reorder_project_items(state: &AppState, project_id: i64, ordered_ids: Vec<i64>) -> Result<(), String> {
+pub fn reorder_project_items(
+    state: &AppState,
+    project_id: i64,
+    ordered_ids: Vec<i64>,
+) -> Result<(), String> {
     let mut conn = state.conn.lock().map_err(err_str)?;
     let tx = conn.transaction().map_err(err_str)?;
     for (i, id) in ordered_ids.iter().enumerate() {
@@ -730,7 +911,11 @@ pub fn update_project_settings(
     let mut conn = state.conn.lock().map_err(err_str)?;
     let tx = conn.transaction().map_err(err_str)?;
     let current: i64 = tx
-        .query_row("SELECT version FROM projects WHERE id=?1", params![project_id], |r| r.get(0))
+        .query_row(
+            "SELECT version FROM projects WHERE id=?1",
+            params![project_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     if expected_version.is_some_and(|expected| expected != current) {
         return Err(format!("CONFLICT:{}", current));

@@ -435,6 +435,26 @@ textarea::placeholder {
 .paper .preview-body mjx-container {
   margin: 0.2em 0;
 }
+/* Tailwindのpreflightが svg を display:block にするため、MathJaxのインライン数式が
+   1つずつ改行され、文が縦に分断されてしまう。数式のsvgだけブラウザ既定へ戻す。 */
+mjx-container svg {
+  display: inline;
+  vertical-align: baseline;
+}
+/* .paper の外でも読める最低限の体裁を与える（定石カードのプレビュー等）。 */
+.preview-body {
+  line-height: 1.9;
+  overflow-wrap: break-word;
+}
+.preview-body p {
+  margin: 0.35em 0;
+}
+.preview-body p:first-child {
+  margin-top: 0;
+}
+.preview-body p:last-child {
+  margin-bottom: 0;
+}
 .paper-preview-stage {
   width: 100%;
   padding: 4px;
@@ -1478,6 +1498,26 @@ iframe[title*="PDF"] {
   border-color: rgba(157, 108, 242, 0.38);
   background: var(--accent-dim);
 }
+
+.ai-chat-message-user.ai-chat-message-queued {
+  opacity: 0.78;
+  border-style: dashed;
+}
+
+.ai-chat-queued-label {
+  margin-top: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.ai-chat-queue-status {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: var(--muted);
+  font-size: 10px;
+}
 .ai-chat-message-assistant {
   align-self: flex-start;
   background: var(--panel-2);
@@ -1547,6 +1587,50 @@ iframe[title*="PDF"] {
   border-bottom: 1px solid rgba(207, 181, 232, 0.35);
   background: var(--warn-dim);
   padding: 9px 11px;
+}
+.ai-chat-quality-warnings {
+  margin: 7px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  padding-left: 18px;
+  color: var(--warn);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.ai-chat-strategy-picker {
+  max-height: 44%;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ai-chat-strategy-picker-title {
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-chat-strategy-choice {
+  margin-bottom: 7px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 11px;
+}
+
+.ai-chat-strategy-summary {
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.ai-chat-strategy-meta {
+  margin-top: 4px;
+  color: var(--accent);
+  font-size: 10px;
 }
 .ai-chat-problem-preview {
   margin-top: 8px;

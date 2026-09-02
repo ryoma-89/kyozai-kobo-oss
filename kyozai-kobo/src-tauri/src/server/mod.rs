@@ -127,7 +127,11 @@ pub fn start(state: &Arc<AppState>) -> Result<Value, String> {
 
     // ペアリングコードを新しく発行
     {
-        let mut code = state.server.pairing_code.lock().map_err(|e| e.to_string())?;
+        let mut code = state
+            .server
+            .pairing_code
+            .lock()
+            .map_err(|e| e.to_string())?;
         *code = auth::generate_pairing_code();
     }
 
@@ -177,7 +181,11 @@ pub fn stop(state: &Arc<AppState>) -> Result<Value, String> {
 
 pub fn regen_pairing(state: &Arc<AppState>) -> Result<Value, String> {
     {
-        let mut code = state.server.pairing_code.lock().map_err(|e| e.to_string())?;
+        let mut code = state
+            .server
+            .pairing_code
+            .lock()
+            .map_err(|e| e.to_string())?;
         *code = auth::generate_pairing_code();
     }
     state.server.log_line("ペアリングコードを再発行しました");
@@ -257,7 +265,9 @@ pub fn revoke_device(state: &Arc<AppState>, device_id: i64) -> Result<(), String
         params![device_id],
     )
     .map_err(|e| e.to_string())?;
-    state.server.log_line(&format!("端末 {} のアクセスを取り消しました", device_id));
+    state
+        .server
+        .log_line(&format!("端末 {} のアクセスを取り消しました", device_id));
     Ok(())
 }
 
@@ -272,7 +282,10 @@ pub fn build_router(state: Shared) -> Router {
         .route("/auth/logout", post(auth_logout))
         .route("/files/attachment/{name}", get(file_attachment))
         .route("/files/part-attachment/{name}", get(file_part_attachment))
-        .route("/files/template-asset/{tid}/{name}", get(file_template_asset))
+        .route(
+            "/files/template-asset/{tid}/{name}",
+            get(file_template_asset),
+        )
         .route("/files/ai-job/{uuid}/{name}", get(file_ai_job))
         .route("/files/build", get(file_build))
         .route("/graphs/{id}/files/{format}", get(file_graph))
@@ -322,7 +335,9 @@ fn origin_ok(headers: &HeaderMap) -> bool {
     let origin_host = origin
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let fwd_host = headers.get("x-forwarded-host").and_then(|v| v.to_str().ok());
+    let fwd_host = headers
+        .get("x-forwarded-host")
+        .and_then(|v| v.to_str().ok());
     let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
     [fwd_host, host]
         .into_iter()
@@ -353,14 +368,19 @@ async fn require_auth(
         }
     }
     let Some(token) = cookie_token(headers) else {
-        return err_json(StatusCode::UNAUTHORIZED, "未認証です。ペアリングしてください");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "未認証です。ペアリングしてください",
+        );
     };
     let state2 = state.clone();
-    let valid =
-        tokio::task::spawn_blocking(move || auth::validate_session(&state2, &token)).await;
+    let valid = tokio::task::spawn_blocking(move || auth::validate_session(&state2, &token)).await;
     match valid {
         Ok(Some(_device_id)) => next.run(req).await,
-        _ => err_json(StatusCode::UNAUTHORIZED, "セッションが無効です。再ペアリングしてください"),
+        _ => err_json(
+            StatusCode::UNAUTHORIZED,
+            "セッションが無効です。再ペアリングしてください",
+        ),
     }
 }
 
@@ -440,10 +460,16 @@ async fn auth_pair(
 
     let state2 = state.clone();
     let dn = device_name.clone();
-    let token = match tokio::task::spawn_blocking(move || auth::create_session(&state2, &dn, &ua)).await {
-        Ok(Ok(t)) => t,
-        _ => return err_json(StatusCode::INTERNAL_SERVER_ERROR, "セッションの作成に失敗しました"),
-    };
+    let token =
+        match tokio::task::spawn_blocking(move || auth::create_session(&state2, &dn, &ua)).await {
+            Ok(Ok(t)) => t,
+            _ => {
+                return err_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "セッションの作成に失敗しました",
+                )
+            }
+        };
 
     // 成功: コードは1回限り → 再発行
     if let Ok(mut code) = state.server.pairing_code.lock() {
@@ -452,7 +478,9 @@ async fn auth_pair(
     if let Ok(mut fails) = state.server.pair_fails.lock() {
         *fails = (0, None);
     }
-    state.server.log_line(&format!("ペアリング成功: {}", device_name));
+    state
+        .server
+        .log_line(&format!("ペアリング成功: {}", device_name));
     state.emit("server", "device_paired", json!({}));
 
     let secure = if is_https(&headers) { "; Secure" } else { "" };
@@ -476,8 +504,7 @@ async fn auth_me(State(state): State<Shared>, headers: HeaderMap) -> Response {
         return Json(json!({ "authenticated": false })).into_response();
     };
     let state2 = state.clone();
-    let device =
-        tokio::task::spawn_blocking(move || auth::validate_session(&state2, &token)).await;
+    let device = tokio::task::spawn_blocking(move || auth::validate_session(&state2, &token)).await;
     match device {
         Ok(Some(id)) => Json(json!({ "authenticated": true, "deviceId": id })).into_response(),
         _ => Json(json!({ "authenticated": false })).into_response(),
@@ -522,7 +549,10 @@ async fn invoke_handler(
             };
             err_json(status, &msg)
         }
-        Err(_) => err_json(StatusCode::INTERNAL_SERVER_ERROR, "内部エラーが発生しました"),
+        Err(_) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "内部エラーが発生しました",
+        ),
     }
 }
 
@@ -561,9 +591,28 @@ fn safe_name(name: &str) -> bool {
         .unwrap_or_default();
     let reserved = matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     );
     !reserved
 }
@@ -635,12 +684,21 @@ async fn file_graph(
     let mut response = serve_file(&path);
     if response.status() == StatusCode::OK {
         let disposition = if query.download == Some(1) {
-            format!("attachment; filename=\"graph.{}\"", if format == "thumbnail" { "png" } else { &format })
+            format!(
+                "attachment; filename=\"graph.{}\"",
+                if format == "thumbnail" {
+                    "png"
+                } else {
+                    &format
+                }
+            )
         } else {
             "inline".to_string()
         };
         if let Ok(value) = disposition.parse() {
-            response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
+            response
+                .headers_mut()
+                .insert(header::CONTENT_DISPOSITION, value);
         }
         response.headers_mut().insert(
             header::CACHE_CONTROL,
@@ -769,8 +827,7 @@ fn is_safe_local_absolute(path: &Path) -> bool {
     {
         return false;
     }
-    !raw
-        .char_indices()
+    !raw.char_indices()
         .any(|(index, ch)| ch == ':' && index != 1)
 }
 
@@ -871,10 +928,7 @@ pub(crate) fn resolve_compiled_file(
 }
 
 /// コンパイル成果物（一時ビルドフォルダ / 出力フォルダ / AIジョブフォルダ配下のみ）を配信
-async fn file_build(
-    State(state): State<Shared>,
-    Query(q): Query<BuildFileQuery>,
-) -> Response {
+async fn file_build(State(state): State<Shared>, Query(q): Query<BuildFileQuery>) -> Response {
     match resolve_compiled_file(&state, &PathBuf::from(&q.path)) {
         Ok(canonical) => {
             let mut response = serve_file(&canonical);
@@ -943,9 +997,7 @@ fn validate_uploaded_image(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-async fn read_upload(
-    multipart: &mut Multipart,
-) -> Result<(String, Vec<u8>), String> {
+async fn read_upload(multipart: &mut Multipart) -> Result<(String, Vec<u8>), String> {
     while let Some(field) = multipart
         .next_field()
         .await
@@ -971,7 +1023,9 @@ fn store_upload(
     allow_pdf: bool,
 ) -> Result<(PathBuf, String), String> {
     let Some(kind) = sniff_kind(bytes) else {
-        return Err("対応形式は PNG / JPEG / WEBP / PDF です（ファイル内容を確認してください）".into());
+        return Err(
+            "対応形式は PNG / JPEG / WEBP / PDF です（ファイル内容を確認してください）".into(),
+        );
     };
     if kind == "pdf" && !allow_pdf {
         return Err("この用途ではPDFは使用できません".into());
@@ -1018,7 +1072,11 @@ async fn upload_attachment(
             &uuid::Uuid::new_v4().simple().to_string()[..6],
             sanitize_upload_name(&original, &tmp)
         ));
-        let src = if std::fs::rename(&tmp, &renamed).is_ok() { renamed } else { tmp };
+        let src = if std::fs::rename(&tmp, &renamed).is_ok() {
+            renamed
+        } else {
+            tmp
+        };
         let r = crate::commands::attachments::add_attachment(
             &state2,
             q.problem_id,
@@ -1030,7 +1088,11 @@ async fn upload_attachment(
     .await;
     match result {
         Ok(Ok(v)) => {
-            state.emit("problems", "add_attachment", json!({"problemId": q.problem_id}));
+            state.emit(
+                "problems",
+                "add_attachment",
+                json!({"problemId": q.problem_id}),
+            );
             Json(v).into_response()
         }
         Ok(Err(e)) => err_json(StatusCode::BAD_REQUEST, &e),
@@ -1061,7 +1123,11 @@ async fn upload_part_attachment(
             &uuid::Uuid::new_v4().simple().to_string()[..6],
             sanitize_upload_name(&original, &tmp)
         ));
-        let src = if std::fs::rename(&tmp, &renamed).is_ok() { renamed } else { tmp };
+        let src = if std::fs::rename(&tmp, &renamed).is_ok() {
+            renamed
+        } else {
+            tmp
+        };
         let r = crate::commands::parts::add_part_attachment(
             &state2,
             q.part_id,
@@ -1095,7 +1161,11 @@ fn sanitize_upload_name(original: &str, tmp: &Path) -> String {
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || (*c as u32) > 0x7F)
         .take(40)
         .collect();
-    let stem = if stem.is_empty() { "file".to_string() } else { stem };
+    let stem = if stem.is_empty() {
+        "file".to_string()
+    } else {
+        stem
+    };
     format!("{}.{}", stem, ext)
 }
 
@@ -1104,16 +1174,14 @@ fn sanitize_upload_name(original: &str, tmp: &Path) -> String {
 async fn static_handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
-    let file = DIST
-        .get_file(path)
-        .or_else(|| {
-            // SPAフォールバック（/api以外）
-            if path.starts_with("api/") {
-                None
-            } else {
-                DIST.get_file("index.html")
-            }
-        });
+    let file = DIST.get_file(path).or_else(|| {
+        // SPAフォールバック（/api以外）
+        if path.starts_with("api/") {
+            None
+        } else {
+            DIST.get_file("index.html")
+        }
+    });
     match file {
         Some(f) => {
             let mime = mime_of(Path::new(f.path()));
@@ -1158,6 +1226,9 @@ mod tests {
             mime_of(Path::new("assets/pdf.worker.min.mjs")),
             "text/javascript; charset=utf-8"
         );
-        assert_eq!(mime_of(Path::new("pdfjs/wasm/qcms_bg.wasm")), "application/wasm");
+        assert_eq!(
+            mime_of(Path::new("pdfjs/wasm/qcms_bg.wasm")),
+            "application/wasm"
+        );
     }
 }

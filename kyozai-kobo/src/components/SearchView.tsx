@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { addProblemToProject, listAllTags, listProjects, searchProblems } from "../api";
 import { useApp } from "../store";
-import type { DifficultyRank, ProjectSummary, RequiredFilter, SearchResult } from "../types";
+import type { BankNode, DifficultyRank, ProjectSummary, RequiredFilter, SearchResult } from "../types";
 import {
   CompletionBadges,
   DIFFICULTY_RANKS,
@@ -11,13 +11,18 @@ import {
   TagChips,
 } from "./ui";
 
+function bankNodeOptions(nodes: BankNode[], depth = 0): Array<{ node: BankNode; label: string }> {
+  return nodes.flatMap((node) => [
+    { node, label: `${"　".repeat(depth)}${depth ? "└ " : ""}${node.name}` },
+    ...bankNodeOptions(node.children, depth + 1),
+  ]);
+}
+
 /** 問題検索画面 */
 export function SearchView() {
-  const { tree, refreshTree, openProblemInBank, showToast, setContextName, bumps } = useApp();
+  const { bankTree, refreshTree, openProblemInBank, showToast, setContextName, bumps } = useApp();
   const [text, setText] = useState("");
-  const [subjectId, setSubjectId] = useState<number | null>(null);
-  const [fieldId, setFieldId] = useState<number | null>(null);
-  const [unitId, setUnitId] = useState<number | null>(null);
+  const [bankNodeId, setBankNodeId] = useState<number | null>(null);
   const [difficulty, setDifficulty] = useState("");
   const [rankFilters, setRankFilters] = useState<(DifficultyRank | "__unset")[]>([]);
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("all");
@@ -44,20 +49,13 @@ export function SearchView() {
     listAllTags().then(setTags).catch(() => {});
   }, [bumps.problems]);
 
-  const subject = useMemo(() => tree.find((s) => s.id === subjectId) ?? null, [tree, subjectId]);
-  const field = useMemo(
-    () => subject?.fields.find((f) => f.id === fieldId) ?? null,
-    [subject, fieldId],
-  );
-
   const run = async () => {
     const requestId = ++searchRequestRef.current;
     try {
       const r = await searchProblems({
         text,
-        subject_id: subjectId,
-        field_id: fieldId,
-        unit_id: unitId,
+        bank_node_id: bankNodeId,
+        include_descendants: true,
         difficulty: difficulty || null,
         difficulty_ranks: rankFilters.length ? rankFilters : null,
         required_filter: requiredFilter === "all" ? null : requiredFilter,
@@ -74,7 +72,7 @@ export function SearchView() {
   useEffect(() => {
     const t = setTimeout(run, 250);
     return () => clearTimeout(t);
-  }, [text, subjectId, fieldId, unitId, difficulty, rankFilters, requiredFilter, tag, bumps.problems, bumps.projects]);
+  }, [text, bankNodeId, difficulty, rankFilters, requiredFilter, tag, bumps.problems, bumps.projects]);
 
   const toggleRankFilter = (rank: DifficultyRank | "__unset") => {
     setRankFilters((current) =>
@@ -111,53 +109,18 @@ export function SearchView() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           className="input w-full"
-          placeholder="キーワード検索（タイトル・問題文・タグ・単元名・難易度） Ctrl+F"
+          placeholder="キーワード検索（タイトル・問題文・タグ・階層名・難易度） Ctrl+F"
         />
         <div className="flex flex-wrap gap-2">
           <select
-            value={subjectId ?? ""}
-            onChange={(e) => {
-              setSubjectId(e.target.value ? Number(e.target.value) : null);
-              setFieldId(null);
-              setUnitId(null);
-            }}
+            value={bankNodeId ?? ""}
+            onChange={(e) => setBankNodeId(e.target.value ? Number(e.target.value) : null)}
             className="select"
           >
-            <option value="">科目: すべて</option>
-            {tree.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={fieldId ?? ""}
-            onChange={(e) => {
-              setFieldId(e.target.value ? Number(e.target.value) : null);
-              setUnitId(null);
-            }}
-            className="select"
-            disabled={!subject}
-            title={subject ? undefined : "先に科目を選択すると分野で絞り込めます"}
-          >
-            <option value="">{subject ? "分野: すべて" : "分野: 先に科目を選択"}</option>
-            {subject?.fields.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={unitId ?? ""}
-            onChange={(e) => setUnitId(e.target.value ? Number(e.target.value) : null)}
-            className="select"
-            disabled={!field}
-            title={field ? undefined : "先に分野を選択すると単元で絞り込めます"}
-          >
-            <option value="">{field ? "単元: すべて" : "単元: 先に分野を選択"}</option>
-            {field?.units.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
+            <option value="">階層: 全体</option>
+            {bankNodeOptions(bankTree).map(({ node, label }) => (
+              <option key={node.id} value={node.id}>
+                {label}
               </option>
             ))}
           </select>
@@ -240,12 +203,12 @@ export function SearchView() {
                 >
                   <td
                     className="cursor-pointer px-4 py-2 font-medium"
-                    onClick={() => openProblemInBank(r.unit_id, r.id)}
+                    onClick={() => openProblemInBank(r.bank_node_id, r.id)}
                   >
                     {r.title}
                   </td>
                   <td className="px-2 py-2 text-xs whitespace-nowrap" style={{ color: "var(--muted)" }}>
-                    {r.subject_name} / {r.field_name} / {r.unit_name}
+                    {r.bank_path}
                   </td>
                   <td className="px-2 py-2">
                     <span className="flex flex-wrap gap-1">
@@ -270,7 +233,7 @@ export function SearchView() {
                   </td>
                   <td className="px-2 py-2 whitespace-nowrap">
                     <button
-                      onClick={() => openProblemInBank(r.unit_id, r.id)}
+                      onClick={() => openProblemInBank(r.bank_node_id, r.id)}
                       className="btn btn-ghost btn-sm mr-1"
                     >
                       開く

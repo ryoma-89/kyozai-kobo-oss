@@ -16,6 +16,7 @@ import { PairingScreen } from "./components/PairingScreen";
 import { PdfCanvasViewer } from "./components/PdfCanvasViewer";
 import { PdfSaveButton } from "./components/PdfSaveButton";
 import { PartsView } from "./components/PartsView";
+import { PatternLibraryView } from "./components/PatternLibraryView";
 import { ProjectsView } from "./components/ProjectsView";
 import { SearchView } from "./components/SearchView";
 import { SetupGuide } from "./components/SetupGuide";
@@ -36,6 +37,7 @@ import type { AiChatLaunchTarget } from "./aiChat";
 
 const NAV: { view: View; label: string; icon: string }[] = [
   { view: "bank", label: "問題バンク", icon: "▦" },
+  { view: "patterns", label: "定石", icon: "◇" },
   { view: "projects", label: "教材", icon: "▤" },
   { view: "parts", label: "部品", icon: "▧" },
   { view: "templates", label: "テンプレート", icon: "❖" },
@@ -100,7 +102,7 @@ export default function App() {
 
   const refreshAiActivity = async () => {
     try {
-      const jobs = await aiListJobs(30);
+      const jobs = (await aiListJobs(30)).filter((job) => job.options.hideFromHistory !== true);
       if (aiActivityInitializedRef.current) {
         const newlyFinished = jobs
           .filter((job) => {
@@ -520,6 +522,7 @@ export default function App() {
         {/* メイン */}
         <main className="app-main min-h-0 min-w-0 flex-1 overflow-hidden" style={{ background: "var(--bg)" }}>
           {view === "bank" && <BankView />}
+          {view === "patterns" && <PatternLibraryView />}
           {view === "search" && <SearchView />}
           {view === "projects" && <ProjectsView />}
           {view === "parts" && <PartsView />}

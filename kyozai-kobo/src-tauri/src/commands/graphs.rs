@@ -2,9 +2,9 @@
 //! MathGraph PDF Studio の既存 Project JSON を正本として保持し、
 //! Webから渡されたパスやコマンドは一切実行しない。
 
+use super::graph_integration::{get_setting, safe_width};
 use crate::db::now_str;
 use crate::state::{err_str, AppState};
-use super::graph_integration::{get_setting, safe_width};
 use base64::Engine;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,10 @@ fn safe_graph_id(id: &str) -> bool {
 fn clean_title(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.chars().count() > MAX_TITLE_CHARS {
-        return Err(format!("タイトルは{}文字以内にしてください", MAX_TITLE_CHARS));
+        return Err(format!(
+            "タイトルは{}文字以内にしてください",
+            MAX_TITLE_CHARS
+        ));
     }
     Ok(if value.is_empty() {
         "無題のグラフ".to_string()
@@ -131,100 +134,291 @@ fn reject_unknown_keys(
 }
 
 fn finite_vec3(value: Option<&Value>, path: &str) -> Result<(), String> {
-    let values = value.and_then(Value::as_array).ok_or_else(|| format!("{path} は3要素の配列で指定してください"))?;
-    if values.len() != 3 || values.iter().any(|value| value.as_f64().is_none_or(|number| !number.is_finite() || number.abs() > 1.0e6)) {
-        return Err(format!("{path} は±1000000以内の有限な3次元座標で指定してください"));
+    let values = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{path} は3要素の配列で指定してください"))?;
+    if values.len() != 3
+        || values.iter().any(|value| {
+            value
+                .as_f64()
+                .is_none_or(|number| !number.is_finite() || number.abs() > 1.0e6)
+        })
+    {
+        return Err(format!(
+            "{path} は±1000000以内の有限な3次元座標で指定してください"
+        ));
     }
     Ok(())
 }
 
 fn bounded_number(value: Option<&Value>, path: &str, min: f64, max: f64) -> Result<f64, String> {
-    let number = value.and_then(Value::as_f64).ok_or_else(|| format!("{path} は数値で指定してください"))?;
-    if !number.is_finite() || !(min..=max).contains(&number) { return Err(format!("{path} が範囲外です")); }
+    let number = value
+        .and_then(Value::as_f64)
+        .ok_or_else(|| format!("{path} は数値で指定してください"))?;
+    if !number.is_finite() || !(min..=max).contains(&number) {
+        return Err(format!("{path} が範囲外です"));
+    }
     Ok(number)
 }
 
 fn is_hex_color(value: Option<&Value>) -> bool {
-    value.and_then(Value::as_str).is_some_and(|text| text.len() == 7 && text.starts_with('#') && text[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+    value.and_then(Value::as_str).is_some_and(|text| {
+        text.len() == 7
+            && text.starts_with('#')
+            && text[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
 }
 
 fn validate_vertex_names(value: Option<&Value>, path: &str) -> Result<(), String> {
-    let Some(value) = value else { return Ok(()); };
-    let names = value.as_array().ok_or_else(|| format!("{path} は配列で指定してください"))?;
-    if names.len() > 100 || names.iter().any(|name| name.as_str().is_none_or(|text| text.chars().count() > 30 || text.chars().any(char::is_control))) {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let names = value
+        .as_array()
+        .ok_or_else(|| format!("{path} は配列で指定してください"))?;
+    if names.len() > 100
+        || names.iter().any(|name| {
+            name.as_str()
+                .is_none_or(|text| text.chars().count() > 30 || text.chars().any(char::is_control))
+        })
+    {
         return Err(format!("{path} が不正です"));
     }
     Ok(())
 }
 
-fn validate_spatial_geometry(kind: &str, geometry: &serde_json::Map<String, Value>, path: &str) -> Result<(), String> {
+fn validate_spatial_geometry(
+    kind: &str,
+    geometry: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Result<(), String> {
     match kind {
         "cube" => {
-            bounded_number(geometry.get("sideLength"), &format!("{path}.sideLength"), 0.01, 10_000.0)?;
+            bounded_number(
+                geometry.get("sideLength"),
+                &format!("{path}.sideLength"),
+                0.01,
+                10_000.0,
+            )?;
             validate_vertex_names(geometry.get("vertexNames"), &format!("{path}.vertexNames"))?;
         }
         "cuboid" => {
-            for key in ["width", "height", "depth"] { bounded_number(geometry.get(key), &format!("{path}.{key}"), 0.01, 10_000.0)?; }
+            for key in ["width", "height", "depth"] {
+                bounded_number(geometry.get(key), &format!("{path}.{key}"), 0.01, 10_000.0)?;
+            }
             validate_vertex_names(geometry.get("vertexNames"), &format!("{path}.vertexNames"))?;
         }
         "prism" | "pyramid" | "cylinder" | "cone" => {
-            bounded_number(geometry.get("radius"), &format!("{path}.radius"), 0.01, 10_000.0)?;
-            bounded_number(geometry.get("height"), &format!("{path}.height"), 0.01, 10_000.0)?;
-            let sides = geometry.get("sides").and_then(Value::as_i64).ok_or_else(|| format!("{path}.sides は整数で指定してください"))?;
-            if !(3..=48).contains(&sides) { return Err(format!("{path}.sides が範囲外です")); }
+            bounded_number(
+                geometry.get("radius"),
+                &format!("{path}.radius"),
+                0.01,
+                10_000.0,
+            )?;
+            bounded_number(
+                geometry.get("height"),
+                &format!("{path}.height"),
+                0.01,
+                10_000.0,
+            )?;
+            let sides = geometry
+                .get("sides")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| format!("{path}.sides は整数で指定してください"))?;
+            if !(3..=48).contains(&sides) {
+                return Err(format!("{path}.sides が範囲外です"));
+            }
             validate_vertex_names(geometry.get("vertexNames"), &format!("{path}.vertexNames"))?;
         }
-        "sphere" => { bounded_number(geometry.get("radius"), &format!("{path}.radius"), 0.01, 10_000.0)?; }
+        "sphere" => {
+            bounded_number(
+                geometry.get("radius"),
+                &format!("{path}.radius"),
+                0.01,
+                10_000.0,
+            )?;
+        }
         "surface3d" => {
-            let expression = geometry.get("expression").and_then(Value::as_str).ok_or_else(|| format!("{path}.expression が必要です"))?;
-            if expression.is_empty() || expression.chars().count() > 500 || expression.chars().any(char::is_control) { return Err(format!("{path}.expression が不正です")); }
-            let x_min = bounded_number(geometry.get("xMin"), &format!("{path}.xMin"), -1_000_000.0, 1_000_000.0)?;
-            let x_max = bounded_number(geometry.get("xMax"), &format!("{path}.xMax"), -1_000_000.0, 1_000_000.0)?;
-            let y_min = bounded_number(geometry.get("yMin"), &format!("{path}.yMin"), -1_000_000.0, 1_000_000.0)?;
-            let y_max = bounded_number(geometry.get("yMax"), &format!("{path}.yMax"), -1_000_000.0, 1_000_000.0)?;
-            if x_min >= x_max || y_min >= y_max { return Err(format!("{path} の表示範囲が不正です")); }
-            let resolution = geometry.get("resolution").and_then(Value::as_i64).ok_or_else(|| format!("{path}.resolution は整数で指定してください"))?;
-            if !(4..=160).contains(&resolution) || geometry.get("wireframe").and_then(Value::as_bool).is_none() { return Err(format!("{path} のメッシュ設定が不正です")); }
+            let expression = geometry
+                .get("expression")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{path}.expression が必要です"))?;
+            if expression.is_empty()
+                || expression.chars().count() > 500
+                || expression.chars().any(char::is_control)
+            {
+                return Err(format!("{path}.expression が不正です"));
+            }
+            let x_min = bounded_number(
+                geometry.get("xMin"),
+                &format!("{path}.xMin"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            let x_max = bounded_number(
+                geometry.get("xMax"),
+                &format!("{path}.xMax"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            let y_min = bounded_number(
+                geometry.get("yMin"),
+                &format!("{path}.yMin"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            let y_max = bounded_number(
+                geometry.get("yMax"),
+                &format!("{path}.yMax"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            if x_min >= x_max || y_min >= y_max {
+                return Err(format!("{path} の表示範囲が不正です"));
+            }
+            let resolution = geometry
+                .get("resolution")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| format!("{path}.resolution は整数で指定してください"))?;
+            if !(4..=160).contains(&resolution)
+                || geometry.get("wireframe").and_then(Value::as_bool).is_none()
+            {
+                return Err(format!("{path} のメッシュ設定が不正です"));
+            }
         }
         "planarGraph3d" => {
-            let expression = geometry.get("expression").and_then(Value::as_str).ok_or_else(|| format!("{path}.expression が必要です"))?;
-            if expression.is_empty() || expression.chars().count() > 500 || expression.chars().any(char::is_control) { return Err(format!("{path}.expression が不正です")); }
-            let x_min = bounded_number(geometry.get("xMin"), &format!("{path}.xMin"), -1_000_000.0, 1_000_000.0)?;
-            let x_max = bounded_number(geometry.get("xMax"), &format!("{path}.xMax"), -1_000_000.0, 1_000_000.0)?;
-            let y_min = bounded_number(geometry.get("yMin"), &format!("{path}.yMin"), -1_000_000.0, 1_000_000.0)?;
-            let y_max = bounded_number(geometry.get("yMax"), &format!("{path}.yMax"), -1_000_000.0, 1_000_000.0)?;
-            if x_min >= x_max || y_min >= y_max { return Err(format!("{path} の表示範囲が不正です")); }
-            let resolution = geometry.get("resolution").and_then(Value::as_i64).ok_or_else(|| format!("{path}.resolution は整数で指定してください"))?;
-            if !(12..=240).contains(&resolution) { return Err(format!("{path} の描画精度が不正です")); }
-            let t_min = geometry.get("tMin").map(|_| bounded_number(geometry.get("tMin"), &format!("{path}.tMin"), -1_000_000.0, 1_000_000.0)).transpose()?;
-            let t_max = geometry.get("tMax").map(|_| bounded_number(geometry.get("tMax"), &format!("{path}.tMax"), -1_000_000.0, 1_000_000.0)).transpose()?;
-            if t_min.zip(t_max).is_some_and(|(min, max)| min >= max) { return Err(format!("{path} の媒介変数範囲が不正です")); }
-            if geometry.get("fill").is_some_and(|value| !value.is_boolean()) { return Err(format!("{path}.fill が不正です")); }
-            if geometry.get("plane").is_some_and(|value| !matches!(value.as_str(), Some("xy" | "xz" | "yz"))) { return Err(format!("{path}.plane が不正です")); }
+            let expression = geometry
+                .get("expression")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{path}.expression が必要です"))?;
+            if expression.is_empty()
+                || expression.chars().count() > 500
+                || expression.chars().any(char::is_control)
+            {
+                return Err(format!("{path}.expression が不正です"));
+            }
+            let x_min = bounded_number(
+                geometry.get("xMin"),
+                &format!("{path}.xMin"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            let x_max = bounded_number(
+                geometry.get("xMax"),
+                &format!("{path}.xMax"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            let y_min = bounded_number(
+                geometry.get("yMin"),
+                &format!("{path}.yMin"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            let y_max = bounded_number(
+                geometry.get("yMax"),
+                &format!("{path}.yMax"),
+                -1_000_000.0,
+                1_000_000.0,
+            )?;
+            if x_min >= x_max || y_min >= y_max {
+                return Err(format!("{path} の表示範囲が不正です"));
+            }
+            let resolution = geometry
+                .get("resolution")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| format!("{path}.resolution は整数で指定してください"))?;
+            if !(12..=240).contains(&resolution) {
+                return Err(format!("{path} の描画精度が不正です"));
+            }
+            let t_min = geometry
+                .get("tMin")
+                .map(|_| {
+                    bounded_number(
+                        geometry.get("tMin"),
+                        &format!("{path}.tMin"),
+                        -1_000_000.0,
+                        1_000_000.0,
+                    )
+                })
+                .transpose()?;
+            let t_max = geometry
+                .get("tMax")
+                .map(|_| {
+                    bounded_number(
+                        geometry.get("tMax"),
+                        &format!("{path}.tMax"),
+                        -1_000_000.0,
+                        1_000_000.0,
+                    )
+                })
+                .transpose()?;
+            if t_min.zip(t_max).is_some_and(|(min, max)| min >= max) {
+                return Err(format!("{path} の媒介変数範囲が不正です"));
+            }
+            if geometry
+                .get("fill")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return Err(format!("{path}.fill が不正です"));
+            }
+            if geometry
+                .get("plane")
+                .is_some_and(|value| !matches!(value.as_str(), Some("xy" | "xz" | "yz")))
+            {
+                return Err(format!("{path}.plane が不正です"));
+            }
         }
         "point3d" => finite_vec3(geometry.get("point"), &format!("{path}.point"))?,
         "segment3d" | "vector3d" => {
             finite_vec3(geometry.get("from"), &format!("{path}.from"))?;
             finite_vec3(geometry.get("to"), &format!("{path}.to"))?;
-            if geometry.get("lineType").is_some_and(|value| !matches!(value.as_str(), Some("solid" | "dashed"))) { return Err(format!("{path}.lineType が不正です")); }
+            if geometry
+                .get("lineType")
+                .is_some_and(|value| !matches!(value.as_str(), Some("solid" | "dashed")))
+            {
+                return Err(format!("{path}.lineType が不正です"));
+            }
         }
         "polygon3d" => {
-            let points = geometry.get("points").and_then(Value::as_array).ok_or_else(|| format!("{path}.points が必要です"))?;
-            if !(3..=500).contains(&points.len()) { return Err(format!("{path}.points の要素数が不正です")); }
-            for (index, point) in points.iter().enumerate() { finite_vec3(Some(point), &format!("{path}.points[{index}]"))?; }
+            let points = geometry
+                .get("points")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("{path}.points が必要です"))?;
+            if !(3..=500).contains(&points.len()) {
+                return Err(format!("{path}.points の要素数が不正です"));
+            }
+            for (index, point) in points.iter().enumerate() {
+                finite_vec3(Some(point), &format!("{path}.points[{index}]"))?;
+            }
         }
         "plane3d" | "sectionPlane" => {
             finite_vec3(geometry.get("point"), &format!("{path}.point"))?;
             finite_vec3(geometry.get("normal"), &format!("{path}.normal"))?;
             let normal = geometry.get("normal").and_then(Value::as_array).unwrap();
-            let length_squared: f64 = normal.iter().map(|value| value.as_f64().unwrap().powi(2)).sum();
-            if length_squared < 1.0e-18 { return Err(format!("{path}.normal はゼロベクトルにできません")); }
-            bounded_number(geometry.get("size"), &format!("{path}.size"), 0.01, 10_000.0)?;
+            let length_squared: f64 = normal
+                .iter()
+                .map(|value| value.as_f64().unwrap().powi(2))
+                .sum();
+            if length_squared < 1.0e-18 {
+                return Err(format!("{path}.normal はゼロベクトルにできません"));
+            }
+            bounded_number(
+                geometry.get("size"),
+                &format!("{path}.size"),
+                0.01,
+                10_000.0,
+            )?;
         }
         "label3d" => {
             finite_vec3(geometry.get("position"), &format!("{path}.position"))?;
-            let text = geometry.get("text").and_then(Value::as_str).ok_or_else(|| format!("{path}.text が必要です"))?;
-            if text.chars().count() > 1_000 || text.chars().any(char::is_control) { return Err(format!("{path}.text が不正です")); }
+            let text = geometry
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{path}.text が必要です"))?;
+            if text.chars().count() > 1_000 || text.chars().any(char::is_control) {
+                return Err(format!("{path}.text が不正です"));
+            }
         }
         _ => return Err(format!("{path} の型が不正です")),
     }
@@ -232,29 +426,61 @@ fn validate_spatial_geometry(kind: &str, geometry: &serde_json::Map<String, Valu
 }
 
 fn validate_spatial_value(value: &Value, path: &str, depth: usize) -> Result<(), String> {
-    if depth > 10 { return Err(format!("{path} の入れ子が深すぎます")); }
+    if depth > 10 {
+        return Err(format!("{path} の入れ子が深すぎます"));
+    }
     match value {
         Value::Null | Value::Bool(_) => Ok(()),
         Value::Number(number) => {
-            let value = number.as_f64().ok_or_else(|| format!("{path} の数値が不正です"))?;
-            if !value.is_finite() || value.abs() > 1.0e6 { Err(format!("{path} の数値が範囲外です")) } else { Ok(()) }
+            let value = number
+                .as_f64()
+                .ok_or_else(|| format!("{path} の数値が不正です"))?;
+            if !value.is_finite() || value.abs() > 1.0e6 {
+                Err(format!("{path} の数値が範囲外です"))
+            } else {
+                Ok(())
+            }
         }
         Value::String(text) => {
             let lower = text.to_ascii_lowercase();
-            if text.len() > 2_000 || text.chars().any(char::is_control)
-                || ["://", "javascript:", "file:", "powershell", "cmd.exe", "\\\\", "../"]
-                    .iter().any(|bad| lower.contains(bad))
-            { Err(format!("{path} の文字列が不正です")) } else { Ok(()) }
+            if text.len() > 2_000
+                || text.chars().any(char::is_control)
+                || [
+                    "://",
+                    "javascript:",
+                    "file:",
+                    "powershell",
+                    "cmd.exe",
+                    "\\\\",
+                    "../",
+                ]
+                .iter()
+                .any(|bad| lower.contains(bad))
+            {
+                Err(format!("{path} の文字列が不正です"))
+            } else {
+                Ok(())
+            }
         }
         Value::Array(values) => {
-            if values.len() > 2_000 { return Err(format!("{path} の要素数が多すぎます")); }
-            for (index, value) in values.iter().enumerate() { validate_spatial_value(value, &format!("{path}[{index}]"), depth + 1)?; }
+            if values.len() > 2_000 {
+                return Err(format!("{path} の要素数が多すぎます"));
+            }
+            for (index, value) in values.iter().enumerate() {
+                validate_spatial_value(value, &format!("{path}[{index}]"), depth + 1)?;
+            }
             Ok(())
         }
         Value::Object(values) => {
-            if values.len() > 200 { return Err(format!("{path} の項目数が多すぎます")); }
+            if values.len() > 200 {
+                return Err(format!("{path} の項目数が多すぎます"));
+            }
             for (key, value) in values {
-                if key.len() > 100 || !key.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-')) {
+                if key.len() > 100
+                    || !key.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+                    })
+                {
                     return Err(format!("{path} の項目名が不正です"));
                 }
                 validate_spatial_value(value, &format!("{path}.{key}"), depth + 1)?;
@@ -265,123 +491,501 @@ fn validate_spatial_value(value: &Value, path: &str, depth: usize) -> Result<(),
 }
 
 fn validate_spatial_graph(root: &serde_json::Map<String, Value>) -> Result<(), String> {
-    reject_unknown_keys(root, "graph.json", &["schemaVersion", "documentType", "id", "title", "projection", "output", "scene", "objects", "createdAt", "updatedAt", "version"])?;
+    reject_unknown_keys(
+        root,
+        "graph.json",
+        &[
+            "schemaVersion",
+            "documentType",
+            "id",
+            "title",
+            "projection",
+            "output",
+            "scene",
+            "objects",
+            "createdAt",
+            "updatedAt",
+            "version",
+        ],
+    )?;
     if root.get("schemaVersion").and_then(Value::as_i64) != Some(2)
         || root.get("documentType").and_then(Value::as_str) != Some("spatial-geometry")
-    { return Err("未対応の空間図形JSONです".into()); }
-    let id = root.get("id").and_then(Value::as_str).ok_or_else(|| "空間図形IDが必要です".to_string())?;
-    if !safe_graph_id(id) && !(id.starts_with("document_") && id.len() <= 100 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+    {
+        return Err("未対応の空間図形JSONです".into());
+    }
+    let id = root
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "空間図形IDが必要です".to_string())?;
+    if !safe_graph_id(id)
+        && !(id.starts_with("document_")
+            && id.len() <= 100
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    {
         return Err("空間図形IDが不正です".into());
     }
-    if root.get("title").and_then(Value::as_str).is_none_or(|title| title.chars().count() > 200) { return Err("タイトルが不正です".into()); }
+    if root
+        .get("title")
+        .and_then(Value::as_str)
+        .is_none_or(|title| title.chars().count() > 200)
+    {
+        return Err("タイトルが不正です".into());
+    }
     validate_spatial_value(root.get("title").unwrap_or(&Value::Null), "title", 0)?;
-    let projection = root.get("projection").and_then(Value::as_object).ok_or_else(|| "projectionが必要です".to_string())?;
-    reject_unknown_keys(projection, "projection", &["type", "cameraPosition", "target", "up", "zoom", "fov", "viewHeight", "preset"])?;
-    if !matches!(projection.get("type").and_then(Value::as_str), Some("orthographic" | "perspective")) { return Err("投影方式が不正です".into()); }
-    finite_vec3(projection.get("cameraPosition"), "projection.cameraPosition")?;
+    let projection = root
+        .get("projection")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "projectionが必要です".to_string())?;
+    reject_unknown_keys(
+        projection,
+        "projection",
+        &[
+            "type",
+            "cameraPosition",
+            "target",
+            "up",
+            "zoom",
+            "fov",
+            "viewHeight",
+            "preset",
+        ],
+    )?;
+    if !matches!(
+        projection.get("type").and_then(Value::as_str),
+        Some("orthographic" | "perspective")
+    ) {
+        return Err("投影方式が不正です".into());
+    }
+    finite_vec3(
+        projection.get("cameraPosition"),
+        "projection.cameraPosition",
+    )?;
     finite_vec3(projection.get("target"), "projection.target")?;
     finite_vec3(projection.get("up"), "projection.up")?;
-    if projection.get("zoom").and_then(Value::as_f64).is_none_or(|value| !(0.05..=100.0).contains(&value)) { return Err("zoomが不正です".into()); }
-    if projection.get("fov").and_then(Value::as_f64).is_none_or(|value| !(10.0..=100.0).contains(&value)) { return Err("fovが不正です".into()); }
-    if projection.contains_key("viewHeight") { bounded_number(projection.get("viewHeight"), "projection.viewHeight", 0.01, 5_000_000.0)?; }
+    if projection
+        .get("zoom")
+        .and_then(Value::as_f64)
+        .is_none_or(|value| !(0.05..=100.0).contains(&value))
+    {
+        return Err("zoomが不正です".into());
+    }
+    if projection
+        .get("fov")
+        .and_then(Value::as_f64)
+        .is_none_or(|value| !(10.0..=100.0).contains(&value))
+    {
+        return Err("fovが不正です".into());
+    }
+    if projection.contains_key("viewHeight") {
+        bounded_number(
+            projection.get("viewHeight"),
+            "projection.viewHeight",
+            0.01,
+            5_000_000.0,
+        )?;
+    }
     if let Some(output) = root.get("output") {
-        let output = output.as_object().ok_or_else(|| "outputが不正です".to_string())?;
+        let output = output
+            .as_object()
+            .ok_or_else(|| "outputが不正です".to_string())?;
         reject_unknown_keys(output, "output", &["widthMm", "heightMm", "pixelWidth"])?;
         bounded_number(output.get("widthMm"), "output.widthMm", 10.0, 1_000.0)?;
         bounded_number(output.get("heightMm"), "output.heightMm", 10.0, 1_000.0)?;
-        let pixel_width = output.get("pixelWidth").and_then(Value::as_i64).ok_or_else(|| "output.pixelWidthは整数で指定してください".to_string())?;
-        if !(400..=8_000).contains(&pixel_width) { return Err("output.pixelWidthが範囲外です".into()); }
+        let pixel_width = output
+            .get("pixelWidth")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| "output.pixelWidthは整数で指定してください".to_string())?;
+        if !(400..=8_000).contains(&pixel_width) {
+            return Err("output.pixelWidthが範囲外です".into());
+        }
     }
-    let scene = root.get("scene").and_then(Value::as_object).ok_or_else(|| "sceneが必要です".to_string())?;
-    reject_unknown_keys(scene, "scene", &["background", "showAxes", "axesColor", "axesLabelSize", "axesLabelGap", "axesLabels", "axesLabelBackground", "showOriginLabel", "originLabel", "originLabelPosition", "originLabelOffset", "showGrid", "showHiddenEdges", "quality"])?;
-    if !matches!(scene.get("background").and_then(Value::as_str), Some("white" | "transparent"))
-        || !matches!(scene.get("quality").and_then(Value::as_str), Some("low" | "standard" | "high"))
-        || scene.get("axesColor").is_some_and(|_| !is_hex_color(scene.get("axesColor")))
-        || ["showAxes", "showGrid", "showHiddenEdges"].iter().any(|key| scene.get(*key).and_then(Value::as_bool).is_none())
-    { return Err("sceneの表示設定が不正です".into()); }
-    if scene.contains_key("axesLabelSize") { bounded_number(scene.get("axesLabelSize"), "scene.axesLabelSize", 8.0, 72.0)?; }
-    if scene.contains_key("axesLabelGap") { bounded_number(scene.get("axesLabelGap"), "scene.axesLabelGap", 0.0, 200.0)?; }
+    let scene = root
+        .get("scene")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "sceneが必要です".to_string())?;
+    reject_unknown_keys(
+        scene,
+        "scene",
+        &[
+            "background",
+            "showAxes",
+            "axesColor",
+            "axesLabelSize",
+            "axesLabelGap",
+            "axesLabels",
+            "axesLabelBackground",
+            "showOriginLabel",
+            "originLabel",
+            "originLabelPosition",
+            "originLabelOffset",
+            "showGrid",
+            "showHiddenEdges",
+            "quality",
+        ],
+    )?;
+    if !matches!(
+        scene.get("background").and_then(Value::as_str),
+        Some("white" | "transparent")
+    ) || !matches!(
+        scene.get("quality").and_then(Value::as_str),
+        Some("low" | "standard" | "high")
+    ) || scene
+        .get("axesColor")
+        .is_some_and(|_| !is_hex_color(scene.get("axesColor")))
+        || ["showAxes", "showGrid", "showHiddenEdges"]
+            .iter()
+            .any(|key| scene.get(*key).and_then(Value::as_bool).is_none())
+    {
+        return Err("sceneの表示設定が不正です".into());
+    }
+    if scene.contains_key("axesLabelSize") {
+        bounded_number(scene.get("axesLabelSize"), "scene.axesLabelSize", 8.0, 72.0)?;
+    }
+    if scene.contains_key("axesLabelGap") {
+        bounded_number(scene.get("axesLabelGap"), "scene.axesLabelGap", 0.0, 200.0)?;
+    }
     if let Some(labels_value) = scene.get("axesLabels") {
-        let labels = labels_value.as_object().ok_or_else(|| "scene.axesLabelsはオブジェクトで指定してください".to_string())?;
+        let labels = labels_value
+            .as_object()
+            .ok_or_else(|| "scene.axesLabelsはオブジェクトで指定してください".to_string())?;
         reject_unknown_keys(labels, "scene.axesLabels", &["x", "y", "z"])?;
         for axis in ["x", "y", "z"] {
-            if labels.get(axis).and_then(Value::as_str).is_none_or(|text| text.chars().count() > 30 || text.chars().any(char::is_control)) {
+            if labels
+                .get(axis)
+                .and_then(Value::as_str)
+                .is_none_or(|text| text.chars().count() > 30 || text.chars().any(char::is_control))
+            {
                 return Err(format!("scene.axesLabels.{axis}が不正です"));
             }
         }
     }
-    if scene.get("axesLabelBackground").is_some_and(|value| !matches!(value.as_str(), Some("transparent" | "white"))) { return Err("scene.axesLabelBackgroundが不正です".into()); }
-    if scene.get("showOriginLabel").is_some_and(|value| !value.is_boolean()) { return Err("scene.showOriginLabelが不正です".into()); }
-    if scene.get("originLabel").is_some_and(|value| value.as_str().is_none_or(|text| text.chars().count() > 30 || text.chars().any(char::is_control))) { return Err("scene.originLabelが不正です".into()); }
-    if scene.contains_key("originLabelPosition") { finite_vec3(scene.get("originLabelPosition"), "scene.originLabelPosition")?; }
+    if scene
+        .get("axesLabelBackground")
+        .is_some_and(|value| !matches!(value.as_str(), Some("transparent" | "white")))
+    {
+        return Err("scene.axesLabelBackgroundが不正です".into());
+    }
+    if scene
+        .get("showOriginLabel")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err("scene.showOriginLabelが不正です".into());
+    }
+    if scene.get("originLabel").is_some_and(|value| {
+        value
+            .as_str()
+            .is_none_or(|text| text.chars().count() > 30 || text.chars().any(char::is_control))
+    }) {
+        return Err("scene.originLabelが不正です".into());
+    }
+    if scene.contains_key("originLabelPosition") {
+        finite_vec3(
+            scene.get("originLabelPosition"),
+            "scene.originLabelPosition",
+        )?;
+    }
     // originLabelOffsetは直前版の画面px形式。旧JSON読込専用として受理する。
     if let Some(offset) = scene.get("originLabelOffset") {
-        let values = offset.as_array().ok_or_else(|| "scene.originLabelOffsetは2要素の配列で指定してください".to_string())?;
-        if values.len() != 2 || values.iter().any(|value| value.as_f64().is_none_or(|number| !number.is_finite() || !(-500.0..=500.0).contains(&number))) {
+        let values = offset
+            .as_array()
+            .ok_or_else(|| "scene.originLabelOffsetは2要素の配列で指定してください".to_string())?;
+        if values.len() != 2
+            || values.iter().any(|value| {
+                value
+                    .as_f64()
+                    .is_none_or(|number| !number.is_finite() || !(-500.0..=500.0).contains(&number))
+            })
+        {
             return Err("scene.originLabelOffsetが範囲外です".into());
         }
     }
-    if root.get("version").and_then(Value::as_i64).is_none_or(|value| value < 1) { return Err("空間図形versionが不正です".into()); }
-    for key in ["createdAt", "updatedAt"] {
-        if root.get(key).and_then(Value::as_str).is_none_or(|value| value.len() > 100 || value.chars().any(char::is_control)) { return Err(format!("{key}が不正です")); }
+    if root
+        .get("version")
+        .and_then(Value::as_i64)
+        .is_none_or(|value| value < 1)
+    {
+        return Err("空間図形versionが不正です".into());
     }
-    let objects = root.get("objects").and_then(Value::as_array).ok_or_else(|| "objects配列が必要です".to_string())?;
-    if objects.len() > 1_000 { return Err("空間図形オブジェクトは1000件までです".into()); }
-    let allowed_types = ["point3d", "segment3d", "vector3d", "polygon3d", "plane3d", "cube", "cuboid", "prism", "pyramid", "cylinder", "cone", "sphere", "surface3d", "planarGraph3d", "sectionPlane", "label3d"];
+    for key in ["createdAt", "updatedAt"] {
+        if root
+            .get(key)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.len() > 100 || value.chars().any(char::is_control))
+        {
+            return Err(format!("{key}が不正です"));
+        }
+    }
+    let objects = root
+        .get("objects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "objects配列が必要です".to_string())?;
+    if objects.len() > 1_000 {
+        return Err("空間図形オブジェクトは1000件までです".into());
+    }
+    let allowed_types = [
+        "point3d",
+        "segment3d",
+        "vector3d",
+        "polygon3d",
+        "plane3d",
+        "cube",
+        "cuboid",
+        "prism",
+        "pyramid",
+        "cylinder",
+        "cone",
+        "sphere",
+        "surface3d",
+        "planarGraph3d",
+        "sectionPlane",
+        "label3d",
+    ];
     let mut ids = std::collections::HashSet::new();
     for (index, value) in objects.iter().enumerate() {
-        let object = value.as_object().ok_or_else(|| format!("objects[{index}] が不正です"))?;
-        reject_unknown_keys(object, &format!("objects[{index}]"), &["id", "type", "name", "visible", "locked", "transform", "style", "geometry", "labels", "metadata"])?;
-        let id = object.get("id").and_then(Value::as_str).ok_or_else(|| format!("objects[{index}].id が必要です"))?;
-        if !safe_graph_id(id) || !ids.insert(id.to_string()) { return Err(format!("objects[{index}].id が不正または重複しています")); }
-        if object.get("type").and_then(Value::as_str).is_none_or(|value| !allowed_types.contains(&value)) { return Err(format!("objects[{index}].type が不正です")); }
-        let kind = object.get("type").and_then(Value::as_str).unwrap();
-        if object.get("name").and_then(Value::as_str).is_none_or(|value| value.chars().count() > 200) { return Err(format!("objects[{index}].name が不正です")); }
-        if object.get("visible").and_then(Value::as_bool).is_none() || object.get("locked").and_then(Value::as_bool).is_none() { return Err(format!("objects[{index}] の表示・ロック設定が不正です")); }
-        validate_spatial_value(object.get("name").unwrap_or(&Value::Null), &format!("objects[{index}].name"), 0)?;
-        let transform = object.get("transform").and_then(Value::as_object).ok_or_else(|| format!("objects[{index}].transform が必要です"))?;
-        reject_unknown_keys(transform, &format!("objects[{index}].transform"), &["position", "rotation", "scale"])?;
-        finite_vec3(transform.get("position"), &format!("objects[{index}].transform.position"))?;
-        finite_vec3(transform.get("rotation"), &format!("objects[{index}].transform.rotation"))?;
-        finite_vec3(transform.get("scale"), &format!("objects[{index}].transform.scale"))?;
-        let style = object.get("style").and_then(Value::as_object).ok_or_else(|| format!("objects[{index}].style が必要です"))?;
-        reject_unknown_keys(style, &format!("objects[{index}].style"), &["lineColor", "lineWidth", "faceColor", "faceOpacity", "pointColor", "pointSize", "labelColor", "labelFontSize", "labelBackground", "hiddenLineColor", "hiddenLineWidth", "edgeOverrides"])?;
-        for key in ["lineColor", "faceColor", "pointColor", "labelColor", "hiddenLineColor"] {
-            if !is_hex_color(style.get(key)) { return Err(format!("objects[{index}].style.{key} が不正です")); }
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("objects[{index}] が不正です"))?;
+        reject_unknown_keys(
+            object,
+            &format!("objects[{index}]"),
+            &[
+                "id",
+                "type",
+                "name",
+                "visible",
+                "locked",
+                "transform",
+                "style",
+                "geometry",
+                "labels",
+                "metadata",
+            ],
+        )?;
+        let id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("objects[{index}].id が必要です"))?;
+        if !safe_graph_id(id) || !ids.insert(id.to_string()) {
+            return Err(format!("objects[{index}].id が不正または重複しています"));
         }
-        bounded_number(style.get("lineWidth"), &format!("objects[{index}].style.lineWidth"), 0.25, 12.0)?;
-        if style.contains_key("pointSize") { bounded_number(style.get("pointSize"), &format!("objects[{index}].style.pointSize"), 0.03, 1.0)?; }
-        if style.contains_key("labelFontSize") { bounded_number(style.get("labelFontSize"), &format!("objects[{index}].style.labelFontSize"), 8.0, 72.0)?; }
-        if style.get("labelBackground").is_some_and(|value| !matches!(value.as_str(), Some("transparent" | "white"))) { return Err(format!("objects[{index}].style.labelBackground が不正です")); }
-        bounded_number(style.get("hiddenLineWidth"), &format!("objects[{index}].style.hiddenLineWidth"), 0.25, 12.0)?;
-        bounded_number(style.get("faceOpacity"), &format!("objects[{index}].style.faceOpacity"), 0.0, 1.0)?;
-        let overrides = style.get("edgeOverrides").and_then(Value::as_object).ok_or_else(|| format!("objects[{index}].style.edgeOverrides が必要です"))?;
-        if overrides.len() > 2_000 || overrides.iter().any(|(key, value)| {
-            let Some((left, right)) = key.split_once('-') else { return true; };
-            left.parse::<usize>().is_err() || right.parse::<usize>().is_err() || !matches!(value.as_str(), Some("auto" | "solid" | "dashed" | "hidden"))
-        }) { return Err(format!("objects[{index}].style.edgeOverrides が不正です")); }
-        let geometry = object.get("geometry").and_then(Value::as_object).ok_or_else(|| format!("objects[{index}].geometry が必要です"))?;
+        if object
+            .get("type")
+            .and_then(Value::as_str)
+            .is_none_or(|value| !allowed_types.contains(&value))
+        {
+            return Err(format!("objects[{index}].type が不正です"));
+        }
+        let kind = object.get("type").and_then(Value::as_str).unwrap();
+        if object
+            .get("name")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.chars().count() > 200)
+        {
+            return Err(format!("objects[{index}].name が不正です"));
+        }
+        if object.get("visible").and_then(Value::as_bool).is_none()
+            || object.get("locked").and_then(Value::as_bool).is_none()
+        {
+            return Err(format!("objects[{index}] の表示・ロック設定が不正です"));
+        }
+        validate_spatial_value(
+            object.get("name").unwrap_or(&Value::Null),
+            &format!("objects[{index}].name"),
+            0,
+        )?;
+        let transform = object
+            .get("transform")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("objects[{index}].transform が必要です"))?;
+        reject_unknown_keys(
+            transform,
+            &format!("objects[{index}].transform"),
+            &["position", "rotation", "scale"],
+        )?;
+        finite_vec3(
+            transform.get("position"),
+            &format!("objects[{index}].transform.position"),
+        )?;
+        finite_vec3(
+            transform.get("rotation"),
+            &format!("objects[{index}].transform.rotation"),
+        )?;
+        finite_vec3(
+            transform.get("scale"),
+            &format!("objects[{index}].transform.scale"),
+        )?;
+        let style = object
+            .get("style")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("objects[{index}].style が必要です"))?;
+        reject_unknown_keys(
+            style,
+            &format!("objects[{index}].style"),
+            &[
+                "lineColor",
+                "lineWidth",
+                "faceColor",
+                "faceOpacity",
+                "pointColor",
+                "pointSize",
+                "labelColor",
+                "labelFontSize",
+                "labelBackground",
+                "hiddenLineColor",
+                "hiddenLineWidth",
+                "edgeOverrides",
+            ],
+        )?;
+        for key in [
+            "lineColor",
+            "faceColor",
+            "pointColor",
+            "labelColor",
+            "hiddenLineColor",
+        ] {
+            if !is_hex_color(style.get(key)) {
+                return Err(format!("objects[{index}].style.{key} が不正です"));
+            }
+        }
+        bounded_number(
+            style.get("lineWidth"),
+            &format!("objects[{index}].style.lineWidth"),
+            0.25,
+            12.0,
+        )?;
+        if style.contains_key("pointSize") {
+            bounded_number(
+                style.get("pointSize"),
+                &format!("objects[{index}].style.pointSize"),
+                0.03,
+                1.0,
+            )?;
+        }
+        if style.contains_key("labelFontSize") {
+            bounded_number(
+                style.get("labelFontSize"),
+                &format!("objects[{index}].style.labelFontSize"),
+                8.0,
+                72.0,
+            )?;
+        }
+        if style
+            .get("labelBackground")
+            .is_some_and(|value| !matches!(value.as_str(), Some("transparent" | "white")))
+        {
+            return Err(format!("objects[{index}].style.labelBackground が不正です"));
+        }
+        bounded_number(
+            style.get("hiddenLineWidth"),
+            &format!("objects[{index}].style.hiddenLineWidth"),
+            0.25,
+            12.0,
+        )?;
+        bounded_number(
+            style.get("faceOpacity"),
+            &format!("objects[{index}].style.faceOpacity"),
+            0.0,
+            1.0,
+        )?;
+        let overrides = style
+            .get("edgeOverrides")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("objects[{index}].style.edgeOverrides が必要です"))?;
+        if overrides.len() > 2_000
+            || overrides.iter().any(|(key, value)| {
+                let Some((left, right)) = key.split_once('-') else {
+                    return true;
+                };
+                left.parse::<usize>().is_err()
+                    || right.parse::<usize>().is_err()
+                    || !matches!(value.as_str(), Some("auto" | "solid" | "dashed" | "hidden"))
+            })
+        {
+            return Err(format!("objects[{index}].style.edgeOverrides が不正です"));
+        }
+        let geometry = object
+            .get("geometry")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("objects[{index}].geometry が必要です"))?;
         validate_spatial_geometry(kind, geometry, &format!("objects[{index}].geometry"))?;
-        validate_spatial_value(object.get("geometry").unwrap(), &format!("objects[{index}].geometry"), 0)?;
-        let labels = object.get("labels").and_then(Value::as_array).ok_or_else(|| format!("objects[{index}].labels が必要です"))?;
-        if labels.len() > 200 { return Err(format!("objects[{index}].labels が多すぎます")); }
+        validate_spatial_value(
+            object.get("geometry").unwrap(),
+            &format!("objects[{index}].geometry"),
+            0,
+        )?;
+        let labels = object
+            .get("labels")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("objects[{index}].labels が必要です"))?;
+        if labels.len() > 200 {
+            return Err(format!("objects[{index}].labels が多すぎます"));
+        }
         for (label_index, label) in labels.iter().enumerate() {
-            let label = label.as_object().ok_or_else(|| format!("objects[{index}].labels[{label_index}] が不正です"))?;
-            reject_unknown_keys(label, &format!("objects[{index}].labels[{label_index}]"), &["id", "text", "position", "placement", "alwaysOnTop", "fontSize", "color", "background", "border"])?;
-            if label.get("id").and_then(Value::as_str).is_none_or(|value| !safe_graph_id(value))
-                || label.get("text").and_then(Value::as_str).is_none_or(|value| value.chars().count() > 1_000 || value.chars().any(char::is_control))
-                || !matches!(label.get("placement").and_then(Value::as_str), Some("world" | "screen"))
+            let label = label
+                .as_object()
+                .ok_or_else(|| format!("objects[{index}].labels[{label_index}] が不正です"))?;
+            reject_unknown_keys(
+                label,
+                &format!("objects[{index}].labels[{label_index}]"),
+                &[
+                    "id",
+                    "text",
+                    "position",
+                    "placement",
+                    "alwaysOnTop",
+                    "fontSize",
+                    "color",
+                    "background",
+                    "border",
+                ],
+            )?;
+            if label
+                .get("id")
+                .and_then(Value::as_str)
+                .is_none_or(|value| !safe_graph_id(value))
+                || label
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(|value| {
+                        value.chars().count() > 1_000 || value.chars().any(char::is_control)
+                    })
+                || !matches!(
+                    label.get("placement").and_then(Value::as_str),
+                    Some("world" | "screen")
+                )
                 || label.get("alwaysOnTop").and_then(Value::as_bool).is_none()
                 || label.get("background").and_then(Value::as_bool).is_none()
                 || label.get("border").and_then(Value::as_bool).is_none()
                 || !is_hex_color(label.get("color"))
-            { return Err(format!("objects[{index}].labels[{label_index}] が不正です")); }
-            finite_vec3(label.get("position"), &format!("objects[{index}].labels[{label_index}].position"))?;
-            bounded_number(label.get("fontSize"), &format!("objects[{index}].labels[{label_index}].fontSize"), 6.0, 200.0)?;
+            {
+                return Err(format!("objects[{index}].labels[{label_index}] が不正です"));
+            }
+            finite_vec3(
+                label.get("position"),
+                &format!("objects[{index}].labels[{label_index}].position"),
+            )?;
+            bounded_number(
+                label.get("fontSize"),
+                &format!("objects[{index}].labels[{label_index}].fontSize"),
+                6.0,
+                200.0,
+            )?;
         }
-        validate_spatial_value(object.get("labels").unwrap_or(&Value::Null), &format!("objects[{index}].labels"), 0)?;
-        if !object.get("metadata").is_some_and(Value::is_object) { return Err(format!("objects[{index}].metadata が不正です")); }
-        validate_spatial_value(object.get("metadata").unwrap(), &format!("objects[{index}].metadata"), 0)?;
+        validate_spatial_value(
+            object.get("labels").unwrap_or(&Value::Null),
+            &format!("objects[{index}].labels"),
+            0,
+        )?;
+        if !object.get("metadata").is_some_and(Value::is_object) {
+            return Err(format!("objects[{index}].metadata が不正です"));
+        }
+        validate_spatial_value(
+            object.get("metadata").unwrap(),
+            &format!("objects[{index}].metadata"),
+            0,
+        )?;
     }
     Ok(())
 }
@@ -389,9 +993,13 @@ fn validate_spatial_graph(root: &serde_json::Map<String, Value>) -> Result<(), S
 /// 既存アプリのProject形式を壊さず、サーバー境界でサイズと主要構造だけを厳格検証する。
 fn validated_graph_json(text: &str) -> Result<String, String> {
     if text.is_empty() || text.len() > MAX_GRAPH_JSON {
-        return Err(format!("graph.json は1〜{} bytesで指定してください", MAX_GRAPH_JSON));
+        return Err(format!(
+            "graph.json は1〜{} bytesで指定してください",
+            MAX_GRAPH_JSON
+        ));
     }
-    let value: Value = serde_json::from_str(text).map_err(|e| format!("graph.json が不正です: {e}"))?;
+    let value: Value =
+        serde_json::from_str(text).map_err(|e| format!("graph.json が不正です: {e}"))?;
     let root = value
         .as_object()
         .ok_or_else(|| "graph.json のルートはオブジェクトである必要があります".to_string())?;
@@ -402,7 +1010,15 @@ fn validated_graph_json(text: &str) -> Result<String, String> {
     reject_unknown_keys(
         root,
         "graph.json",
-        &["version", "appName", "expressions", "points", "labels", "range", "paper"],
+        &[
+            "version",
+            "appName",
+            "expressions",
+            "points",
+            "labels",
+            "range",
+            "paper",
+        ],
     )?;
     if root.get("version").and_then(Value::as_i64) != Some(1) {
         return Err("未対応のgraph.json versionです".into());
@@ -425,8 +1041,18 @@ fn validated_graph_json(text: &str) -> Result<String, String> {
             object,
             &format!("expressions[{index}]"),
             &[
-                "id", "input", "name", "visible", "color", "lineWidth", "lineStyle",
-                "fillColor", "fillOpacity", "fillStyle", "tmin", "tmax",
+                "id",
+                "input",
+                "name",
+                "visible",
+                "color",
+                "lineWidth",
+                "lineStyle",
+                "fillColor",
+                "fillOpacity",
+                "fillStyle",
+                "tmin",
+                "tmax",
             ],
         )?;
         let input = object.get("input").and_then(Value::as_str).unwrap_or("");
@@ -448,7 +1074,16 @@ fn validated_graph_json(text: &str) -> Result<String, String> {
         reject_unknown_keys(
             object,
             &format!("points[{index}]"),
-            &["id", "x", "y", "label", "color", "visible", "showProjectionToXAxis", "showProjectionToYAxis"],
+            &[
+                "id",
+                "x",
+                "y",
+                "label",
+                "color",
+                "visible",
+                "showProjectionToXAxis",
+                "showProjectionToYAxis",
+            ],
         )?;
     }
     let labels = root
@@ -472,7 +1107,11 @@ fn validated_graph_json(text: &str) -> Result<String, String> {
         .get("range")
         .and_then(Value::as_object)
         .ok_or_else(|| "graph.json にrangeが必要です".to_string())?;
-    reject_unknown_keys(range, "range", &["xmin", "xmax", "ymin", "ymax", "xstep", "ystep"])?;
+    reject_unknown_keys(
+        range,
+        "range",
+        &["xmin", "xmax", "ymin", "ymax", "xstep", "ystep"],
+    )?;
     let xmin = finite_number(range, "xmin")?;
     let xmax = finite_number(range, "xmax")?;
     let ymin = finite_number(range, "ymin")?;
@@ -495,12 +1134,34 @@ fn validated_graph_json(text: &str) -> Result<String, String> {
         paper,
         "paper",
         &[
-            "orientation", "title", "subtitle", "problemNumber", "caption", "showAxes",
-            "axisLabelX", "axisLabelY", "axisLabelO", "axisLabelSize", "showTicks", "showGrid",
-            "showLegend", "legendFontSize", "showIntersections", "showIntersectionCoords",
-            "regionMode", "intersectionColor", "intersectionOpacity", "intersectionStyle",
-            "lockAspect", "aspectMode", "customAspectRatio", "marginMm", "pdfGraphOnly",
-            "pdfGraphWidthMm", "pdfAspectMode", "pdfCustomAspectRatio",
+            "orientation",
+            "title",
+            "subtitle",
+            "problemNumber",
+            "caption",
+            "showAxes",
+            "axisLabelX",
+            "axisLabelY",
+            "axisLabelO",
+            "axisLabelSize",
+            "showTicks",
+            "showGrid",
+            "showLegend",
+            "legendFontSize",
+            "showIntersections",
+            "showIntersectionCoords",
+            "regionMode",
+            "intersectionColor",
+            "intersectionOpacity",
+            "intersectionStyle",
+            "lockAspect",
+            "aspectMode",
+            "customAspectRatio",
+            "marginMm",
+            "pdfGraphOnly",
+            "pdfGraphWidthMm",
+            "pdfAspectMode",
+            "pdfCustomAspectRatio",
         ],
     )?;
     serde_json::to_string_pretty(&value).map_err(err_str)
@@ -558,7 +1219,10 @@ fn row_summary(state: &AppState, row: &rusqlite::Row<'_>) -> rusqlite::Result<Gr
     })
 }
 
-pub fn list_graph_versions(state: &AppState, graph_id: String) -> Result<Vec<GraphVersionSummary>, String> {
+pub fn list_graph_versions(
+    state: &AppState,
+    graph_id: String,
+) -> Result<Vec<GraphVersionSummary>, String> {
     if !safe_graph_id(&graph_id) {
         return Err("不正なグラフIDです".into());
     }
@@ -569,18 +1233,19 @@ pub fn list_graph_versions(state: &AppState, graph_id: String) -> Result<Vec<Gra
              WHERE graph_id=?1 ORDER BY version DESC,id DESC",
         )
         .map_err(err_str)?;
-    let rows = stmt.query_map(params![graph_id], |row| {
-        Ok(GraphVersionSummary {
-            id: row.get(0)?,
-            graph_id: row.get(1)?,
-            title: row.get(2)?,
-            version: row.get(3)?,
-            saved_at: row.get(4)?,
+    let rows = stmt
+        .query_map(params![graph_id], |row| {
+            Ok(GraphVersionSummary {
+                id: row.get(0)?,
+                graph_id: row.get(1)?,
+                title: row.get(2)?,
+                version: row.get(3)?,
+                saved_at: row.get(4)?,
+            })
         })
-    })
-    .map_err(err_str)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(err_str)?;
+        .map_err(err_str)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err_str)?;
     Ok(rows)
 }
 
@@ -612,7 +1277,10 @@ pub fn get_graph_version(state: &AppState, version_id: i64) -> Result<GraphVersi
     .ok_or_else(|| "グラフ履歴が見つかりません".into())
 }
 
-pub fn list_graphs(state: &AppState, include_deleted: Option<bool>) -> Result<Vec<GraphSummary>, String> {
+pub fn list_graphs(
+    state: &AppState,
+    include_deleted: Option<bool>,
+) -> Result<Vec<GraphSummary>, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let where_clause = if include_deleted.unwrap_or(false) {
         ""
@@ -647,7 +1315,10 @@ pub fn get_graph(state: &AppState, id: String) -> Result<GraphFull, String> {
         params![id],
         |row| {
             let summary = row_summary(state, row)?;
-            Ok(GraphFull { summary, graph_json: row.get(10)? })
+            Ok(GraphFull {
+                summary,
+                graph_json: row.get(10)?,
+            })
         },
     )
     .optional()
@@ -732,8 +1403,16 @@ fn write_graph_json(state: &AppState, id: &str, graph_json: &str) -> Result<Path
 pub fn create_graph(state: &AppState, payload: CreateGraphPayload) -> Result<String, String> {
     let title = clean_title(&payload.title)?;
     let graph_json = validated_graph_json(&payload.graph_json)?;
-    let graph_type = safe_enum(payload.graph_type, &["function_graph", "geometry", "mixed", "spatial_geometry"], "function_graph");
-    let source_type = safe_enum(payload.source_type, &["manual", "ai_text", "ai_image", "ai_problem", "import"], "manual");
+    let graph_type = safe_enum(
+        payload.graph_type,
+        &["function_graph", "geometry", "mixed", "spatial_geometry"],
+        "function_graph",
+    );
+    let source_type = safe_enum(
+        payload.source_type,
+        &["manual", "ai_text", "ai_image", "ai_problem", "import"],
+        "manual",
+    );
     let warnings = warnings_json(payload.warnings);
     let id = format!("graph_{}", uuid::Uuid::new_v4().simple());
     write_graph_json(state, &id, &graph_json)?;
@@ -766,12 +1445,26 @@ pub fn update_graph(state: &AppState, payload: SaveGraphPayload) -> Result<i64, 
         .optional()
         .map_err(err_str)?
         .ok_or_else(|| "グラフが見つかりません".to_string())?;
-    if payload.expected_version.is_some_and(|expected| expected != current.5) {
+    if payload
+        .expected_version
+        .is_some_and(|expected| expected != current.5)
+    {
         return Err(format!("CONFLICT:{}", current.5));
     }
-    let graph_type = safe_enum(payload.graph_type, &["function_graph", "geometry", "mixed", "spatial_geometry"], &current.2);
-    let source_type = safe_enum(payload.source_type, &["manual", "ai_text", "ai_image", "ai_problem", "import"], &current.3);
-    let warnings = payload.warnings.map(|v| warnings_json(Some(v))).unwrap_or(current.4.clone());
+    let graph_type = safe_enum(
+        payload.graph_type,
+        &["function_graph", "geometry", "mixed", "spatial_geometry"],
+        &current.2,
+    );
+    let source_type = safe_enum(
+        payload.source_type,
+        &["manual", "ai_text", "ai_image", "ai_problem", "import"],
+        &current.3,
+    );
+    let warnings = payload
+        .warnings
+        .map(|v| warnings_json(Some(v)))
+        .unwrap_or(current.4.clone());
     write_graph_json(state, &payload.id, &graph_json)?;
     let tx = conn.transaction().map_err(err_str)?;
     tx.execute(
@@ -783,16 +1476,34 @@ pub fn update_graph(state: &AppState, payload: SaveGraphPayload) -> Result<i64, 
     tx.execute(
         "UPDATE graphs SET title=?1,graph_json=?2,graph_type=?3,source_type=?4,warnings_json=?5,
                 updated_at=?6,version=version+1 WHERE id=?7",
-        params![title, graph_json, graph_type, source_type, warnings, now_str(), payload.id],
+        params![
+            title,
+            graph_json,
+            graph_type,
+            source_type,
+            warnings,
+            now_str(),
+            payload.id
+        ],
     )
     .map_err(err_str)?;
     tx.commit().map_err(err_str)?;
     // graph.jsonと一致しない古い派生出力は公開しない。次回exportで再生成される。
-    for name in ["graph.pdf", "graph.png", "graph.svg", "graph.tex", "graph.zip", "thumbnail.png"] {
+    for name in [
+        "graph.pdf",
+        "graph.png",
+        "graph.svg",
+        "graph.tex",
+        "graph.zip",
+        "thumbnail.png",
+    ] {
         fs::remove_file(state.graph_dir(&payload.id).join(name)).ok();
     }
-    conn.execute("UPDATE graphs SET thumbnail_path='' WHERE id=?1", params![payload.id])
-        .map_err(err_str)?;
+    conn.execute(
+        "UPDATE graphs SET thumbnail_path='' WHERE id=?1",
+        params![payload.id],
+    )
+    .map_err(err_str)?;
     Ok(current.5 + 1)
 }
 
@@ -810,7 +1521,16 @@ pub fn restore_graph_version(
             "SELECT title,graph_json,graph_type,source_type,warnings_json,version
              FROM graphs WHERE id=?1 AND deleted_at=''",
             params![graph_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
         )
         .optional()
         .map_err(err_str)?
@@ -843,7 +1563,14 @@ pub fn restore_graph_version(
     )
     .map_err(err_str)?;
     tx.commit().map_err(err_str)?;
-    for name in ["graph.pdf", "graph.png", "graph.svg", "graph.tex", "graph.zip", "thumbnail.png"] {
+    for name in [
+        "graph.pdf",
+        "graph.png",
+        "graph.svg",
+        "graph.tex",
+        "graph.zip",
+        "thumbnail.png",
+    ] {
         fs::remove_file(state.graph_dir(&historical.summary.graph_id).join(name)).ok();
     }
     Ok(next_version)
@@ -863,13 +1590,21 @@ pub fn duplicate_graph(state: &AppState, id: String) -> Result<String, String> {
     )
 }
 
-pub fn delete_graph(state: &AppState, id: String, expected_version: Option<i64>) -> Result<(), String> {
+pub fn delete_graph(
+    state: &AppState,
+    id: String,
+    expected_version: Option<i64>,
+) -> Result<(), String> {
     if !safe_graph_id(&id) {
         return Err("不正なグラフIDです".into());
     }
     let conn = state.conn.lock().map_err(err_str)?;
     let current: i64 = conn
-        .query_row("SELECT version FROM graphs WHERE id=?1 AND deleted_at=''", params![id], |r| r.get(0))
+        .query_row(
+            "SELECT version FROM graphs WHERE id=?1 AND deleted_at=''",
+            params![id],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(err_str)?
         .ok_or_else(|| "グラフが見つかりません".to_string())?;
@@ -910,13 +1645,21 @@ fn validate_export(name: &str, bytes: &[u8]) -> Result<(), String> {
             let lower = text.to_ascii_lowercase();
             let mut root = lower.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
             if root.starts_with("<?xml") {
-                let end = root.find("?>").ok_or_else(|| "SVGのXML宣言が不正です".to_string())?;
+                let end = root
+                    .find("?>")
+                    .ok_or_else(|| "SVGのXML宣言が不正です".to_string())?;
                 root = root[end + 2..].trim_start();
             }
             if !root.starts_with("<svg")
-                || ["<script", "javascript:", "<foreignobject", "onload=", "onerror="]
-                    .iter()
-                    .any(|bad| lower.contains(bad))
+                || [
+                    "<script",
+                    "javascript:",
+                    "<foreignobject",
+                    "onload=",
+                    "onerror=",
+                ]
+                .iter()
+                .any(|bad| lower.contains(bad))
             {
                 return Err("SVGに危険または不正な要素があります".into());
             }
@@ -925,9 +1668,16 @@ fn validate_export(name: &str, bytes: &[u8]) -> Result<(), String> {
         "tex" => {
             let text = std::str::from_utf8(bytes).map_err(|_| "TikZはUTF-8である必要があります")?;
             let lower = text.to_ascii_lowercase();
-            if ["\\write18", "\\input|", "\\immediate\\write", "\\openout", "\\includegraphics{/", "\\includegraphics{\\\\"]
-                .iter()
-                .any(|bad| lower.contains(bad))
+            if [
+                "\\write18",
+                "\\input|",
+                "\\immediate\\write",
+                "\\openout",
+                "\\includegraphics{/",
+                "\\includegraphics{\\\\",
+            ]
+            .iter()
+            .any(|bad| lower.contains(bad))
             {
                 return Err("TikZに危険な命令があります".into());
             }
@@ -965,7 +1715,8 @@ fn build_store_zip(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
     let mut central = Vec::new();
     for (name, bytes) in files {
         let name_bytes = name.as_bytes();
-        let name_len = u16::try_from(name_bytes.len()).map_err(|_| "ZIP内ファイル名が長すぎます")?;
+        let name_len =
+            u16::try_from(name_bytes.len()).map_err(|_| "ZIP内ファイル名が長すぎます")?;
         let size = u32::try_from(bytes.len()).map_err(|_| "ZIP内ファイルが大きすぎます")?;
         let offset = u32::try_from(local.len()).map_err(|_| "ZIPが大きすぎます")?;
         let checksum = crc32(bytes);
@@ -1020,7 +1771,13 @@ fn build_store_zip(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
 
 fn rebuild_graph_zip(dir: &Path) -> Result<(), String> {
     let mut files = Vec::new();
-    for name in ["graph.pdf", "graph.png", "graph.svg", "graph.tex", "graph.json"] {
+    for name in [
+        "graph.pdf",
+        "graph.png",
+        "graph.svg",
+        "graph.tex",
+        "graph.json",
+    ] {
         let path = dir.join(name);
         if path.is_file() {
             files.push((name.to_string(), fs::read(path).map_err(err_str)?));
@@ -1085,7 +1842,11 @@ pub fn save_graph_exports(
     {
         let conn = state.conn.lock().map_err(err_str)?;
         let exists: bool = conn
-            .query_row("SELECT 1 FROM graphs WHERE id=?1 AND deleted_at=''", params![id], |_| Ok(true))
+            .query_row(
+                "SELECT 1 FROM graphs WHERE id=?1 AND deleted_at=''",
+                params![id],
+                |_| Ok(true),
+            )
             .optional()
             .map_err(err_str)?
             .unwrap_or(false);
@@ -1100,7 +1861,9 @@ pub fn save_graph_exports(
         if !["pdf", "png", "svg", "tex"].contains(&name.as_str()) {
             return Err(format!("未対応の出力形式です: {name}"));
         }
-        let bytes = engine.decode(encoded).map_err(|_| format!("{name} のBase64が不正です"))?;
+        let bytes = engine
+            .decode(encoded)
+            .map_err(|_| format!("{name} のBase64が不正です"))?;
         total = total.saturating_add(bytes.len());
         if total > MAX_EXPORT_TOTAL {
             return Err("出力ファイルの合計サイズが上限を超えています".into());
@@ -1128,8 +1891,11 @@ pub fn save_graph_exports(
     rebuild_graph_zip(&dir)?;
     if let Some(path) = thumbnail {
         let conn = state.conn.lock().map_err(err_str)?;
-        conn.execute("UPDATE graphs SET thumbnail_path=?1 WHERE id=?2", params![path, id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE graphs SET thumbnail_path=?1 WHERE id=?2",
+            params![path, id],
+        )
+        .map_err(err_str)?;
     }
     Ok(saved)
 }
@@ -1168,10 +1934,16 @@ pub(crate) fn prepare_graph_snapshot(
     if !dir.join("graph.pdf").is_file() || !dir.join("graph.json").is_file() {
         return Err("教材へ挿入する前にPDFとgraph.jsonを保存してください".into());
     }
-    let source_modified = fs::metadata(dir.join("graph.json")).and_then(|value| value.modified()).map_err(err_str)?;
-    let pdf_modified = fs::metadata(dir.join("graph.pdf")).and_then(|value| value.modified()).map_err(err_str)?;
+    let source_modified = fs::metadata(dir.join("graph.json"))
+        .and_then(|value| value.modified())
+        .map_err(err_str)?;
+    let pdf_modified = fs::metadata(dir.join("graph.pdf"))
+        .and_then(|value| value.modified())
+        .map_err(err_str)?;
     if pdf_modified < source_modified {
-        return Err("グラフが更新されています。開いて最新のPDFを生成してから挿入してください".into());
+        return Err(
+            "グラフが更新されています。開いて最新のPDFを生成してから挿入してください".into(),
+        );
     }
     let (title, graph_version): (String, i64) = conn
         .query_row(
@@ -1186,7 +1958,14 @@ pub(crate) fn prepare_graph_snapshot(
     let snapshot_dir = state.graph_assets_dir().join("snapshots").join(&asset_id);
     fs::create_dir_all(&snapshot_dir).map_err(err_str)?;
     let copy_result = (|| -> Result<(), String> {
-        for name in ["graph.json", "graph.pdf", "graph.png", "graph.svg", "graph.tex", "thumbnail.png"] {
+        for name in [
+            "graph.json",
+            "graph.pdf",
+            "graph.png",
+            "graph.svg",
+            "graph.tex",
+            "thumbnail.png",
+        ] {
             let source = dir.join(name);
             if source.is_file() {
                 fs::copy(&source, snapshot_dir.join(name)).map_err(err_str)?;
@@ -1204,7 +1983,10 @@ pub(crate) fn prepare_graph_snapshot(
         insert_width, asset_id
     );
     Ok(PreparedGraphSnapshot {
-        result: GraphSnapshotResult { asset_id, inserted_latex },
+        result: GraphSnapshotResult {
+            asset_id,
+            inserted_latex,
+        },
         graph_id: graph_id.to_string(),
         title,
         graph_version,
@@ -1271,7 +2053,11 @@ pub fn insert_graph_to_project(
 ) -> Result<i64, String> {
     let mut conn = state.conn.lock().map_err(err_str)?;
     let current_project_version: i64 = conn
-        .query_row("SELECT version FROM projects WHERE id=?1", params![project_id], |row| row.get(0))
+        .query_row(
+            "SELECT version FROM projects WHERE id=?1",
+            params![project_id],
+            |row| row.get(0),
+        )
         .optional()
         .map_err(err_str)?
         .ok_or_else(|| "教材プロジェクトが見つかりません".to_string())?;
@@ -1282,28 +2068,42 @@ pub fn insert_graph_to_project(
     let insert_result = (|| -> Result<i64, String> {
         let tx = conn.transaction().map_err(err_str)?;
         let checked_project_version: i64 = tx
-            .query_row("SELECT version FROM projects WHERE id=?1", params![project_id], |row| row.get(0))
+            .query_row(
+                "SELECT version FROM projects WHERE id=?1",
+                params![project_id],
+                |row| row.get(0),
+            )
             .map_err(err_str)?;
         if checked_project_version != current_project_version {
             return Err(format!("CONFLICT:{checked_project_version}"));
         }
-        let order: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(sort_order),-1)+1 FROM project_items WHERE project_id=?1",
-            params![project_id],
-            |row| row.get(0),
-        ).map_err(err_str)?;
+        let order: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order),-1)+1 FROM project_items WHERE project_id=?1",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .map_err(err_str)?;
         tx.execute(
             "INSERT INTO project_items (project_id,item_type,sort_order,content,created_at) VALUES (?1,'text',?2,?3,?4)",
             params![project_id, order, prepared.result.inserted_latex, now_str()],
         ).map_err(err_str)?;
         let item_id = tx.last_insert_rowid();
-        register_graph_snapshot(&tx, &prepared, GraphAssetTarget {
-            project_id: Some(project_id), problem_id: None, item_id: Some(item_id),
-        })?;
-        let changed = tx.execute(
-            "UPDATE projects SET updated_at=?1,version=version+1 WHERE id=?2 AND version=?3",
-            params![now_str(), project_id, current_project_version],
-        ).map_err(err_str)?;
+        register_graph_snapshot(
+            &tx,
+            &prepared,
+            GraphAssetTarget {
+                project_id: Some(project_id),
+                problem_id: None,
+                item_id: Some(item_id),
+            },
+        )?;
+        let changed = tx
+            .execute(
+                "UPDATE projects SET updated_at=?1,version=version+1 WHERE id=?2 AND version=?3",
+                params![now_str(), project_id, current_project_version],
+            )
+            .map_err(err_str)?;
         if changed == 0 {
             return Err(format!("CONFLICT:{checked_project_version}"));
         }
@@ -1370,18 +2170,22 @@ mod tests {
         assert!(validated_graph_json(&huge).is_err());
         let command = valid_spatial_json().replace("立方体", "cmd.exe /c calc");
         assert!(validated_graph_json(&command).is_err());
-        let unknown = valid_spatial_json().replace("\"metadata\":{}", "\"metadata\":{},\"command\":\"calc\"");
+        let unknown =
+            valid_spatial_json().replace("\"metadata\":{}", "\"metadata\":{},\"command\":\"calc\"");
         assert!(validated_graph_json(&unknown).is_err());
-        let bad_geometry = valid_spatial_json().replace("\"sideLength\":4", "\"sideLength\":\"four\"");
+        let bad_geometry =
+            valid_spatial_json().replace("\"sideLength\":4", "\"sideLength\":\"four\"");
         assert!(validated_graph_json(&bad_geometry).is_err());
-        let bad_scene = valid_spatial_json().replace("\"showAxes\":false", "\"showAxes\":\"false\"");
+        let bad_scene =
+            valid_spatial_json().replace("\"showAxes\":false", "\"showAxes\":\"false\"");
         assert!(validated_graph_json(&bad_scene).is_err());
         let mut surface: Value = serde_json::from_str(&valid_spatial_json()).unwrap();
         surface["objects"][0]["type"] = serde_json::json!("surface3d");
         surface["objects"][0]["name"] = serde_json::json!("放物面");
         surface["objects"][0]["geometry"] = serde_json::json!({"expression":"z = x^2 + y^2","xMin":-3,"xMax":3,"yMin":-3,"yMax":3,"resolution":28,"wireframe":true});
         assert!(validated_graph_json(&surface.to_string()).is_ok());
-        surface["objects"][0]["geometry"]["expression"] = serde_json::json!("powershell http://evil.invalid");
+        surface["objects"][0]["geometry"]["expression"] =
+            serde_json::json!("powershell http://evil.invalid");
         assert!(validated_graph_json(&surface.to_string()).is_err());
         let mut planar: Value = serde_json::from_str(&valid_spatial_json()).unwrap();
         planar["objects"][0]["type"] = serde_json::json!("planarGraph3d");
@@ -1399,13 +2203,18 @@ mod tests {
         planar["objects"][0]["geometry"]["yMin"] = serde_json::json!(-200_000);
         planar["objects"][0]["geometry"]["yMax"] = serde_json::json!(200_000);
         assert!(validated_graph_json(&planar.to_string()).is_ok());
-        let bad_axis_label = valid_spatial_json().replace("\"axesLabelSize\":16", "\"axesLabelSize\":1000");
+        let bad_axis_label =
+            valid_spatial_json().replace("\"axesLabelSize\":16", "\"axesLabelSize\":1000");
         assert!(validated_graph_json(&bad_axis_label).is_err());
-        let bad_axis_gap = valid_spatial_json().replace("\"axesLabelGap\":8", "\"axesLabelGap\":1000");
+        let bad_axis_gap =
+            valid_spatial_json().replace("\"axesLabelGap\":8", "\"axesLabelGap\":1000");
         assert!(validated_graph_json(&bad_axis_gap).is_err());
         let bad_axis_text = valid_spatial_json().replace("\"x\":\"x\"", "\"x\":7");
         assert!(validated_graph_json(&bad_axis_text).is_err());
-        let bad_origin_position = valid_spatial_json().replace("\"originLabelPosition\":[-0.3,-0.3,0]", "\"originLabelPosition\":[-2000000,-0.3,0]");
+        let bad_origin_position = valid_spatial_json().replace(
+            "\"originLabelPosition\":[-0.3,-0.3,0]",
+            "\"originLabelPosition\":[-2000000,-0.3,0]",
+        );
         assert!(validated_graph_json(&bad_origin_position).is_err());
         let bad_output = valid_spatial_json().replace("\"widthMm\":160", "\"widthMm\":5000");
         assert!(validated_graph_json(&bad_output).is_err());
@@ -1425,7 +2234,11 @@ mod tests {
     fn store_zip_has_local_and_end_records() {
         let zip = build_store_zip(&[("graph.json".into(), br#"{"version":1}"#.to_vec())]).unwrap();
         assert!(zip.starts_with(&0x0403_4b50u32.to_le_bytes()));
-        assert!(zip.windows(4).any(|value| value == 0x0201_4b50u32.to_le_bytes()));
-        assert!(zip.windows(4).any(|value| value == 0x0605_4b50u32.to_le_bytes()));
+        assert!(zip
+            .windows(4)
+            .any(|value| value == 0x0201_4b50u32.to_le_bytes()));
+        assert!(zip
+            .windows(4)
+            .any(|value| value == 0x0605_4b50u32.to_le_bytes()));
     }
 }

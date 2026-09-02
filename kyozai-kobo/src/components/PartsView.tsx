@@ -17,6 +17,7 @@ import {
   searchParts,
   updatePart,
   uploadPartAttachment,
+  patternCardLatex,
 } from "../api";
 import { useApp } from "../store";
 import { openAiChatForTarget } from "../aiChat";
@@ -36,7 +37,7 @@ import type {
   PartVersionSummary,
   ProjectSummary,
   RequiredFilter,
-  SubjectNode,
+  BankNode,
 } from "../types";
 import {
   AiConvertDialog,
@@ -46,9 +47,11 @@ import {
 import { useNarrowLayout } from "./BankView";
 import { ConflictDialog } from "./ConflictDialog";
 import { DocumentPreview } from "./DocumentPreview";
-import { LatexEditor } from "./LatexEditor";
+import { LatexEditor, type LatexEditorHandle } from "./LatexEditor";
+import { PatternPicker } from "./PatternPicker";
 import { PdfCanvasViewer } from "./PdfCanvasViewer";
 import { Icon } from "./Icon";
+import { PartTreePanel, type PartBrowseScope } from "./PartTreePanel";
 import { DIFFICULTY_RANKS, DifficultyRankBadge, Modal, TagChips } from "./ui";
 
 const PART_TYPES: { value: PartType; label: string }[] = [
@@ -84,16 +87,21 @@ function clearPartDraft(id: number) {
   }
 }
 
-function partUnitPath(tree: SubjectNode[], unitId: number | null) {
-  if (unitId == null) return { subjectId: null, fieldId: null };
-  for (const subject of tree) {
-    for (const field of subject.fields) {
-      if (field.units.some((unit) => unit.id === unitId)) {
-        return { subjectId: subject.id, fieldId: field.id };
-      }
-    }
+function bankNodePath(nodes: BankNode[], nodeId: number, path: BankNode[] = []): BankNode[] | null {
+  for (const node of nodes) {
+    const next = [...path, node];
+    if (node.id === nodeId) return next;
+    const found = bankNodePath(node.children, nodeId, next);
+    if (found) return found;
   }
-  return { subjectId: null, fieldId: null };
+  return null;
+}
+
+function flattenBankNodes(nodes: BankNode[], depth = 0): { node: BankNode; depth: number }[] {
+  return nodes.flatMap((node) => [
+    { node, depth },
+    ...flattenBankNodes(node.children, depth + 1),
+  ]);
 }
 
 export function PartsView() {
@@ -105,18 +113,18 @@ export function PartsView() {
     setLastCompile,
     setLogOpen,
     bumps,
-    tree,
+    bankTree,
     refreshTree,
   } = useApp();
-  const narrow = useNarrowLayout();
+  const narrow = useNarrowLayout(1180);
   // 狭い画面では「一覧 ⇄ 編集」の1ペイン切替式にする
   const [mobileEditorOpen, setMobileEditorOpen] = useState(false);
+  const [patternPicker, setPatternPicker] = useState(false);
+  const latexEditorRef = useRef<LatexEditorHandle>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [text, setText] = useState("");
   const [partType, setPartType] = useState("");
-  const [subjectId, setSubjectId] = useState<number | null>(null);
-  const [fieldId, setFieldId] = useState<number | null>(null);
-  const [unitId, setUnitId] = useState<number | null>(null);
+  const [browseScope, setBrowseScope] = useState<PartBrowseScope>(null);
   const [category, setCategory] = useState("");
   const [tag, setTag] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -126,8 +134,6 @@ export function PartsView() {
   const [parts, setParts] = useState<PartSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [part, setPart] = useState<PartFull | null>(null);
-  const [editSubjectId, setEditSubjectId] = useState<number | null>(null);
-  const [editFieldId, setEditFieldId] = useState<number | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [dirty, setDirty] = useState(false);
   const [versions, setVersions] = useState<PartVersionSummary[] | null>(null);
@@ -154,28 +160,21 @@ export function PartsView() {
   const partLoadRequestRef = useRef(0);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
-  const filterFields = useMemo(
-    () => tree.find((subject) => subject.id === subjectId)?.fields ?? [],
-    [tree, subjectId],
-  );
-  const filterUnits = useMemo(
-    () => filterFields.find((field) => field.id === fieldId)?.units ?? [],
-    [filterFields, fieldId],
-  );
-  const editorFields = useMemo(
-    () => tree.find((subject) => subject.id === editSubjectId)?.fields ?? [],
-    [tree, editSubjectId],
-  );
-  const editorUnits = useMemo(
-    () => editorFields.find((field) => field.id === editFieldId)?.units ?? [],
-    [editorFields, editFieldId],
-  );
+  const bankOptions = useMemo(() => flattenBankNodes(bankTree), [bankTree]);
+  const activeBankNodeId = part?.bank_node_id ?? (typeof browseScope === "number" ? browseScope : null);
+  const activeBankPath = activeBankNodeId == null ? null : bankNodePath(bankTree, activeBankNodeId);
   const aiSolutionSubject = inferSolutionSubject(
-    tree.find(
-      (subject) =>
-        subject.id === (part?.subject_id ?? editSubjectId ?? subjectId),
-    )?.name ?? "",
+    activeBankPath?.[0]?.name ?? "",
   );
+
+  const browseLabel = useMemo(() => {
+    if (browseScope === "all") return "すべての部品";
+    if (browseScope === "unclassified") return "未分類";
+    if (typeof browseScope === "number") {
+      return bankNodePath(bankTree, browseScope)?.map((node) => node.name).join(" › ") ?? "階層を選択してください";
+    }
+    return "階層を選択してください";
+  }, [browseScope, bankTree]);
 
   const resetPdfPreview = () => {
     setPreviewMode("quick");
@@ -215,12 +214,16 @@ export function PartsView() {
 
   const runSearch = async () => {
     const requestId = ++searchRequestRef.current;
+    if (browseScope == null) {
+      setParts([]);
+      return;
+    }
     try {
       const result = await searchParts({
         text,
-        subject_id: subjectId,
-        field_id: fieldId,
-        unit_id: unitId,
+        bank_node_id: typeof browseScope === "number" ? browseScope : null,
+        include_descendants: false,
+        unassigned_only: browseScope === "unclassified",
         part_type: partType || null,
         category: category || null,
         tag: tag || null,
@@ -229,7 +232,6 @@ export function PartsView() {
       });
       if (requestId !== searchRequestRef.current) return;
       setParts(result);
-      if (selectedId == null && result[0]) setSelectedId(result[0].id);
     } catch (e) {
       if (requestId === searchRequestRef.current) showToast(String(e), "error");
     }
@@ -245,9 +247,6 @@ export function PartsView() {
         return;
       }
       setPart(next);
-      const path = partUnitPath(tree, next.unit_id);
-      setEditSubjectId(next.subject_id ?? path.subjectId);
-      setEditFieldId(next.field_id ?? path.fieldId);
       setDirty(false);
       resetPdfPreview();
       try {
@@ -267,9 +266,6 @@ export function PartsView() {
               layout_mode: draft.part.layout_mode ?? next.layout_mode ?? "single_column",
               version,
             });
-            const draftPath = partUnitPath(tree, draft.part.unit_id);
-            setEditSubjectId(draft.part.subject_id ?? draftPath.subjectId);
-            setEditFieldId(draft.part.field_id ?? draftPath.fieldId);
             setDirty(true);
           } else {
             clearPartDraft(next.id);
@@ -300,7 +296,7 @@ export function PartsView() {
   useEffect(() => {
     const t = setTimeout(runSearch, 250);
     return () => clearTimeout(t);
-  }, [text, subjectId, fieldId, unitId, partType, category, tag, rankFilters, requiredFilter]);
+  }, [text, browseScope, partType, category, tag, rankFilters, requiredFilter]);
 
   useEffect(() => {
     if (selectedId != null) loadPart(selectedId);
@@ -308,6 +304,7 @@ export function PartsView() {
 
   const refreshFromRemote = () => {
     loadFilters();
+    void refreshTree();
     void runSearch();
     if (selectedId != null) void loadPart(selectedId, true);
   };
@@ -332,6 +329,32 @@ export function PartsView() {
   const patch = (fields: Partial<PartFull>) => {
     setPart((p) => (p ? { ...p, ...fields } : p));
     setDirty(true);
+  };
+
+  /** 定石ライブラリの定石を、カーソル位置へtcolorboxのカードとして挿入する。 */
+  const insertPatternCard = async (patternId: number) => {
+    const editor = latexEditorRef.current;
+    const current = latestPart.current;
+    if (!editor || !current) return;
+    try {
+      const latex = await patternCardLatex(patternId);
+      const snippet = `
+${latex}
+`;
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      const source = current.latex_source;
+      patch({ latex_source: source.slice(0, start) + snippet + source.slice(end) });
+      resetPdfPreview();
+      requestAnimationFrame(() => {
+        editor.focus();
+        const position = start + snippet.length;
+        editor.setSelectionRange(position, position);
+      });
+      showToast("定石カードを挿入しました");
+    } catch (error) {
+      showToast(String(error), "error");
+    }
   };
 
   const onPdfPreview = async () => {
@@ -390,7 +413,7 @@ export function PartsView() {
         },
         inputText: [
           "【対象種別】部品ライブラリの部品",
-          `【科目区分】${current.subject_name || "未分類"}`,
+          `【階層】${current.bank_path || "未分類"}`,
           `【部品ID】${current.id}`,
           `【題名】${current.title}`,
           `【種類】${current.part_type}`,
@@ -445,13 +468,29 @@ export function PartsView() {
     );
   };
 
+  const selectBrowseScope = async (scope: Exclude<PartBrowseScope, null>) => {
+    if (scope === browseScope) return;
+    if (dirty && !(await confirm("未保存の変更があります。保存せずに別の階層へ移動しますか？"))) return;
+    if (dirty && selectedId != null) clearPartDraft(selectedId);
+    setDirty(false);
+    setSelectedId(null);
+    setPart(null);
+    setMobileEditorOpen(false);
+    setBrowseScope(scope);
+    resetPdfPreview();
+  };
+
   const onCreate = async () => {
     if (dirty && !(await confirm("未保存の変更があります。保存せずに新しい部品を作成しますか？"))) return;
     try {
-      const id = await createPart("新しい部品");
+      const id = await createPart(
+        "新しい部品",
+        typeof browseScope === "number" ? browseScope : null,
+      );
       setSelectedId(id);
       setMobileEditorOpen(true);
       await runSearch();
+      await refreshTree();
       loadFilters();
     } catch (e) {
       showToast(String(e), "error");
@@ -475,6 +514,7 @@ export function PartsView() {
     try {
       await updatePart({
         id: p.id,
+        bank_node_id: p.bank_node_id,
         unit_id: p.unit_id,
         title: p.title,
         part_type: p.part_type,
@@ -492,6 +532,7 @@ export function PartsView() {
       clearPartDraft(p.id);
       await loadPart(p.id);
       await runSearch();
+      await refreshTree();
       loadFilters();
       showToast("部品を保存しました");
     } catch (e) {
@@ -529,6 +570,7 @@ export function PartsView() {
         const newId = await createPart(`${mine.title} (競合コピー)`);
         await updatePart({
           id: newId,
+          bank_node_id: mine.bank_node_id,
           unit_id: mine.unit_id,
           title: `${mine.title} (競合コピー)`,
           part_type: mine.part_type,
@@ -558,6 +600,7 @@ export function PartsView() {
       const id = await duplicatePart(part.id);
       setSelectedId(id);
       await runSearch();
+      await refreshTree();
       showToast("部品を複製しました");
     } catch (e) {
       showToast(String(e), "error");
@@ -575,6 +618,7 @@ export function PartsView() {
       setPart(null);
       setSelectedId(null);
       await runSearch();
+      await refreshTree();
       showToast("部品を削除しました");
     } catch (e) {
       showToast(String(e), "error");
@@ -661,12 +705,39 @@ export function PartsView() {
     }
   };
 
+  const hierarchyPane = (
+    <div
+      className={narrow ? "min-h-0 w-full flex-1" : "w-60 shrink-0 border-r"}
+      style={{ background: "var(--panel)", borderColor: "var(--border)" }}
+    >
+      <PartTreePanel
+        tree={bankTree}
+        selectedScope={browseScope}
+        onSelectScope={selectBrowseScope}
+      />
+    </div>
+  );
+
   const listPane = (
     <aside
-      className={narrow ? "flex min-h-0 w-full flex-1 flex-col" : "parts-list-pane flex w-[380px] shrink-0 flex-col border-r"}
+      className={narrow ? "flex min-h-0 w-full flex-1 flex-col" : "parts-list-pane flex w-[340px] shrink-0 flex-col border-r"}
       style={{ borderColor: "var(--border)" }}
     >
         <div className="space-y-2 border-b p-3" style={{ borderColor: "var(--border)" }}>
+          <div className="flex min-w-0 items-center gap-2">
+            {narrow && (
+              <button
+                onClick={() => setBrowseScope(null)}
+                className="btn btn-ghost btn-sm shrink-0"
+              >
+                ← 階層
+              </button>
+            )}
+            <span className="min-w-0 flex-1 truncate text-xs font-medium" title={browseLabel}>
+              {browseLabel}
+            </span>
+            <span className="badge badge-muted shrink-0">{parts.length}件</span>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
               value={text}
@@ -696,47 +767,6 @@ export function PartsView() {
           </div>
           {(!narrow || showFilters) && (
           <>
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
-            <select
-              value={subjectId ?? ""}
-              onChange={(e) => {
-                setSubjectId(e.target.value ? Number(e.target.value) : null);
-                setFieldId(null);
-                setUnitId(null);
-              }}
-              className="select text-xs"
-            >
-              <option value="">教科: すべて</option>
-              {tree.map((subject) => (
-                <option key={subject.id} value={subject.id}>{subject.name}</option>
-              ))}
-            </select>
-            <select
-              value={fieldId ?? ""}
-              onChange={(e) => {
-                setFieldId(e.target.value ? Number(e.target.value) : null);
-                setUnitId(null);
-              }}
-              className="select text-xs"
-              disabled={subjectId == null}
-            >
-              <option value="">科目: すべて</option>
-              {filterFields.map((field) => (
-                <option key={field.id} value={field.id}>{field.name}</option>
-              ))}
-            </select>
-            <select
-              value={unitId ?? ""}
-              onChange={(e) => setUnitId(e.target.value ? Number(e.target.value) : null)}
-              className="select text-xs"
-              disabled={fieldId == null}
-            >
-              <option value="">単元: すべて</option>
-              {filterUnits.map((unit) => (
-                <option key={unit.id} value={unit.id}>{unit.name}</option>
-              ))}
-            </select>
-          </div>
           <div className="flex flex-wrap gap-1.5">
             <select value={partType} onChange={(e) => setPartType(e.target.value)} className="select text-xs">
               <option value="">種類: すべて</option>
@@ -794,7 +824,11 @@ export function PartsView() {
           )}
         </div>
         <div className="parts-list-scroll min-h-0 flex-1 overflow-y-auto p-2">
-          {parts.length === 0 ? (
+          {browseScope == null ? (
+            <div className="flex h-full items-center justify-center p-6 text-center text-sm" style={{ color: "var(--muted)" }}>
+              左の階層を選択してください。
+            </div>
+          ) : parts.length === 0 ? (
             <p className="p-4 text-sm" style={{ color: "var(--muted)" }}>
               該当する部品がありません。
             </p>
@@ -819,9 +853,7 @@ export function PartsView() {
                       <span>v{p.version}</span>
                     </div>
                     <div className="mt-1 truncate text-[11px]" style={{ color: "var(--muted)" }}>
-                      {p.unit_id == null
-                        ? "教科・科目・単元: 未分類"
-                        : `${p.subject_name} › ${p.field_name} › ${p.unit_name}`}
+                      {p.bank_path || "階層: 未分類"}
                     </div>
                     <div className="mt-1 truncate text-xs" style={{ color: "var(--muted)" }}>
                       {p.plain_text_preview || "プレビューなし"}
@@ -891,49 +923,22 @@ export function PartsView() {
               </div>
               <div className="space-y-2 border-b px-3 py-2" style={{ borderColor: "var(--border)" }}>
                 <div>
-                  <div className="mb-1 section-label">教科・科目・単元</div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                    <select
-                      value={editSubjectId ?? ""}
-                      onChange={(e) => {
-                        const nextId = e.target.value ? Number(e.target.value) : null;
-                        setEditSubjectId(nextId);
-                        setEditFieldId(null);
-                        patch({ unit_id: null });
-                      }}
-                      className="select"
-                    >
-                      <option value="">教科を選択（未分類）</option>
-                      {tree.map((subject) => (
-                        <option key={subject.id} value={subject.id}>{subject.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={editFieldId ?? ""}
-                      onChange={(e) => {
-                        setEditFieldId(e.target.value ? Number(e.target.value) : null);
-                        patch({ unit_id: null });
-                      }}
-                      className="select"
-                      disabled={editSubjectId == null}
-                    >
-                      <option value="">科目を選択</option>
-                      {editorFields.map((field) => (
-                        <option key={field.id} value={field.id}>{field.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={part.unit_id ?? ""}
-                      onChange={(e) => patch({ unit_id: e.target.value ? Number(e.target.value) : null })}
-                      className="select"
-                      disabled={editFieldId == null}
-                    >
-                      <option value="">単元を選択</option>
-                      {editorUnits.map((unit) => (
-                        <option key={unit.id} value={unit.id}>{unit.name}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <div className="mb-1 section-label">問題バンク共通階層</div>
+                  <select
+                    value={part.bank_node_id ?? ""}
+                    onChange={(e) => patch({
+                      bank_node_id: e.target.value ? Number(e.target.value) : null,
+                      unit_id: null,
+                    })}
+                    className="select w-full"
+                  >
+                    <option value="">未分類</option>
+                    {bankOptions.map(({ node, depth }) => (
+                      <option key={node.id} value={node.id}>
+                        {`${"　".repeat(depth)}${depth > 0 ? "└ " : ""}${node.name}`}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="parts-meta-grid grid grid-cols-2 gap-2 lg:grid-cols-4">
                   <select
@@ -1032,8 +1037,18 @@ export function PartsView() {
                   placeholder="説明・メモ"
                 />
               </div>
+              <div className="flex flex-wrap gap-1 border-b px-2 py-1" style={{ borderColor: "var(--border)" }}>
+                <button
+                  onClick={() => setPatternPicker(true)}
+                  className="btn btn-outline btn-sm"
+                  title="定石ライブラリの定石を、カーソル位置へtcolorboxのカードとして挿入します"
+                >
+                  定石を挿入
+                </button>
+              </div>
               <div className="parts-editor-code min-h-0 flex-1 p-2">
                 <LatexEditor
+                  ref={latexEditorRef}
                   key={part.id}
                   value={part.latex_source}
                   onChange={(value) => {
@@ -1228,14 +1243,27 @@ export function PartsView() {
             </div>
             {editorPane}
           </>
+        ) : browseScope == null ? (
+          hierarchyPane
         ) : (
           listPane
         )
       ) : (
         <>
+          {hierarchyPane}
           {listPane}
           {editorPane}
         </>
+      )}
+
+      {patternPicker && (
+        <PatternPicker
+          title="挿入する定石を選択"
+          onClose={() => setPatternPicker(false)}
+          onPick={async (pattern) => {
+            await insertPatternCard(pattern.id);
+          }}
+        />
       )}
 
       {versions && (

@@ -3,7 +3,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { createProblem, deleteProblems, exportBank, listProblems, moveProblems } from "../api";
 import { useApp } from "../store";
 import { isTauri } from "../transport";
-import type { DifficultyRank, ProblemSummary, RequiredFilter } from "../types";
+import type { BankNode, DifficultyRank, ProblemSummary, RequiredFilter } from "../types";
 import { AiConvertDialog } from "./AiConvertDialog";
 import { Icon } from "./Icon";
 import {
@@ -15,9 +15,34 @@ import {
   TagChips,
 } from "./ui";
 
-/** 選択中の単元の問題一覧（複数選択で一括移動・削除・エクスポート） */
+type ProblemSortOrder =
+  | "created_asc"
+  | "created_desc"
+  | "updated_desc"
+  | "updated_asc"
+  | "title_asc"
+  | "usage_desc";
+
+const PROBLEM_SORT_STORAGE_KEY = "kyozai-kobo.problem-bank-sort";
+const PROBLEM_SORT_OPTIONS: { value: ProblemSortOrder; label: string }[] = [
+  { value: "created_asc", label: "追加が古い順" },
+  { value: "created_desc", label: "追加が新しい順" },
+  { value: "updated_desc", label: "更新が新しい順" },
+  { value: "updated_asc", label: "更新が古い順" },
+  { value: "title_asc", label: "タイトル順" },
+  { value: "usage_desc", label: "使用回数が多い順" },
+];
+
+function initialProblemSortOrder(): ProblemSortOrder {
+  const stored = localStorage.getItem(PROBLEM_SORT_STORAGE_KEY);
+  return PROBLEM_SORT_OPTIONS.some((option) => option.value === stored)
+    ? stored as ProblemSortOrder
+    : "created_asc";
+}
+
+/** 選択中のBankNode直下の問題一覧（複数選択で一括移動・削除・エクスポート） */
 export function ProblemList() {
-  const { selectedUnitId, selectProblem, refreshTree, showToast, confirm, bumps } = useApp();
+  const { selectedBankNodeId, selectProblem, refreshTree, showToast, confirm, bumps } = useApp();
   const [problems, setProblems] = useState<ProblemSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -25,15 +50,16 @@ export function ProblemList() {
   const [showAiImport, setShowAiImport] = useState(false);
   const [rankFilters, setRankFilters] = useState<(DifficultyRank | "__unset")[]>([]);
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("all");
+  const [sortOrder, setSortOrder] = useState<ProblemSortOrder>(initialProblemSortOrder);
   const seenProblemsBumpRef = useRef(bumps.problems);
   const loadRequestRef = useRef(0);
 
   const load = async (preserveSelection = false) => {
-    if (selectedUnitId == null) return;
+    if (selectedBankNodeId == null) return;
     const requestId = ++loadRequestRef.current;
     setLoading(true);
     try {
-      const nextProblems = await listProblems(selectedUnitId);
+      const nextProblems = await listProblems(selectedBankNodeId);
       if (requestId !== loadRequestRef.current) return;
       const availableIds = new Set(nextProblems.map((problem) => problem.id));
       setProblems(nextProblems);
@@ -52,7 +78,7 @@ export function ProblemList() {
   useEffect(() => {
     seenProblemsBumpRef.current = bumps.problems;
     void load();
-  }, [selectedUnitId]);
+  }, [selectedBankNodeId]);
 
   useEffect(() => {
     if (seenProblemsBumpRef.current === bumps.problems) return;
@@ -61,9 +87,9 @@ export function ProblemList() {
   }, [bumps.problems]);
 
   const onCreate = async () => {
-    if (selectedUnitId == null) return;
+    if (selectedBankNodeId == null) return;
     try {
-      const id = await createProblem(selectedUnitId, "");
+      const id = await createProblem(selectedBankNodeId, "");
       await refreshTree();
       selectProblem(id);
     } catch (e) {
@@ -81,7 +107,7 @@ export function ProblemList() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedUnitId]);
+  }, [selectedBankNodeId]);
 
   const toggleSelect = (id: number) => {
     const next = new Set(selected);
@@ -90,9 +116,8 @@ export function ProblemList() {
     setSelected(next);
   };
 
-  const filteredProblems = useMemo(
-    () =>
-      problems.filter((p) => {
+  const filteredProblems = useMemo(() => {
+    const filtered = problems.filter((p) => {
         const rankOk =
           rankFilters.length === 0 ||
           (p.difficulty_rank ? rankFilters.includes(p.difficulty_rank) : rankFilters.includes("__unset"));
@@ -100,9 +125,30 @@ export function ProblemList() {
           requiredFilter === "all" ||
           (requiredFilter === "required" ? p.is_required : !p.is_required);
         return rankOk && requiredOk;
-      }),
-    [problems, rankFilters, requiredFilter],
-  );
+      });
+    return filtered.sort((a, b) => {
+      switch (sortOrder) {
+        case "created_desc":
+          return b.created_at.localeCompare(a.created_at) || b.id - a.id;
+        case "updated_desc":
+          return b.updated_at.localeCompare(a.updated_at) || b.id - a.id;
+        case "updated_asc":
+          return a.updated_at.localeCompare(b.updated_at) || a.id - b.id;
+        case "title_asc":
+          return a.title.localeCompare(b.title, "ja", { numeric: true, sensitivity: "base" }) || a.id - b.id;
+        case "usage_desc":
+          return b.usage_count - a.usage_count || b.updated_at.localeCompare(a.updated_at) || b.id - a.id;
+        case "created_asc":
+        default:
+          return a.created_at.localeCompare(b.created_at) || a.id - b.id;
+      }
+    });
+  }, [problems, rankFilters, requiredFilter, sortOrder]);
+
+  const changeSortOrder = (value: ProblemSortOrder) => {
+    setSortOrder(value);
+    localStorage.setItem(PROBLEM_SORT_STORAGE_KEY, value);
+  };
 
   const toggleRankFilter = (rank: DifficultyRank | "__unset") => {
     setRankFilters((current) =>
@@ -147,9 +193,9 @@ export function ProblemList() {
     }
   };
 
-  const onBulkMove = async (unitId: number) => {
+  const onBulkMove = async (bankNodeId: number) => {
     try {
-      await moveProblems(ids, unitId);
+      await moveProblems(ids, bankNodeId);
       setShowMove(false);
       await refreshTree();
       await load();
@@ -159,10 +205,10 @@ export function ProblemList() {
     }
   };
 
-  if (selectedUnitId == null) {
+  if (selectedBankNodeId == null) {
     return (
       <div className="flex h-full items-center justify-center text-sm" style={{ color: "var(--muted)" }}>
-        左のツリーから単元を選択してください
+        左のツリーから階層を選択してください
       </div>
     );
   }
@@ -204,6 +250,19 @@ export function ProblemList() {
             <option value="required">★のみ</option>
             <option value="not_required">★以外</option>
           </select>
+          <label className="flex items-center gap-1 whitespace-nowrap text-xs" style={{ color: "var(--muted)" }}>
+            並び順
+            <select
+              value={sortOrder}
+              onChange={(e) => changeSortOrder(e.target.value as ProblemSortOrder)}
+              className="select px-1.5 py-0.5 text-xs"
+              aria-label="問題の並び順"
+            >
+              {PROBLEM_SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
         </span>
         <span className="flex shrink-0 items-center gap-1">
           <button
@@ -229,7 +288,7 @@ export function ProblemList() {
             {selected.size}件選択中
           </span>
           <button onClick={() => setShowMove(true)} className="btn btn-outline btn-sm">
-            別の単元へ移動
+            別の階層へ移動
           </button>
           <button onClick={onBulkExport} className="btn btn-ghost btn-sm">
             エクスポート
@@ -351,9 +410,9 @@ export function ProblemList() {
       </div>
 
       {showMove && (
-        <UnitPicker
+        <BankNodePicker
           title={`${selected.size}件の問題を移動`}
-          excludeUnitId={selectedUnitId}
+          excludeBankNodeId={selectedBankNodeId}
           onPick={onBulkMove}
           onClose={() => setShowMove(false)}
         />
@@ -375,50 +434,47 @@ export function ProblemList() {
   );
 }
 
-/** 移動先の単元を選ぶモーダル */
-export function UnitPicker({
+function flattenBankNodes(nodes: BankNode[], depth = 0): Array<{ node: BankNode; depth: number }> {
+  return nodes.flatMap((node) => [
+    { node, depth },
+    ...flattenBankNodes(node.children, depth + 1),
+  ]);
+}
+
+/** 問題の保存先・移動先となる任意深度のBankNodeを選ぶモーダル。 */
+export function BankNodePicker({
   title,
-  excludeUnitId,
+  excludeBankNodeId,
   onPick,
   onClose,
 }: {
   title: string;
-  excludeUnitId?: number | null;
-  onPick: (unitId: number) => void;
+  excludeBankNodeId?: number | null;
+  onPick: (bankNodeId: number) => void;
   onClose: () => void;
 }) {
-  const { tree } = useApp();
+  const { bankTree } = useApp();
+  const nodes = flattenBankNodes(bankTree);
   return (
     <Modal title={title} onClose={onClose}>
-      <div className="max-h-[60vh] space-y-1 overflow-y-auto">
-        {tree.map((s) => (
-          <div key={s.id}>
-            <div className="section-label py-1">{s.name}</div>
-            {s.fields.map((f) => (
-              <div key={f.id} className="pl-3">
-                <div className="py-0.5 text-xs" style={{ color: "var(--muted)" }}>
-                  {f.name}
-                </div>
-                <div className="flex flex-wrap gap-1 pb-1 pl-3">
-                  {f.units.map((u) => (
-                    <button
-                      key={u.id}
-                      onClick={() => onPick(u.id)}
-                      disabled={u.id === excludeUnitId}
-                      className="btn btn-ghost btn-sm disabled:opacity-40"
-                      title={u.id === excludeUnitId ? "現在の単元" : `${s.name} / ${f.name} / ${u.name} へ移動`}
-                    >
-                      {u.name} <span style={{ color: "var(--muted)" }}>({u.problem_count})</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+      <div className="max-h-[60vh] space-y-0.5 overflow-y-auto">
+        {nodes.map(({ node, depth }) => (
+          <button
+            type="button"
+            key={node.id}
+            onClick={() => onPick(node.id)}
+            disabled={node.id === excludeBankNodeId}
+            className="btn btn-ghost btn-sm w-full justify-start disabled:opacity-40"
+            style={{ paddingLeft: `${10 + depth * 16}px` }}
+            title={node.id === excludeBankNodeId ? "現在の階層" : `${node.name}へ移動`}
+          >
+            <span className="min-w-0 flex-1 truncate text-left">{node.name}</span>
+            <span style={{ color: "var(--muted)" }}>({node.problem_count})</span>
+          </button>
         ))}
       </div>
       <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
-        移動先の単元をクリックしてください。
+        移動先の階層をクリックしてください。子階層がある場所にも問題を置けます。
       </p>
     </Modal>
   );

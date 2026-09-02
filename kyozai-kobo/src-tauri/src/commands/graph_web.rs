@@ -94,7 +94,8 @@ fn target_version(
             )
             .optional()
             .map_err(err_str)?;
-        let (actual_project_id, version) = row.ok_or_else(|| "教材項目が見つかりません".to_string())?;
+        let (actual_project_id, version) =
+            row.ok_or_else(|| "教材項目が見つかりません".to_string())?;
         if project_id.is_some_and(|id| id != actual_project_id) {
             return Err("教材項目と教材プロジェクトが一致しません".into());
         }
@@ -102,14 +103,22 @@ fn target_version(
     }
     if let Some(problem_id) = problem_id {
         return conn
-            .query_row("SELECT version FROM problems WHERE id=?1", params![problem_id], |row| row.get(0))
+            .query_row(
+                "SELECT version FROM problems WHERE id=?1",
+                params![problem_id],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(err_str)?
             .ok_or_else(|| "問題が見つかりません".into());
     }
     if let Some(project_id) = project_id {
         return conn
-            .query_row("SELECT version FROM projects WHERE id=?1", params![project_id], |row| row.get(0))
+            .query_row(
+                "SELECT version FROM projects WHERE id=?1",
+                params![project_id],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(err_str)?
             .ok_or_else(|| "教材プロジェクトが見つかりません".into());
@@ -203,7 +212,10 @@ pub fn create_graph_web_session(
     load_session(&conn, &session_id)
 }
 
-pub fn get_graph_web_session(state: &AppState, session_id: String) -> Result<GraphWebSession, String> {
+pub fn get_graph_web_session(
+    state: &AppState,
+    session_id: String,
+) -> Result<GraphWebSession, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut session = load_session(&conn, &session_id)?;
     if session.status == "pending" && session.expires_at < chrono::Utc::now().timestamp() {
@@ -243,11 +255,19 @@ pub fn complete_graph_web_session(
         return Err("このグラフ連携sessionは既に終了しています".into());
     }
     if session.expires_at < chrono::Utc::now().timestamp() {
-        conn.execute("UPDATE graph_web_sessions SET status='expired' WHERE id=?1", params![session_id])
-            .map_err(err_str)?;
+        conn.execute(
+            "UPDATE graph_web_sessions SET status='expired' WHERE id=?1",
+            params![session_id],
+        )
+        .map_err(err_str)?;
         return Err("グラフ連携sessionの有効期限が切れました".into());
     }
-    let current_target_version = target_version(&conn, session.project_id, session.problem_id, session.item_id)?;
+    let current_target_version = target_version(
+        &conn,
+        session.project_id,
+        session.problem_id,
+        session.item_id,
+    )?;
     if current_target_version != session.expected_target_version {
         return Err(format!("CONFLICT:{current_target_version}"));
     }
@@ -270,7 +290,8 @@ pub fn complete_graph_web_session(
         if current.status != "pending" || current.expires_at < chrono::Utc::now().timestamp() {
             return Err("このグラフ連携sessionは終了または期限切れです".into());
         }
-        let checked_target_version = target_version(&tx, current.project_id, current.problem_id, current.item_id)?;
+        let checked_target_version =
+            target_version(&tx, current.project_id, current.problem_id, current.item_id)?;
         if checked_target_version != current.expected_target_version {
             return Err(format!("CONFLICT:{checked_target_version}"));
         }

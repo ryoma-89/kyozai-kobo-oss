@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-use super::templates::{DEFAULT_ANSWER_TEMPLATE, DEFAULT_PROBLEM_TEMPLATE, MARKER_END, MARKER_START};
+use super::templates::{
+    DEFAULT_ANSWER_TEMPLATE, DEFAULT_PROBLEM_TEMPLATE, MARKER_END, MARKER_START,
+};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -137,18 +139,28 @@ fn answer_statement_box_tex(head: &str, statement: &str) -> String {
     out
 }
 
-fn ensure_tcolorbox_support(mut doc: String, needs_tcolorbox: bool, needs_skins: bool) -> String {
+fn ensure_tcolorbox_support(
+    mut doc: String,
+    needs_tcolorbox: bool,
+    needs_skins: bool,
+    needs_breakable: bool,
+) -> String {
     if !needs_tcolorbox {
         return doc;
     }
     let has_tcolorbox = doc.contains("\\usepackage{tcolorbox}");
     let has_skins = doc.contains("\\tcbuselibrary") && doc.contains("skins");
+    let has_breakable = doc.contains("\\tcbuselibrary") && doc.contains("breakable");
     let mut insertions = String::new();
     if !has_tcolorbox {
         insertions.push_str("\\usepackage{tcolorbox}\n");
     }
     if needs_skins && !has_skins {
         insertions.push_str("\\tcbuselibrary{skins}\n");
+    }
+    // ページをまたぐカードは breakable ライブラリがないと組版できない。
+    if needs_breakable && !has_breakable {
+        insertions.push_str("\\tcbuselibrary{breakable}\n");
     }
     if insertions.is_empty() {
         return doc;
@@ -189,7 +201,8 @@ fn append_part_to_bodies(
     }
     latex.push('\n');
 
-    let part_two_column = item.snap_part_layout_mode == "two_column" && item.snap_part_type != "page_break";
+    let part_two_column =
+        item.snap_part_layout_mode == "two_column" && item.snap_part_type != "page_break";
     // 問題冊子全体が二段組の場合は、部品側で multicols を重ねない。
     let body_latex = if part_two_column && !settings.problem_two_column {
         format!("{}{}{}", TWO_COL_BEGIN, latex, TWO_COL_END)
@@ -223,6 +236,26 @@ pub struct Bodies {
     pub explanation: String,
 }
 
+/// 定石カードを、問題冊子と解答冊子の両方へ同じ形で入れる。
+/// 教材側の正本はスナップショットなので、定石ライブラリを更新しても既存教材は変わらない。
+fn append_pattern_card_to_bodies(
+    item: &ProjectItem,
+    body: &mut String,
+    answer_plain: &mut String,
+    answer_inline: &mut String,
+) {
+    let Ok(snapshot) =
+        serde_json::from_str::<crate::models::PatternSnapshot>(&item.snap_pattern_json)
+    else {
+        return;
+    };
+    let card = super::pattern_card::render_pattern_card(&snapshot);
+    for target in [body, answer_plain, answer_inline] {
+        target.push_str(&card);
+        target.push('\n');
+    }
+}
+
 /// 教材項目から各冊子の本文LaTeXを組み立てる
 pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodies {
     let mut body = String::new();
@@ -238,7 +271,11 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
         match item.item_type.as_str() {
             "heading" => {
                 // 章(section) / 節(subsection)。番号は全体設定＋見出しごとの設定の両方がONのとき
-                let cmd = if item.heading_level >= 2 { "subsection" } else { "section" };
+                let cmd = if item.heading_level >= 2 {
+                    "subsection"
+                } else {
+                    "section"
+                };
                 let esc = escape_latex(&item.content);
                 let numbered = settings.number_headings && item.heading_numbered;
 
@@ -259,7 +296,10 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                     format!("\\{}{{{}}}\n\n", cmd, esc)
                 } else if settings.show_toc {
                     // 番号なしでも目次に載せる
-                    format!("\\{}*{{{}}}\n\\addcontentsline{{toc}}{{{}}}{{{}}}\n\n", cmd, esc, cmd, esc)
+                    format!(
+                        "\\{}*{{{}}}\n\\addcontentsline{{toc}}{{{}}}{{{}}}\n\n",
+                        cmd, esc, cmd, esc
+                    )
                 } else {
                     format!("\\{}*{{{}}}\n\n", cmd, esc)
                 };
@@ -296,8 +336,22 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                 answer_plain.push_str("\\newpage\n\n");
                 answer_inline.push_str("\\newpage\n\n");
             }
+            "pattern" => {
+                append_pattern_card_to_bodies(
+                    item,
+                    &mut body,
+                    &mut answer_plain,
+                    &mut answer_inline,
+                );
+            }
             "part" => {
-                append_part_to_bodies(item, settings, &mut body, &mut answer_plain, &mut answer_inline);
+                append_part_to_bodies(
+                    item,
+                    settings,
+                    &mut body,
+                    &mut answer_plain,
+                    &mut answer_inline,
+                );
             }
             "problem" => {
                 let statement_for_layout = |two_column: bool| {
@@ -308,8 +362,7 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                     }
                 };
                 let problem_statement = statement_for_layout(settings.problem_two_column);
-                let answer_statement =
-                    statement_for_layout(settings.two_column_mode == "all");
+                let answer_statement = statement_for_layout(settings.two_column_mode == "all");
                 n += 1;
                 let head = if settings.auto_number {
                     // 番号付き章の中では「章番号-連番」形式（例: 問題2-1）
@@ -320,11 +373,12 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                     };
                     let label = settings.number_format.replace("{n}", &n_str);
                     let number_badge = difficulty_number_side_badge_tex(item, settings);
-                    let number_badge = if settings.difficulty_display == "top_right" || number_badge.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\\nobreak\\hspace{{0.15em}}{}", number_badge)
-                    };
+                    let number_badge =
+                        if settings.difficulty_display == "top_right" || number_badge.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\\nobreak\\hspace{{0.15em}}{}", number_badge)
+                        };
                     let right_badge = if settings.difficulty_display == "top_right" {
                         difficulty_right_badge_tex(item, settings)
                     } else {
@@ -353,27 +407,30 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                 body.push_str(problem_statement);
                 body.push_str("\n\\par\\medskip\n\n");
 
-                let has_expl = settings.include_explanation && !item.snap_explanation.trim().is_empty();
+                let has_expl =
+                    settings.include_explanation && !item.snap_explanation.trim().is_empty();
                 // 「解答部分のみ2段組」: 問題文は1段のまま、【解答】ブロックだけを縦線付きmulticolsで囲む
                 let answer_only_cols = settings.two_column_mode == "answer_only";
 
-                let ans_head = if settings.include_statement_in_answers && settings.box_statement_in_answers {
-                    answer_statement_box_tex(&head, answer_statement)
-                } else if settings.include_statement_in_answers {
-                    let mut plain = head.clone();
-                    plain.push_str(answer_statement);
-                    plain.push_str("\n\\par\\vspace{0.5em}\n");
-                    plain
-                } else {
-                    head.clone()
-                };
+                let ans_head =
+                    if settings.include_statement_in_answers && settings.box_statement_in_answers {
+                        answer_statement_box_tex(&head, answer_statement)
+                    } else if settings.include_statement_in_answers {
+                        let mut plain = head.clone();
+                        plain.push_str(answer_statement);
+                        plain.push_str("\n\\par\\vspace{0.5em}\n");
+                        plain
+                    } else {
+                        head.clone()
+                    };
 
                 let mut ans_core_plain = String::from("\\noindent\\textbf{【解答】}\\par\n");
                 ans_core_plain.push_str(&item.snap_answer);
                 ans_core_plain.push('\n');
                 let mut ans_core_inline = ans_core_plain.clone();
                 if has_expl {
-                    ans_core_inline.push_str("\\par\\vspace{0.5em}\n\\noindent\\textbf{【解説】}\\par\n");
+                    ans_core_inline
+                        .push_str("\\par\\vspace{0.5em}\n\\noindent\\textbf{【解説】}\\par\n");
                     ans_core_inline.push_str(&item.snap_explanation);
                     ans_core_inline.push('\n');
                     explanation.push_str(&head);
@@ -421,7 +478,12 @@ fn insert_at_markers(tpl: &str, body: &str) -> Option<String> {
         return None;
     }
     let after_start = start + MARKER_START.len();
-    Some(format!("{}\n{}\n{}", &tpl[..after_start], body, &tpl[end..]))
+    Some(format!(
+        "{}\n{}\n{}",
+        &tpl[..after_start],
+        body,
+        &tpl[end..]
+    ))
 }
 
 /// テンプレートに本文とプレースホルダを適用して完成した .tex を返す
@@ -477,15 +539,27 @@ pub fn render_document(
     }
     let needs_tcolorbox = main_body.contains("\\begin{tcolorbox}");
     let needs_tcolorbox_skins = main_body.contains("enhanced");
+    let needs_tcolorbox_breakable = main_body.contains("breakable");
 
     let mut doc = insert_at_markers(tpl, &main_body).unwrap_or_else(|| tpl.to_string());
-    doc = doc.replace("{{TOC}}", if settings.show_toc { "\\tableofcontents" } else { "" });
+    doc = doc.replace(
+        "{{TOC}}",
+        if settings.show_toc {
+            "\\tableofcontents"
+        } else {
+            ""
+        },
+    );
 
     // 本文プレースホルダ
     // {{BODY}}: 問題冊子/合本では main_body（目次込み）。解答冊子では {{ANSWER_BODY}} が
     // 無いテンプレートに限り解答本文を入れる（両方持つテンプレートでは問題本文のまま）
     let body_for_ph = if is_answers {
-        if doc.contains("{{ANSWER_BODY}}") { problem_body } else { main_body.clone() }
+        if doc.contains("{{ANSWER_BODY}}") {
+            problem_body
+        } else {
+            main_body.clone()
+        }
     } else {
         main_body.clone()
     };
@@ -493,7 +567,11 @@ pub fn render_document(
     doc = doc.replace("{{ANSWER_BODY}}", if is_answers { &main_body } else { "" });
     doc = doc.replace(
         "{{EXPLANATION_BODY}}",
-        if is_answers { bodies.explanation.as_str() } else { "" },
+        if is_answers {
+            bodies.explanation.as_str()
+        } else {
+            ""
+        },
     );
 
     // メタ情報プレースホルダ
@@ -526,7 +604,10 @@ pub fn render_document(
     let name_field = if name_parts.is_empty() {
         String::new()
     } else {
-        format!("\\begin{{flushright}}\n{}\n\\end{{flushright}}", name_parts.join(" \\quad "))
+        format!(
+            "\\begin{{flushright}}\n{}\n\\end{{flushright}}",
+            name_parts.join(" \\quad ")
+        )
     };
 
     if is_answers && !doc.contains("{{ANSWER_TITLE}}") {
@@ -566,7 +647,12 @@ pub fn render_document(
     doc = doc.replace("{{DATE}}", &escape_latex(&settings.date_str));
     doc = doc.replace("{{NAME_FIELD}}", &name_field);
     doc = doc.replace("{{PAGE_BREAK}}", "\\newpage");
-    let doc = ensure_tcolorbox_support(doc, needs_tcolorbox, needs_tcolorbox_skins);
+    let doc = ensure_tcolorbox_support(
+        doc,
+        needs_tcolorbox,
+        needs_tcolorbox_skins,
+        needs_tcolorbox_breakable,
+    );
     ensure_multicol_support(doc)
 }
 
@@ -657,16 +743,24 @@ fn booklet_suffix(kind: &str) -> &'static str {
 
 fn build_project_tex(data: &ProjectData, kind: &str) -> String {
     let bodies = render_bodies(&data.items, &data.settings);
-    let tpl = if kind == "answers" { &data.tpl.answer } else { &data.tpl.problem };
+    let tpl = if kind == "answers" {
+        &data.tpl.answer
+    } else {
+        &data.tpl.problem
+    };
     render_document(tpl, kind, &data.name, &data.settings, &bodies)
 }
 
 // ---- TeXコマンド解決 ----
 
 fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
-    conn.query_row("SELECT value FROM app_settings WHERE key=?1", params![key], |r| r.get(0))
-        .ok()
-        .filter(|v: &String| !v.trim().is_empty())
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key=?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .ok()
+    .filter(|v: &String| !v.trim().is_empty())
 }
 
 /// uplatex / dvipdfmx の実行ファイルパスを解決する
@@ -696,7 +790,8 @@ pub fn resolve_tex_cmd(conn: &rusqlite::Connection, name: &str, key: &str) -> Op
     }
     for base in ["C:\\texlive", "D:\\texlive"] {
         if let Ok(entries) = std::fs::read_dir(base) {
-            let mut years: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+            let mut years: Vec<PathBuf> =
+                entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
             years.sort();
             years.reverse();
             for y in years {
@@ -723,8 +818,10 @@ pub fn resolve_tex_cmd(conn: &rusqlite::Connection, name: &str, key: &str) -> Op
 pub fn detect_tex(state: &AppState) -> Result<TexDetection, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     Ok(TexDetection {
-        uplatex_path: resolve_tex_cmd(&conn, "uplatex", "uplatex_path").map(|p| p.to_string_lossy().to_string()),
-        dvipdfmx_path: resolve_tex_cmd(&conn, "dvipdfmx", "dvipdfmx_path").map(|p| p.to_string_lossy().to_string()),
+        uplatex_path: resolve_tex_cmd(&conn, "uplatex", "uplatex_path")
+            .map(|p| p.to_string_lossy().to_string()),
+        dvipdfmx_path: resolve_tex_cmd(&conn, "dvipdfmx", "dvipdfmx_path")
+            .map(|p| p.to_string_lossy().to_string()),
     })
 }
 
@@ -826,8 +923,9 @@ pub fn resolve_tex_pair(conn: &rusqlite::Connection) -> Result<(PathBuf, PathBuf
     let uplatex = resolve_tex_cmd(conn, "uplatex", "uplatex_path").ok_or_else(|| {
         "uplatex が見つかりません。TeX Live または MiKTeX をインストールし、設定画面でパスを指定してください。".to_string()
     })?;
-    let dvipdfmx = resolve_tex_cmd(conn, "dvipdfmx", "dvipdfmx_path")
-        .ok_or_else(|| "dvipdfmx が見つかりません。設定画面でパスを指定してください。".to_string())?;
+    let dvipdfmx = resolve_tex_cmd(conn, "dvipdfmx", "dvipdfmx_path").ok_or_else(|| {
+        "dvipdfmx が見つかりません。設定画面でパスを指定してください。".to_string()
+    })?;
     Ok((uplatex, dvipdfmx))
 }
 
@@ -866,15 +964,15 @@ fn run_logged_with_timeout(
                 if output_too_large || dir_too_large {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
-                        "{} の出力が安全上限を超えたため停止しました",
-                        tag
-                    ));
+                    return Err(format!("{} の出力が安全上限を超えたため停止しました", tag));
                 }
                 if start.elapsed().as_secs() > timeout_secs {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("{} が{}秒でタイムアウトしました", tag, timeout_secs));
+                    return Err(format!(
+                        "{} が{}秒でタイムアウトしました",
+                        tag, timeout_secs
+                    ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -882,9 +980,7 @@ fn run_logged_with_timeout(
     };
     let mut text = String::new();
     if let Ok(file) = std::fs::File::open(&out_path) {
-        let _ = file
-            .take(MAX_COMPILE_LOG_BYTES)
-            .read_to_string(&mut text);
+        let _ = file.take(MAX_COMPILE_LOG_BYTES).read_to_string(&mut text);
     }
     Ok((status.success(), text))
 }
@@ -1197,7 +1293,12 @@ pub fn run_compile_with(
 
     let pdf = build_dir.join(format!("{}.pdf", job));
     if !dvi_success || !pdf.exists() {
-        return Ok((false, None, log, "dvipdfmx でPDF生成に失敗しました。ログを確認してください。".into()));
+        return Ok((
+            false,
+            None,
+            log,
+            "dvipdfmx でPDF生成に失敗しました。ログを確認してください。".into(),
+        ));
     }
     if std::fs::metadata(&pdf)
         .map(|m| m.len() > MAX_PDF_BYTES)
@@ -1242,7 +1343,11 @@ pub fn export_tex(state: &AppState, project_id: i64, kind: String) -> Result<Str
 }
 
 /// プロジェクトの冊子PDFを生成する
-pub fn compile_pdf(state: &AppState, project_id: i64, kind: String) -> Result<CompileResult, String> {
+pub fn compile_pdf(
+    state: &AppState,
+    project_id: i64,
+    kind: String,
+) -> Result<CompileResult, String> {
     // DBが必要な情報を先に読み、TeX実行中はロックを保持しない（他端末の操作をブロックしないため）
     let (data, tex, tex_pair, out_dir) = {
         let conn = state.conn.lock().map_err(err_str)?;
@@ -1329,6 +1434,9 @@ fn sample_items() -> Vec<ProjectItem> {
         bank_updated: false,
         source_exists: true,
         part_updated: false,
+        pattern_id: None,
+        snap_pattern_json: String::new(),
+        pattern_updated: false,
         version: 1,
     };
     vec![
@@ -1389,7 +1497,13 @@ pub fn test_compile_template(
         )
         .map_err(err_str)?;
     let tpl = if kind == "answers" {
-        if !answer.trim().is_empty() { answer } else if !base.trim().is_empty() { base } else { DEFAULT_ANSWER_TEMPLATE.into() }
+        if !answer.trim().is_empty() {
+            answer
+        } else if !base.trim().is_empty() {
+            base
+        } else {
+            DEFAULT_ANSWER_TEMPLATE.into()
+        }
     } else if !problem.trim().is_empty() {
         problem
     } else if !base.trim().is_empty() {
@@ -1445,7 +1559,12 @@ pub fn test_compile_template(
 /// テンプレートのプリアンブルを使って単問プレビュー用の完全なLaTeX文書を作る。
 /// テンプレートに定義された \usepackage や独自コマンドがそのまま使えるため、
 /// プレビューと冊子出力でコンパイル環境が一致する。
-pub fn build_preview_doc(effective_template: &str, statement: &str, answer: &str, explanation: &str) -> String {
+pub fn build_preview_doc(
+    effective_template: &str,
+    statement: &str,
+    answer: &str,
+    explanation: &str,
+) -> String {
     build_problem_preview_doc(
         effective_template,
         statement,
@@ -1543,12 +1662,16 @@ pub fn resolve_preview_template(conn: &rusqlite::Connection) -> (Option<i64>, St
     let template_id: Option<i64> = get_setting(conn, "preview_template_id")
         .and_then(|v| v.parse().ok())
         .filter(|id| {
-            conn.query_row("SELECT 1 FROM templates WHERE id=?1", params![id], |_| Ok(()))
-                .is_ok()
+            conn.query_row("SELECT 1 FROM templates WHERE id=?1", params![id], |_| {
+                Ok(())
+            })
+            .is_ok()
         })
         .or_else(|| {
-            conn.query_row("SELECT id FROM templates ORDER BY id LIMIT 1", [], |r| r.get(0))
-                .ok()
+            conn.query_row("SELECT id FROM templates ORDER BY id LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .ok()
         });
     let effective_tpl = match template_id {
         Some(tid) => {
@@ -1706,9 +1829,7 @@ pub fn compile_part_preview(
     let tex_pair = resolve_tex_pair(&conn);
     drop(conn);
     let (success, pdf, log, message) = match &tex_pair {
-        Ok((uplatex, dvipdfmx)) => {
-            run_compile_with(uplatex, dvipdfmx, &build_dir, &doc)?
-        }
+        Ok((uplatex, dvipdfmx)) => run_compile_with(uplatex, dvipdfmx, &build_dir, &doc)?,
         Err(message) => (false, None, String::new(), message.clone()),
     };
     Ok(CompileResult {
@@ -1745,7 +1866,9 @@ pub fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     if !Path::new(&path).exists() {
         return Err("ファイルが見つかりません".into());
     }
-    app.opener().open_path(path, None::<&str>).map_err(err_str)?;
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(err_str)?;
     Ok(())
 }
 

@@ -21,7 +21,9 @@ fn insert_problem(
     let pid = conn.last_insert_rowid();
     for t in tags {
         conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", params![t])?;
-        let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name=?1", params![t], |r| r.get(0))?;
+        let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name=?1", params![t], |r| {
+            r.get(0)
+        })?;
         conn.execute(
             "INSERT OR IGNORE INTO problem_tags (problem_id, tag_id) VALUES (?1, ?2)",
             params![pid, tag_id],
@@ -30,7 +32,14 @@ fn insert_problem(
     Ok(())
 }
 
-fn add_node(conn: &Connection, table: &str, parent_col: Option<&str>, parent_id: Option<i64>, name: &str, order: i64) -> rusqlite::Result<i64> {
+fn add_node(
+    conn: &Connection,
+    table: &str,
+    parent_col: Option<&str>,
+    parent_id: Option<i64>,
+    name: &str,
+    order: i64,
+) -> rusqlite::Result<i64> {
     match parent_col {
         None => {
             conn.execute(
@@ -40,7 +49,10 @@ fn add_node(conn: &Connection, table: &str, parent_col: Option<&str>, parent_id:
         }
         Some(pc) => {
             conn.execute(
-                &format!("INSERT INTO {} ({}, name, sort_order) VALUES (?1, ?2, ?3)", table, pc),
+                &format!(
+                    "INSERT INTO {} ({}, name, sort_order) VALUES (?1, ?2, ?3)",
+                    table, pc
+                ),
                 params![parent_id.unwrap(), name, order],
             )?;
         }
@@ -52,14 +64,21 @@ pub fn create_sample_data(state: &AppState) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
 
     let math = add_node(&conn, "subjects", None, None, "数学", 1).map_err(err_str)?;
-    let su1 = add_node(&conn, "fields", Some("subject_id"), Some(math), "数I", 1).map_err(err_str)?;
-    let sua = add_node(&conn, "fields", Some("subject_id"), Some(math), "数A", 2).map_err(err_str)?;
+    let su1 =
+        add_node(&conn, "fields", Some("subject_id"), Some(math), "数I", 1).map_err(err_str)?;
+    let sua =
+        add_node(&conn, "fields", Some("subject_id"), Some(math), "数A", 2).map_err(err_str)?;
 
-    let u_niji = add_node(&conn, "units", Some("field_id"), Some(su1), "二次関数", 1).map_err(err_str)?;
-    let u_saidai = add_node(&conn, "units", Some("field_id"), Some(su1), "最大・最小", 2).map_err(err_str)?;
-    let u_hanbetsu = add_node(&conn, "units", Some("field_id"), Some(su1), "判別式", 3).map_err(err_str)?;
-    let _u_zukei = add_node(&conn, "units", Some("field_id"), Some(su1), "図形と計量", 4).map_err(err_str)?;
-    let u_baai = add_node(&conn, "units", Some("field_id"), Some(sua), "場合の数", 1).map_err(err_str)?;
+    let u_niji =
+        add_node(&conn, "units", Some("field_id"), Some(su1), "二次関数", 1).map_err(err_str)?;
+    let u_saidai =
+        add_node(&conn, "units", Some("field_id"), Some(su1), "最大・最小", 2).map_err(err_str)?;
+    let u_hanbetsu =
+        add_node(&conn, "units", Some("field_id"), Some(su1), "判別式", 3).map_err(err_str)?;
+    let _u_zukei =
+        add_node(&conn, "units", Some("field_id"), Some(su1), "図形と計量", 4).map_err(err_str)?;
+    let u_baai =
+        add_node(&conn, "units", Some("field_id"), Some(sua), "場合の数", 1).map_err(err_str)?;
 
     insert_problem(
         &conn,

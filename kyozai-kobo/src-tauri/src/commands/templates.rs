@@ -134,8 +134,16 @@ pub const MARKER_END: &str = "% APP_BODY_END";
 /// テンプレートの構文チェック。警告メッセージの一覧を返す
 pub fn validate_templates(base: &str, problem: &str, answer: &str) -> Vec<String> {
     let mut warnings = vec![];
-    let effective_problem = if problem.trim().is_empty() { base } else { problem };
-    let effective_answer = if answer.trim().is_empty() { base } else { answer };
+    let effective_problem = if problem.trim().is_empty() {
+        base
+    } else {
+        problem
+    };
+    let effective_answer = if answer.trim().is_empty() {
+        base
+    } else {
+        answer
+    };
 
     if effective_problem.trim().is_empty() {
         warnings.push("問題冊子用テンプレートが空です（共通テンプレートも未設定）。".into());
@@ -168,7 +176,8 @@ pub fn validate_templates(base: &str, problem: &str, answer: &str) -> Vec<String
         warnings.push(
             "解答冊子テンプレートに {{ANSWER_BODY}}（または {{BODY}} / APP_BODYマーカー）がありません。解答本文が挿入されません。".into(),
         );
-    } else if (effective_answer.contains("{{ANSWER_BODY}}") || effective_answer.contains("{{BODY}}"))
+    } else if (effective_answer.contains("{{ANSWER_BODY}}")
+        || effective_answer.contains("{{BODY}}"))
         && effective_answer.contains(MARKER_START)
         && effective_answer.contains(MARKER_END)
     {
@@ -188,7 +197,10 @@ pub fn validate_templates(base: &str, problem: &str, answer: &str) -> Vec<String
                     && name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
                     && !KNOWN_PLACEHOLDERS.contains(&name)
                 {
-                    let w = format!("不明なプレースホルダ {{{{{}}}}} があります（置換されません）。", name);
+                    let w = format!(
+                        "不明なプレースホルダ {{{{{}}}}} があります（置換されません）。",
+                        name
+                    );
                     if !warnings.contains(&w) {
                         warnings.push(w);
                     }
@@ -326,7 +338,11 @@ pub fn get_template(state: &AppState, id: i64) -> Result<TemplateFull, String> {
 pub fn create_template(state: &AppState, name: String) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let now = now_str();
-    let name = if name.trim().is_empty() { "新しいテンプレート".to_string() } else { name.trim().to_string() };
+    let name = if name.trim().is_empty() {
+        "新しいテンプレート".to_string()
+    } else {
+        name.trim().to_string()
+    };
     conn.execute(
         "INSERT INTO templates (name, problem_template, answer_template, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
         params![name, DEFAULT_PROBLEM_TEMPLATE, DEFAULT_ANSWER_TEMPLATE, now],
@@ -354,9 +370,16 @@ pub fn update_template(state: &AppState, payload: TemplateUpdate) -> Result<Vec<
     let mut conn = state.conn.lock().map_err(err_str)?;
     let tx = conn.transaction().map_err(err_str)?;
     let current: i64 = tx
-        .query_row("SELECT version FROM templates WHERE id=?1", params![payload.id], |r| r.get(0))
+        .query_row(
+            "SELECT version FROM templates WHERE id=?1",
+            params![payload.id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
-    if payload.expected_version.is_some_and(|expected| expected != current) {
+    if payload
+        .expected_version
+        .is_some_and(|expected| expected != current)
+    {
         return Err(format!("CONFLICT:{}", current));
     }
     save_template_version(&tx, payload.id).map_err(err_str)?;
@@ -376,13 +399,18 @@ pub fn update_template(state: &AppState, payload: TemplateUpdate) -> Result<Vec<
     )
     .map_err(err_str)?;
     tx.commit().map_err(err_str)?;
-    Ok(validate_templates(&payload.base_template, &payload.problem_template, &payload.answer_template))
+    Ok(validate_templates(
+        &payload.base_template,
+        &payload.problem_template,
+        &payload.answer_template,
+    ))
 }
 
 pub fn delete_template(state: &AppState, id: i64) -> Result<(), String> {
     let conn = state.conn.lock().map_err(err_str)?;
     // プロジェクト側はスナップショットを持つため、参照はNULLになっても再生成できる
-    conn.execute("DELETE FROM templates WHERE id=?1", params![id]).map_err(err_str)?;
+    conn.execute("DELETE FROM templates WHERE id=?1", params![id])
+        .map_err(err_str)?;
     Ok(())
 }
 
@@ -406,7 +434,10 @@ pub fn duplicate_template(state: &AppState, id: i64) -> Result<i64, String> {
     Ok(new_id)
 }
 
-pub fn list_template_versions(state: &AppState, template_id: i64) -> Result<Vec<TemplateVersionSummary>, String> {
+pub fn list_template_versions(
+    state: &AppState,
+    template_id: i64,
+) -> Result<Vec<TemplateVersionSummary>, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut stmt = conn
         .prepare("SELECT id, name, saved_at FROM template_versions WHERE template_id=?1 ORDER BY id DESC")
@@ -429,7 +460,11 @@ pub fn restore_template_version(state: &AppState, version_id: i64) -> Result<(),
     let mut conn = state.conn.lock().map_err(err_str)?;
     let tx = conn.transaction().map_err(err_str)?;
     let template_id: i64 = tx
-        .query_row("SELECT template_id FROM template_versions WHERE id=?1", params![version_id], |r| r.get(0))
+        .query_row(
+            "SELECT template_id FROM template_versions WHERE id=?1",
+            params![version_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     save_template_version(&tx, template_id).map_err(err_str)?;
     tx.execute(
@@ -551,7 +586,8 @@ pub fn analyze_tex_file(state: &AppState, path: String) -> Result<ImportAnalysis
         packages,
         has_body_placeholder: content.contains("{{BODY}}") || content.contains("{{ANSWER_BODY}}"),
         has_markers: content.contains(MARKER_START) && content.contains(MARKER_END),
-        has_document_env: content.contains("\\begin{document}") && content.contains("\\end{document}"),
+        has_document_env: content.contains("\\begin{document}")
+            && content.contains("\\end{document}"),
         referenced_files,
         content,
     })
@@ -574,7 +610,9 @@ pub fn import_template_from_tex(
             let begin = content
                 .find("\\begin{document}")
                 .ok_or("\\begin{document} が見つかりません")?;
-            let end = content.find("\\end{document}").ok_or("\\end{document} が見つかりません")?;
+            let end = content
+                .find("\\end{document}")
+                .ok_or("\\end{document} が見つかりません")?;
             if end < begin {
                 return Err("\\begin{document} と \\end{document} の順序が不正です".into());
             }
@@ -593,7 +631,9 @@ pub fn import_template_from_tex(
     let conn = state.conn.lock().map_err(err_str)?;
     let now = now_str();
     let name = if name.trim().is_empty() {
-        src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("取り込みテンプレート".into())
+        src.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or("取り込みテンプレート".into())
     } else {
         name.trim().to_string()
     };
@@ -610,7 +650,10 @@ pub fn import_template_from_tex(
     let asset_dir = state.data_dir.join("template_assets").join(tid.to_string());
     std::fs::create_dir_all(&asset_dir).ok();
     for (fname, fpath) in find_referenced_files(&content, source_dir) {
-        let ext = Path::new(&fname).extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext = Path::new(&fname)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
         let disk_name = if ext.is_empty() {
             uuid::Uuid::new_v4().to_string()
         } else {
@@ -632,13 +675,20 @@ pub fn import_template_from_tex(
 }
 
 /// テンプレートに手動でアセット（画像・styファイル等）を追加する
-pub fn add_template_asset(state: &AppState, template_id: i64, source_path: String) -> Result<TemplateAsset, String> {
+pub fn add_template_asset(
+    state: &AppState,
+    template_id: i64,
+    source_path: String,
+) -> Result<TemplateAsset, String> {
     let src = Path::new(&source_path);
     if !src.is_file() {
         return Err("ファイルが見つかりません".into());
     }
     let fname = src.file_name().unwrap().to_string_lossy().to_string();
-    let asset_dir = state.data_dir.join("template_assets").join(template_id.to_string());
+    let asset_dir = state
+        .data_dir
+        .join("template_assets")
+        .join(template_id.to_string());
     std::fs::create_dir_all(&asset_dir).map_err(err_str)?;
     let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
     let disk_name = if ext.is_empty() {
@@ -678,7 +728,11 @@ pub fn remove_template_asset(state: &AppState, asset_id: i64) -> Result<(), Stri
     let mut conn = state.conn.lock().map_err(err_str)?;
     let tx = conn.transaction().map_err(err_str)?;
     let template_id: i64 = tx
-        .query_row("SELECT template_id FROM template_assets WHERE id=?1", params![asset_id], |r| r.get(0))
+        .query_row(
+            "SELECT template_id FROM template_assets WHERE id=?1",
+            params![asset_id],
+            |r| r.get(0),
+        )
         .map_err(err_str)?;
     // スナップショットが参照している可能性があるため実ファイルは残す
     tx.execute("DELETE FROM template_assets WHERE id=?1", params![asset_id])
@@ -707,14 +761,19 @@ pub fn export_template(state: &AppState, id: i64, dest_path: String) -> Result<(
         "compile_method": t.compile_method,
         "packages_memo": t.packages_memo,
     });
-    std::fs::write(&dest_path, serde_json::to_string_pretty(&json).map_err(err_str)?)
-        .map_err(|e| format!("書き込みに失敗しました: {}", e))?;
+    std::fs::write(
+        &dest_path,
+        serde_json::to_string_pretty(&json).map_err(err_str)?,
+    )
+    .map_err(|e| format!("書き込みに失敗しました: {}", e))?;
     Ok(())
 }
 
 pub fn import_template_file(state: &AppState, path: String) -> Result<i64, String> {
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("読み込みに失敗しました: {}", e))?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| "テンプレートファイルの形式が不正です")?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("読み込みに失敗しました: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|_| "テンプレートファイルの形式が不正です")?;
     if v.get("kyozai_kobo_template").is_none() {
         return Err("教材工房のテンプレートファイルではありません".into());
     }

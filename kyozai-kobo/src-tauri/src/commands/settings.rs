@@ -13,7 +13,9 @@ const WEB_SETTING_KEYS: &[&str] = &[
 
 pub fn get_settings(state: &AppState) -> Result<HashMap<String, String>, String> {
     let conn = state.conn.lock().map_err(err_str)?;
-    let mut stmt = conn.prepare("SELECT key, value FROM app_settings").map_err(err_str)?;
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM app_settings")
+        .map_err(err_str)?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(err_str)?;
@@ -22,7 +24,10 @@ pub fn get_settings(state: &AppState) -> Result<HashMap<String, String>, String>
         let (k, v) = row.map_err(err_str)?;
         map.insert(k, v);
     }
-    map.insert("data_dir".into(), state.data_dir.to_string_lossy().to_string());
+    map.insert(
+        "data_dir".into(),
+        state.data_dir.to_string_lossy().to_string(),
+    );
     Ok(map)
 }
 
@@ -48,7 +53,9 @@ fn validate_web_setting(key: &str, value: &str) -> Result<(), String> {
             Ok(())
         }
         "preview_template_id" => Err("プレビューテンプレートIDが不正です".into()),
-        "ai_chat_enabled" | "solution_reference_style_enabled" if matches!(value, "0" | "1") => Ok(()),
+        "ai_chat_enabled" | "solution_reference_style_enabled" if matches!(value, "0" | "1") => {
+            Ok(())
+        }
         "ai_chat_execution_mode" if matches!(value, "suggest" | "confirm" | "auto") => Ok(()),
         "ai_chat_max_tool_calls"
             if value
@@ -62,9 +69,7 @@ fn validate_web_setting(key: &str, value: &str) -> Result<(), String> {
         "ai_chat_execution_mode" => {
             Err("AIチャットの実行モードはsuggest、confirm、autoのいずれかで指定してください".into())
         }
-        "ai_chat_max_tool_calls" => {
-            Err("AIチャットのTool数上限は1〜24で指定してください".into())
-        }
+        "ai_chat_max_tool_calls" => Err("AIチャットのTool数上限は1〜24で指定してください".into()),
         "solution_reference_style_enabled" => {
             Err("模範解答参照の有効設定は0または1で指定してください".into())
         }
@@ -93,10 +98,7 @@ pub fn set_settings(state: &AppState, settings: HashMap<String, String>) -> Resu
     Ok(())
 }
 
-pub fn set_web_settings(
-    state: &AppState,
-    settings: HashMap<String, String>,
-) -> Result<(), String> {
+pub fn set_web_settings(state: &AppState, settings: HashMap<String, String>) -> Result<(), String> {
     for (key, value) in &settings {
         validate_web_setting(key, value)?;
     }

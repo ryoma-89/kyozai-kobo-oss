@@ -3,6 +3,7 @@ export interface UnitNode {
   name: string;
   sort_order: number;
   problem_count: number;
+  part_count: number;
 }
 
 export interface FieldNode {
@@ -21,10 +22,111 @@ export interface SubjectNode {
 
 export type NodeKind = "subject" | "field" | "unit";
 
+/** 問題と部品が共有する任意深度のバンク階層。 */
+export interface BankNode {
+  id: number;
+  parent_id: number | null;
+  name: string;
+  sort_order: number;
+  problem_count: number;
+  descendant_problem_count: number;
+  part_count: number;
+  descendant_part_count: number;
+  legacy_unit_id: number | null;
+  children: BankNode[];
+}
+
+export interface BankNodeDeleteImpact {
+  node_id: number;
+  child_node_count: number;
+  direct_problem_count: number;
+  descendant_problem_count: number;
+  direct_part_count: number;
+  descendant_part_count: number;
+  parent_id: number | null;
+}
+
+export type BankNodeDeleteStrategy = "delete_all" | "move_to_parent";
+
 export type Difficulty = "基礎" | "標準" | "発展";
+
+export interface SolutionStrategy {
+  id: string;
+  title: string;
+  summary: string;
+  difficulty?: "basic" | "standard" | "advanced";
+  answerLength?: "short" | "medium" | "long";
+  concepts?: string[];
+  suitability?: {
+    examAnswer?: boolean;
+    textbookExplanation?: boolean;
+    alternativeSolution?: boolean;
+  };
+  note?: string;
+}
+
+export interface ProblemAnalysis {
+  subject: string;
+  problemType: string;
+  conditions: string[];
+  concepts: string[];
+  cautions: string[];
+}
+
+export interface SolutionPlan {
+  strategyId: string;
+  outline: Array<{ id: string; purpose: string; content: string }>;
+  requiredConditions?: string[];
+  importantChecks?: string[];
+  equalityConditions?: string[];
+}
+
+export interface VerificationResult {
+  valid: boolean;
+  issues: Array<{
+    severity: "warning" | "error";
+    message: string;
+    location?: string;
+  }>;
+  correctedSolution?: string;
+}
+
+export interface SolutionBlock {
+  id: string;
+  content: string;
+  role?: string;
+}
+
+export interface ExplanationSection {
+  solutionBlockIds: string[];
+  title?: string;
+  content: string;
+}
+
+export interface ProblemSolutionVariant {
+  id: string;
+  strategy: SolutionStrategy;
+  role: "main" | "alternative";
+  plan?: SolutionPlan;
+  solution: string;
+  solutionBlocks?: SolutionBlock[];
+  verification?: VerificationResult;
+  explanation?: string;
+  explanationSections?: ExplanationSection[];
+  explanationOutdated?: boolean;
+}
+
+export interface StrategyValidationResult {
+  valid: boolean;
+  message: string;
+  normalizedStrategy: SolutionStrategy;
+  suggestedStrategy: SolutionStrategy;
+}
 
 export interface ProblemSummary {
   id: number;
+  bank_node_id: number;
+  /** 旧API・AI互換用。問題バンクの所属正本は bank_node_id。 */
   unit_id: number;
   title: string;
   difficulty: string;
@@ -33,6 +135,7 @@ export interface ProblemSummary {
   answer_completed: boolean;
   explanation_completed: boolean;
   tags: string[];
+  created_at: string;
   updated_at: string;
   usage_count: number;
 }
@@ -47,6 +150,8 @@ export interface Attachment {
 
 export interface ProblemFull {
   id: number;
+  bank_node_id: number;
+  /** 旧API・AI互換用。問題バンクの所属正本は bank_node_id。 */
   unit_id: number;
   title: string;
   /** 一段組用の問題文 */
@@ -55,6 +160,7 @@ export interface ProblemFull {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  solution_variants: ProblemSolutionVariant[];
   answer_completed: boolean;
   explanation_completed: boolean;
   difficulty: string;
@@ -83,6 +189,7 @@ export interface VersionFull {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  solution_variants: ProblemSolutionVariant[];
   answer_completed: boolean;
   explanation_completed: boolean;
   difficulty: string;
@@ -94,6 +201,8 @@ export interface VersionFull {
 
 export interface SearchQuery {
   text: string;
+  bank_node_id?: number | null;
+  include_descendants?: boolean | null;
   subject_id?: number | null;
   field_id?: number | null;
   unit_id?: number | null;
@@ -115,10 +224,327 @@ export interface SearchResult {
   tags: string[];
   updated_at: string;
   usage_count: number;
+  bank_node_id: number;
+  bank_path: string;
   subject_name: string;
   field_name: string;
   unit_name: string;
   unit_id: number;
+}
+
+export type PatternType = "strategy" | "technique" | "calculation_tip" | "check" | string;
+export type ProblemPatternRelationType = "applicable" | "used" | string;
+export type PatternRelationType =
+  | "related"
+  | "prerequisite"
+  | "derived"
+  | "alternative"
+  | "generalization"
+  | "specialization"
+  | string;
+
+export interface PatternFacets {
+  domains: string[];
+  goals: string[];
+  operations: string[];
+  structures: string[];
+  situations: string[];
+}
+
+export interface PatternStrategyInput {
+  id?: number | null;
+  parent_strategy_id?: number | null;
+  title: string;
+  description: string;
+  condition: string;
+  reasoning: string;
+  branch_label: string;
+  sort_order: number;
+}
+
+export interface PatternStrategy extends PatternStrategyInput {
+  id: number;
+  pattern_id: number;
+  parent_strategy_id: number | null;
+}
+
+export type PatternProposalSourceType =
+  | "solution_used"
+  | "explanation_used"
+  | "ai_inferred"
+  | "image_import"
+  | "ai_chat"
+  | "manual";
+export type PatternProposalRecommendation =
+  | "create_new"
+  | "create_child_pattern"
+  | "merge_into_existing"
+  | "add_candidate_to_existing"
+  | "add_caution_to_existing"
+  | "add_example_to_existing"
+  | "duplicate"
+  | "ignore";
+
+/** AIが推奨する保存方式。ユーザーの選択を拘束しない参考値。 */
+export type PatternProposalStorage =
+  | "new_pattern"
+  | "child_pattern"
+  | "example"
+  | "candidate_strategy"
+  | "merge_existing"
+  | "duplicate"
+  | "ignore";
+
+/** 粒度の方針。keep_as_is は「今の粒度が入試数学の定石として適切」という正当な結論。 */
+export type PatternGeneralizationDecision =
+  | "generalize"
+  | "keep_as_is"
+  | "split_general_and_specific";
+
+/** 抽出のやり直しで選べる方針。 */
+export type PatternExtractionStyle =
+  | "standard"
+  | "more_general"
+  | "exam_pattern_focused"
+  | "custom";
+
+/** 1=principle / 2=strategy / 3=technique / 4=specialized */
+export type PatternSpecificityLevel = 1 | 2 | 3 | 4;
+
+export interface PatternParentHint {
+  title: string;
+  reason: string;
+}
+
+export interface PatternProposalStrategy {
+  title: string;
+  description: string;
+  condition: string;
+  reasoning: string;
+  sortOrder: number;
+}
+
+export interface PatternProposal {
+  proposalId: string;
+  /** 元Problemで実際に使われた具体的手法。固有名・数値を含んでよい。 */
+  rawTechnique: string;
+  title: string;
+  patternType: PatternType;
+  summary: string;
+  situation: string;
+  principle: string;
+  strategies: PatternProposalStrategy[];
+  cautions: string[];
+  domains: string[];
+  goals: string[];
+  operations: string[];
+  structures: string[];
+  situations: string[];
+  tags: string[];
+  sourceType: PatternProposalSourceType;
+  matchedPatternId: number | null;
+  matchedPatternTitle: string | null;
+  similarityReason: string;
+  actionRecommendation: PatternProposalRecommendation;
+  /** rawTechniqueから何を取り除いて一般化したか。 */
+  generalizationReason: string;
+  specificityLevel: PatternSpecificityLevel;
+  /** 0.0〜1.0。他の問題へ再利用できる度合いのAI自己評価。 */
+  reusabilityScore: number;
+  /** 既存定石検索へ使う一般化されたキーワード。 */
+  searchConcepts: string[];
+  isOverlySpecific: boolean;
+  isOverlyGeneral: boolean;
+  specificityReason: string;
+  possibleParentPattern: PatternParentHint | null;
+  generalizationDecision: PatternGeneralizationDecision;
+  recommendedStorage: PatternProposalStorage;
+  /** 自動・手動を通じて一般化し直した回数。 */
+  generalizationPassCount: number;
+}
+
+export interface AiPatternExtractionResult {
+  schemaVersion: 1;
+  kind: "pattern-extraction";
+  patterns: PatternProposal[];
+  /** Generic AI-job views use these optional compatibility fields. */
+  plainText?: string;
+  problems?: AiExtractedProblem[];
+  requiredPackages?: string[];
+  detectedType?: string;
+}
+
+export interface ApplyPatternProposalPayload {
+  /** 抽出元Problem。画像・AI Chat・手動由来では省略する。 */
+  problemId?: number;
+  /** 画像ファイル名など、由来を1行で残すための参照。 */
+  sourceReference?: string;
+  proposal: PatternProposal;
+  action:
+    | "create_new"
+    | "create_child_pattern"
+    | "merge_into_existing"
+    | "add_candidate_to_existing"
+    | "add_caution_to_existing"
+    | "add_example_to_existing"
+    | "link_existing";
+  targetPatternId?: number | null;
+  linkRelationType?: ProblemPatternRelationType | null;
+  /** create_child_patternのときだけ使う上位定石。 */
+  parentPatternId?: number | null;
+}
+
+export interface ApplyPatternProposalResult {
+  patternId: number;
+  action: string;
+  created: boolean;
+  linked: boolean;
+}
+
+export interface PatternSummary {
+  id: number;
+  uuid: string;
+  title: string;
+  summary: string;
+  pattern_type: PatternType;
+  tags: string[];
+  facets: PatternFacets;
+  updated_at: string;
+  version: number;
+  strategy_count: number;
+  problem_count: number;
+}
+
+export interface PatternRelationView {
+  from_pattern_id: number;
+  to_pattern_id: number;
+  pattern_id: number;
+  title: string;
+  pattern_type: PatternType;
+  relation_type: PatternRelationType;
+  direction: "incoming" | "outgoing";
+}
+
+export interface PatternProblemView {
+  problem_id: number;
+  title: string;
+  bank_node_id: number;
+  bank_path: string;
+  relation_type: ProblemPatternRelationType;
+}
+
+export interface ProblemPatternView {
+  pattern_id: number;
+  title: string;
+  summary: string;
+  pattern_type: PatternType;
+  relation_type: ProblemPatternRelationType;
+  tags: string[];
+}
+
+export interface PatternFull {
+  id: number;
+  uuid: string;
+  title: string;
+  summary: string;
+  pattern_type: PatternType;
+  situation: string;
+  principle: string;
+  cautions: string;
+  examples: string;
+  source_note: string;
+  tags: string[];
+  facets: PatternFacets;
+  strategies: PatternStrategy[];
+  related_patterns: PatternRelationView[];
+  related_problems: PatternProblemView[];
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
+export interface PatternUpdate {
+  id: number;
+  expected_version?: number | null;
+  title: string;
+  summary: string;
+  pattern_type: PatternType;
+  situation: string;
+  principle: string;
+  cautions: string;
+  examples: string;
+  source_note: string;
+  tags: string[];
+  facets: PatternFacets;
+  strategies: PatternStrategyInput[];
+}
+
+export interface PatternSearchQuery {
+  text: string;
+  pattern_type?: string | null;
+  tag?: string | null;
+  domain?: string | null;
+  goal?: string | null;
+  operation?: string | null;
+  structure?: string | null;
+  situation?: string | null;
+  exclude_id?: number | null;
+  limit?: number | null;
+  offset?: number | null;
+}
+
+export interface PatternFilterValues {
+  pattern_types: string[];
+  tags: string[];
+  domains: string[];
+  goals: string[];
+  operations: string[];
+  structures: string[];
+  situations: string[];
+}
+
+export interface PatternDeleteImpact {
+  pattern_id: number;
+  problem_count: number;
+  related_pattern_count: number;
+}
+
+export interface PatternSnapshot {
+  uuid: string;
+  title: string;
+  summary: string;
+  pattern_type: PatternType;
+  situation: string;
+  principle: string;
+  cautions: string;
+  examples: string;
+  source_note: string;
+  tags: string[];
+  facets: PatternFacets;
+  strategies: PatternStrategyInput[];
+}
+
+export interface PatternVersionSummary {
+  id: number;
+  pattern_id: number;
+  title: string;
+  version: number;
+  saved_at: string;
+}
+
+export interface PatternVersionFull {
+  id: number;
+  pattern_id: number;
+  version: number;
+  saved_at: string;
+  snapshot: PatternSnapshot;
+}
+
+export interface ImportPatternsResult {
+  created: number;
+  skipped: number;
+  relations_created: number;
+  problem_relations_created: number;
 }
 
 export interface ProjectSummary {
@@ -135,7 +561,7 @@ export interface SnapAttachment {
   stored_name: string;
 }
 
-export type ItemType = "problem" | "heading" | "text" | "pagebreak" | "part";
+export type ItemType = "problem" | "heading" | "text" | "pagebreak" | "part" | "pattern";
 export type DifficultyRank = "A" | "B" | "C" | "D";
 export type RequiredFilter = "all" | "required" | "not_required";
 export type PartOutputTarget = "problems" | "answers" | "both" | "none";
@@ -171,6 +597,12 @@ export interface ProjectItem {
   bank_updated: boolean;
   source_exists: boolean;
   part_updated: boolean;
+  /** 定石項目の元Pattern（削除済みならnull） */
+  pattern_id: number | null;
+  /** 追加時点のPatternSnapshotのJSON。教材側の正本はこちら */
+  snap_pattern_json: string;
+  /** 定石ライブラリ側に新しい版があるか */
+  pattern_updated: boolean;
   /** 楽観的ロック用バージョン */
   version: number;
 }
@@ -259,6 +691,7 @@ export interface TemplateVersionSummary {
 }
 
 export interface ImportBankResult {
+  nodes_created?: number;
   subjects_created: number;
   fields_created: number;
   units_created: number;
@@ -313,6 +746,8 @@ export interface PartAttachment {
 
 export interface PartSummary {
   id: number;
+  bank_node_id: number | null;
+  bank_path: string;
   unit_id: number | null;
   unit_name: string;
   field_id: number | null;
@@ -342,6 +777,8 @@ export interface PartFull extends PartSummary {
 
 export interface PartSearchQuery {
   text: string;
+  bank_node_id?: number | null;
+  include_descendants?: boolean | null;
   subject_id?: number | null;
   field_id?: number | null;
   unit_id?: number | null;
@@ -351,6 +788,7 @@ export interface PartSearchQuery {
   difficulty_rank?: DifficultyRank | null;
   difficulty_ranks?: (DifficultyRank | "__unset")[] | null;
   required_filter?: RequiredFilter | null;
+  unassigned_only?: boolean | null;
 }
 
 export interface PartVersionSummary {
@@ -629,6 +1067,21 @@ export interface AiStructuredResult {
   problems?: AiExtractedProblem[];
 }
 
+export interface AiSolutionWorkflowResult {
+  schemaVersion: 1;
+  kind: "solution-strategies" | "strategy-validation" | "solution-plan" | "solution-verification";
+  analysis?: ProblemAnalysis;
+  strategies?: SolutionStrategy[];
+  validation?: StrategyValidationResult;
+  plan?: SolutionPlan;
+  verification?: VerificationResult;
+  /** Generic AI-job views use these optional compatibility fields. */
+  plainText?: string;
+  problems?: AiExtractedProblem[];
+  requiredPackages?: string[];
+  detectedType?: string;
+}
+
 export interface AiGraphSpec {
   schemaVersion: 1;
   detectedType: "function_graph" | "mixed" | "unknown";
@@ -680,7 +1133,7 @@ export interface AiJob {
   inputText: string;
   inputAssetPaths: string[];
   outputLatex: string;
-  structuredResult: AiStructuredResult | AiGraphStructuredResult | AiSpatialStructuredResult | null;
+  structuredResult: AiStructuredResult | AiGraphStructuredResult | AiSpatialStructuredResult | AiSolutionWorkflowResult | AiPatternExtractionResult | null;
   warnings: AiWarning[];
   uncertainFragments: AiUncertainFragment[];
   compileStatus: "none" | "ok" | "failed" | "skipped";
@@ -723,7 +1176,7 @@ export interface AiChatMessage {
   content: string;
   attachments: AiChatAttachment[];
   metadata: Record<string, unknown>;
-  status: "running" | "completed" | "failed" | "cancelled" | "awaiting_confirmation";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | "awaiting_confirmation";
   createdAt: string;
 }
 

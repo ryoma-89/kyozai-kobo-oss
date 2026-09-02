@@ -12,14 +12,25 @@ import {
   aiStoreInputImage,
 } from "../api";
 import { useApp } from "../store";
-import type { AiChatMessage, AiChatSession, AiChatStatus } from "../types";
+import type { AiChatMessage, AiChatSession, AiChatStatus, PatternProposal } from "../types";
 import type { AiChatLaunchTarget } from "../aiChat";
 import { Icon } from "./Icon";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { PatternProposalReviewDialog } from "./PatternProposalReviewDialog";
 
 interface PendingImage {
   file: File;
   url: string;
+}
+
+interface ChatStrategyChoice {
+  id: string;
+  title: string;
+  summary: string;
+  difficulty?: string;
+  answerLength?: string;
+  concepts?: string[];
+  note?: string;
 }
 
 function ChatAttachmentImage({ sessionId, storedName, name }: { sessionId: string; storedName: string; name: string }) {
@@ -46,6 +57,8 @@ const TOOL_LABELS: Record<string, string> = {
   get_part: "部品を取得",
   update_part: "部品を更新",
   generate_solution: "解答を生成・検査・保存",
+  propose_solution_strategies: "解法候補を検討",
+  create_pattern_proposal: "定石の候補をまとめる",
   generate_explanation: "解説を生成・検査・保存",
   create_material: "教材を作成",
   add_problem_to_material: "教材へ問題を追加",
@@ -73,7 +86,7 @@ function fileToBase64(file: File): Promise<string> {
 }
 
 function messageClass(message: AiChatMessage): string {
-  if (message.role === "user") return "ai-chat-message ai-chat-message-user";
+  if (message.role === "user") return `ai-chat-message ai-chat-message-user${message.status === "queued" ? " ai-chat-message-queued" : ""}`;
   if (message.role === "tool") return `ai-chat-tool ai-chat-tool-${message.status}`;
   return "ai-chat-message ai-chat-message-assistant";
 }
@@ -89,6 +102,7 @@ export function AiChatPanel({
 }) {
   const {
     view,
+    selectedBankNodeId,
     selectedUnitId,
     selectedProblemId,
     selectedProjectId,
@@ -116,6 +130,7 @@ export function AiChatPanel({
       : null;
     return {
       currentScreen: launch?.currentScreen ?? view,
+      selectedBankNodeId,
       selectedUnitId,
       selectedProblemId: launch ? (launch.kind === "problem" ? launch.id : null) : selectedProblemId,
       selectedPartId: launch?.kind === "part" ? launch.id : null,
@@ -129,7 +144,7 @@ export function AiChatPanel({
       } : null,
       editorSelection: selection,
     };
-  }, [view, selectedUnitId, selectedProblemId, selectedProjectId, contextName, input, launch?.requestId]);
+  }, [view, selectedBankNodeId, selectedUnitId, selectedProblemId, selectedProjectId, contextName, input, launch?.requestId]);
 
   const reload = async (id = session?.id) => {
     if (!id) return;
@@ -278,6 +293,28 @@ export function AiChatPanel({
     }
   };
 
+  const fixPendingQuality = async () => {
+    if (!session || busy) return;
+    setBusy(true);
+    try {
+      const cancelled = await aiChatConfirm(session.id, false);
+      const failedPartRevision = cancelled.context.failedPartRevision ?? session.context.failedPartRevision;
+      const next = await aiChatSendMessage({
+        sessionId: session.id,
+        content: "直前の部品更新候補について、表示された保存前警告をすべて修正してください。内容保持の警告では意図せず変更した箇所だけを保存済み部品に合わせて戻してください。警告箇所以外の本文・式・見出し・例題・図は変更せず、修正した全文をもう一度更新候補として提案してください。",
+        context: {
+          ...context,
+          ...(failedPartRevision ? { failedPartRevision } : {}),
+        },
+      });
+      setSession(next);
+    } catch (error) {
+      showToast(String(error), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const beginResize = (event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
@@ -296,6 +333,52 @@ export function AiChatPanel({
   };
 
   const agentRunning = !!session && RUNNING.has(session.status);
+  const pendingQualityWarnings = (() => {
+    const pending = session?.context.pendingQualityConfirmation;
+    if (!pending || typeof pending !== "object" || !("warnings" in pending) || !Array.isArray(pending.warnings)) return [];
+    return pending.warnings.filter((warning): warning is string => typeof warning === "string");
+  })();
+  const pendingConfirmationKind = (() => {
+    const pending = session?.context.pendingQualityConfirmation;
+    if (!pending || typeof pending !== "object" || !("kind" in pending) || typeof pending.kind !== "string") return "quality";
+    return pending.kind;
+  })();
+  const isPartSaveConfirmation = pendingQualityWarnings.length > 0;
+  const isContentPreservationConfirmation = isPartSaveConfirmation && pendingConfirmationKind === "content_preservation";
+  const queuedMessageCount = session?.messages.filter((message) => message.role === "user" && message.status === "queued").length ?? 0;
+  const strategyChoiceMessage = [...(session?.messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "tool"
+      && message.status === "completed"
+      && message.metadata.toolName === "propose_solution_strategies"
+      && !(session?.messages ?? []).some((later) => later.id > message.id && later.role === "user"));
+  const strategyChoices = (() => {
+    const result = strategyChoiceMessage?.metadata.result;
+    if (!result || typeof result !== "object" || !("strategies" in result) || !Array.isArray(result.strategies)) return [];
+    return result.strategies.filter((candidate): candidate is ChatStrategyChoice => (
+      !!candidate && typeof candidate === "object"
+      && typeof candidate.id === "string"
+      && typeof candidate.title === "string"
+      && typeof candidate.summary === "string"
+    ));
+  })();
+  const [reviewingPatterns, setReviewingPatterns] = useState<PatternProposal[] | null>(null);
+  // 会話から作られた定石候補。まだ保存されていないので、確認画面で選んでから保存する。
+  const patternProposalMessage = [...(session?.messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "tool"
+      && message.status === "completed"
+      && message.metadata.toolName === "create_pattern_proposal");
+  const chatPatternProposals = (() => {
+    const result = patternProposalMessage?.metadata.result;
+    if (!result || typeof result !== "object" || !("patterns" in result) || !Array.isArray(result.patterns)) return [];
+    return result.patterns as PatternProposal[];
+  })();
+
+  const chooseStrategy = (strategy: ChatStrategyChoice, role: "main" | "alternative") => {
+    const selection = `解法「${strategy.title}」（${strategy.summary}）を${role === "main" ? "主解法" : "別解"}として採用してください。`;
+    setInput((current) => current.trim() ? `${current.trim()}\n${selection}` : selection);
+  };
   const runningTool = [...(session?.messages ?? [])]
     .reverse()
     .find((message) => message.role === "tool" && message.status === "running");
@@ -340,6 +423,12 @@ export function AiChatPanel({
         </div>
       )}
 
+      {queuedMessageCount > 0 && (
+        <div className="ai-chat-queue-status" role="status">
+          次の指示を{queuedMessageCount}件予約済みです。現在の応答後に順番に実行します。
+        </div>
+      )}
+
       <div className="ai-chat-messages" ref={scrollRef}>
         {!session && <div className="p-4 text-xs" style={{ color: "var(--muted)" }}>AIチャットを準備しています...</div>}
         {session && session.messages.length === 0 && (
@@ -357,7 +446,12 @@ export function AiChatPanel({
                 <span>{message.content.replace(/^[✓×]\s*/, "")}</span>
               </div>
             ) : (
-              <ChatMarkdown>{message.content}</ChatMarkdown>
+              <>
+                <ChatMarkdown>{message.content}</ChatMarkdown>
+                {message.role === "user" && message.status === "queued" && (
+                  <div className="ai-chat-queued-label">送信予約</div>
+                )}
+              </>
             )}
             {message.attachments.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
@@ -370,10 +464,66 @@ export function AiChatPanel({
         ))}
       </div>
 
+      {chatPatternProposals.length > 0 && session?.status !== "awaiting_confirmation" && (
+        <div className="ai-chat-strategy-picker" aria-label="定石候補">
+          <div className="ai-chat-strategy-picker-title">定石の候補</div>
+          <div className="ai-chat-strategy-choice">
+            <div className="ai-chat-strategy-summary">
+              {chatPatternProposals.length}件の候補をまとめました。まだ定石ライブラリへは保存されていません。
+            </div>
+            <div className="mt-1.5 flex gap-1.5">
+              <button className="btn btn-solid btn-sm" onClick={() => setReviewingPatterns(chatPatternProposals)}>
+                内容を確認して保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reviewingPatterns && (
+        <PatternProposalReviewDialog
+          proposals={reviewingPatterns}
+          onClose={() => setReviewingPatterns(null)}
+        />
+      )}
+
+      {strategyChoices.length > 0 && session?.status !== "awaiting_confirmation" && (
+        <div className="ai-chat-strategy-picker" aria-label="解法を選択">
+          <div className="ai-chat-strategy-picker-title">解法を選択</div>
+          {strategyChoices.map((strategy, index) => (
+            <div className="ai-chat-strategy-choice" key={strategy.id}>
+              <div className="font-semibold">{index + 1}. {strategy.title}</div>
+              <div className="ai-chat-strategy-summary">{strategy.summary}</div>
+              <div className="ai-chat-strategy-meta">
+                {[strategy.note, strategy.difficulty, strategy.answerLength, ...(strategy.concepts ?? []).slice(0, 3)].filter(Boolean).join(" · ")}
+              </div>
+              <div className="mt-1.5 flex gap-1.5">
+                <button className="btn btn-solid btn-sm" onClick={() => chooseStrategy(strategy, "main")}>主解法にする</button>
+                <button className="btn btn-outline btn-sm" onClick={() => chooseStrategy(strategy, "alternative")}>別解に追加</button>
+              </div>
+            </div>
+          ))}
+          <button className="btn btn-ghost btn-sm" onClick={() => setInput((current) => current || "次の解法を使いたいです。成立するか確認して、この方針で主解答を作ってください: ")}>＋ 自分で解法を指定</button>
+        </div>
+      )}
+
       {session?.status === "awaiting_confirmation" && (
         <div className="ai-chat-confirm">
-          <div className="text-xs font-semibold">{session.executionMode === "suggest" ? "操作案（提案のみ）" : "この操作を実行しますか？"}</div>
+          <div className="text-xs font-semibold">
+            {isContentPreservationConfirmation
+              ? "指定外の変更を確認"
+              : isPartSaveConfirmation
+                ? "保存前の品質警告"
+                : session.executionMode === "suggest"
+                  ? "操作案（提案のみ）"
+                  : "この操作を実行しますか？"}
+          </div>
           <div className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>{session.pendingCalls.map((call) => TOOL_LABELS[call.name] ?? call.name).join(" / ")}</div>
+          {isPartSaveConfirmation && (
+            <ul className="ai-chat-quality-warnings">
+              {pendingQualityWarnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+            </ul>
+          )}
           {session.pendingCalls.filter((call) => call.name === "create_problem").map((call) => {
             const args = call.arguments;
             return (
@@ -386,10 +536,13 @@ export function AiChatPanel({
           })}
           <div className="mt-2 flex justify-end gap-2">
             <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void act(() => aiChatConfirm(session.id, false))}>{session.executionMode === "suggest" ? "閉じる" : "キャンセル"}</button>
+            {isPartSaveConfirmation && (
+              <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => void fixPendingQuality()}>AIで修正</button>
+            )}
             {session.executionMode !== "suggest" && session.pendingCalls.some((call) => call.name === "create_problem") && (
               <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => void revisePending()}>修正</button>
             )}
-            {session.executionMode !== "suggest" && <button className="btn btn-solid btn-sm" disabled={busy} onClick={() => void act(() => aiChatConfirm(session.id, true))}>実行</button>}
+            {session.executionMode !== "suggest" && <button className="btn btn-solid btn-sm" disabled={busy} onClick={() => void act(() => aiChatConfirm(session.id, true))}>{isPartSaveConfirmation ? "警告を了承して反映" : "実行"}</button>}
           </div>
         </div>
       )}
@@ -424,21 +577,24 @@ export function AiChatPanel({
             }
           }}
           className="ai-chat-input"
-          placeholder="例: 数列のBランクから5問選んで、簡単な順に教材を作って"
-          disabled={!session || RUNNING.has(session.status) || session.status === "awaiting_confirmation"}
+          placeholder={agentRunning ? "AIの処理中でも、次の指示を入力して送信予約できます" : "例: この問題の解法候補を出して、対話しながら決めたい"}
+          disabled={!session || session.status === "awaiting_confirmation"}
         />
         <div className="ai-chat-composer-actions">
           <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(event) => addFiles(Array.from(event.target.files ?? []))} />
-          <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()} disabled={!session || RUNNING.has(session.status)} title="画像を添付">＋画像</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()} disabled={!session || session.status === "awaiting_confirmation"} title="画像を添付">＋画像</button>
           <button className="btn btn-ghost btn-sm" disabled={!session || session.messages.length === 0 || session.status !== "idle"} onClick={() => session && void act(() => aiChatRegenerate(session.id))}>再生成</button>
           <span className="ml-auto" />
           {session && RUNNING.has(session.status) ? (
-            <button className="btn btn-outline btn-sm" onClick={async () => { try { await aiChatCancel(session.id); await reload(session.id); } catch (error) { showToast(String(error), "error"); } }}>停止</button>
+            <>
+              <button className="btn btn-outline btn-sm" onClick={async () => { try { await aiChatCancel(session.id); await reload(session.id); } catch (error) { showToast(String(error), "error"); } }}>停止</button>
+              <button className="btn btn-solid btn-sm" disabled={busy || (!input.trim() && images.length === 0)} onClick={() => void send()}>送信予約</button>
+            </>
           ) : (
             <button className="btn btn-solid btn-sm" disabled={busy || !session || session.status === "awaiting_confirmation" || (!input.trim() && images.length === 0)} onClick={() => void send()}>送信</button>
           )}
         </div>
-        <div className="ai-chat-hint">Enterで送信 · Shift+Enterで改行 · 画像はドロップ/貼り付け可</div>
+        <div className="ai-chat-hint">{agentRunning ? "Enterで送信予約 · 現在の応答後に順番に処理" : "Enterで送信 · Shift+Enterで改行 · 画像はドロップ/貼り付け可"}</div>
       </div>
     </aside>
   );

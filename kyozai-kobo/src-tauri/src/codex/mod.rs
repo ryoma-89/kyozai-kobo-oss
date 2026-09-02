@@ -237,9 +237,7 @@ async fn reader_loop(stdout: tokio::process::ChildStdout, ctx: ReaderCtx) {
                 "error": {"code": -32601, "message": "この操作はサポートされていません"}
             });
             let mut stdin = ctx.stdin.lock().await;
-            let _ = stdin
-                .write_all(format!("{}\n", resp).as_bytes())
-                .await;
+            let _ = stdin.write_all(format!("{}\n", resp).as_bytes()).await;
         } else if has_id {
             // 応答
             let id = v.get("id").and_then(|i| i.as_i64());
@@ -262,17 +260,26 @@ async fn reader_loop(stdout: tokio::process::ChildStdout, ctx: ReaderCtx) {
 fn handle_notification(ctx: &ReaderCtx, v: &Value) {
     let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let params = v.get("params").cloned().unwrap_or(Value::Null);
-    let Some(state) = ctx.state.upgrade() else { return };
+    let Some(state) = ctx.state.upgrade() else {
+        return;
+    };
     match method {
         "account/login/completed" => {
-            let success = params.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+            let success = params
+                .get("success")
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false);
             let error = params
                 .get("error")
                 .and_then(|e| e.as_str())
                 .map(|s| s.to_string());
             if let Ok(mut login) = state.codex.login.lock() {
                 if let Some(l) = login.as_mut() {
-                    l.status = if success { "success".into() } else { "failed".into() };
+                    l.status = if success {
+                        "success".into()
+                    } else {
+                        "failed".into()
+                    };
                     l.error = error;
                 }
             }
@@ -367,26 +374,24 @@ pub fn ensure_running(state: &Arc<AppState>) -> Result<(), String> {
         *notifs = Some(notif_tx);
     }
 
-    state.codex.log_line(&format!("codex app-server を起動しました ({})", version));
+    state
+        .codex
+        .log_line(&format!("codex app-server を起動しました ({})", version));
 
     // initialize の応答後に initialized 通知を送って初期化を完了する。
     // 途中で失敗したプロセスを残すと次回の再接続が壊れるため、必ず片付ける。
     let initialized = (|| -> Result<(), String> {
-        request(
-            state,
-            "initialize",
-            initialize_params(),
-            20,
-        )?;
+        request(state, "initialize", initialize_params(), 20)?;
         send_notification(state, "initialized")
     })();
     if let Err(error) = initialized {
         if let Ok(mut last_error) = state.codex.last_error.lock() {
             *last_error = Some(error.clone());
         }
-        state
-            .codex
-            .log_line(&format!("codex app-server の初期化に失敗しました: {}", error));
+        state.codex.log_line(&format!(
+            "codex app-server の初期化に失敗しました: {}",
+            error
+        ));
         shutdown(state);
         return Err(error);
     }
@@ -525,12 +530,18 @@ fn request_inner(
                 .write_all(line.as_bytes())
                 .await
                 .map_err(|e| format!("送信に失敗しました: {}", e))?;
-            stdin.flush().await.map_err(|e| format!("送信に失敗しました: {}", e))?;
+            stdin
+                .flush()
+                .await
+                .map_err(|e| format!("送信に失敗しました: {}", e))?;
         }
         match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(_)) => Err("応答チャネルが閉じられました".to_string()),
-            Err(_) => Err(format!("{} がタイムアウトしました（{}秒）", method, timeout_secs)),
+            Err(_) => Err(format!(
+                "{} がタイムアウトしました（{}秒）",
+                method, timeout_secs
+            )),
         }
     });
 
@@ -588,7 +599,12 @@ pub fn codex_status(state: &Arc<AppState>) -> Result<Value, String> {
         }
     }
     let login = state.codex.login.lock().map_err(|e| e.to_string())?.clone();
-    let last_error = state.codex.last_error.lock().map_err(|e| e.to_string())?.clone();
+    let last_error = state
+        .codex
+        .last_error
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let selected_model = selected_model(state)?.unwrap_or_default();
     let log: Vec<String> = state
         .codex

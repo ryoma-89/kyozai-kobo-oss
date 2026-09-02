@@ -31,10 +31,7 @@ fn main() {
     }
     println!("DATA_DIR={}", data_dir.display());
     println!("STATUS={}", status);
-    println!(
-        "PAIRING_CODE={}",
-        state.server.pairing_code.lock().unwrap()
-    );
+    println!("PAIRING_CODE={}", state.server.pairing_code.lock().unwrap());
     println!("READY");
 
     loop {

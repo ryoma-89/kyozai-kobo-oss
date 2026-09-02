@@ -39,7 +39,11 @@ fn expires_at() -> String {
 }
 
 /// ペアリング成功時: 端末を登録しセッショントークンを発行して返す
-pub fn create_session(state: &Arc<AppState>, device_name: &str, user_agent: &str) -> Result<String, String> {
+pub fn create_session(
+    state: &Arc<AppState>,
+    device_name: &str,
+    user_agent: &str,
+) -> Result<String, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let now = now_str();
     conn.execute(
@@ -73,7 +77,8 @@ pub fn validate_session(state: &Arc<AppState>, token: &str) -> Option<i64> {
         .ok();
     let (session_id, device_id, expires) = row?;
     if expires < now {
-        conn.execute("DELETE FROM web_sessions WHERE id=?1", params![session_id]).ok();
+        conn.execute("DELETE FROM web_sessions WHERE id=?1", params![session_id])
+            .ok();
         return None;
     }
     conn.execute(
@@ -101,7 +106,9 @@ pub fn delete_session(state: &Arc<AppState>, token: &str) {
 
 /// 直近5分以内にアクセスのあったセッション数（接続中端末の目安）
 pub fn active_session_count(state: &Arc<AppState>) -> i64 {
-    let Ok(conn) = state.conn.lock() else { return 0 };
+    let Ok(conn) = state.conn.lock() else {
+        return 0;
+    };
     let cutoff = (chrono::Local::now() - chrono::Duration::minutes(5))
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
