@@ -36,6 +36,7 @@ import type {
   PatternFilterValues,
   PatternFull,
   PatternSearchQuery,
+  PatternSnapshot,
   PatternSummary,
   PatternUpdate,
   PatternVersionFull,
@@ -44,6 +45,7 @@ import type {
   ImportPatternsResult,
   ProblemFull,
   ProblemSolutionVariant,
+  SolutionFlowBlock,
   ProblemSummary,
   ProjectFull,
   ProjectSettings,
@@ -108,6 +110,7 @@ export const updateProblem = (payload: {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  common_flow_blocks: SolutionFlowBlock[];
   solution_variants: ProblemSolutionVariant[];
   answer_completed: boolean;
   explanation_completed: boolean;
@@ -137,6 +140,8 @@ export const listPatternFilterValues = () =>
 export const createPattern = (title: string, patternType = "strategy") =>
   invoke<number>("create_pattern", { title, patternType });
 export const getPattern = (id: number) => invoke<PatternFull>("get_pattern", { id });
+export const getPatternSnapshot = (patternId: number) =>
+  invoke<PatternSnapshot>("pattern_snapshot", { patternId });
 export const updatePattern = (payload: PatternUpdate) =>
   invoke<number>("update_pattern", { payload });
 export const duplicatePattern = (id: number) => invoke<number>("duplicate_pattern", { id });
@@ -190,6 +195,10 @@ export const startPatternExtraction = (
   });
 export const patternCardLatex = (patternId: number) =>
   invoke<string>("pattern_card_latex", { patternId });
+export const renderSolutionFlowLatex = (
+  commonFlowBlocks: SolutionFlowBlock[],
+  solutionVariants: ProblemSolutionVariant[],
+) => invoke<string>("render_solution_flow_latex", { commonFlowBlocks, solutionVariants });
 export const startPatternEdit = (patternId: number, instruction: string) =>
   invoke<AiJob>("start_pattern_edit", { patternId, instruction });
 export const applyPatternEdit = (
@@ -580,7 +589,7 @@ export const aiMarkInserted = (
   confirmed: boolean,
 ) => invoke<void>("ai_mark_inserted", { jobId, entityType, entityId, field, confirmed });
 export const aiInsertIntoTargetProblem = (jobId: number, confirmed: boolean) =>
-  invoke<{ problemId: number; field: "answer_latex" | "explanation_latex" }>(
+  invoke<{ problemId: number; field: "answer_latex" | "explanation_latex" | "solution_flow" }>(
     "ai_insert_into_target_problem",
     { jobId, confirmed },
   );

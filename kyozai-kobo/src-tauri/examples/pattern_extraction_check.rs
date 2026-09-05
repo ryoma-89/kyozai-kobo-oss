@@ -123,8 +123,11 @@ const CASES: &[Case] = &[
 
 fn seed_problem(state: &AppState, case: &Case) -> i64 {
     let conn = state.conn.lock().unwrap();
-    conn.execute("INSERT INTO subjects(name,sort_order) VALUES ('数学',1)", [])
-        .ok();
+    conn.execute(
+        "INSERT INTO subjects(name,sort_order) VALUES ('数学',1)",
+        [],
+    )
+    .ok();
     let subject_id: i64 = conn
         .query_row("SELECT id FROM subjects WHERE name='数学'", [], |row| {
             row.get(0)
@@ -165,8 +168,7 @@ fn run_image_import(state: &Arc<AppState>, path: &str) {
     let bytes = std::fs::read(path).expect("画像を読めません");
     use base64::Engine as _;
     let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let name = ai::store_input_image(state, &data, "card.png")
-        .expect("画像を保存できません");
+    let name = ai::store_input_image(state, &data, "card.png").expect("画像を保存できません");
     let stored = name
         .get("name")
         .and_then(|v| v.as_str())
@@ -211,8 +213,10 @@ fn main() {
 
     if let Ok(path) = std::env::var("KK_IMAGE") {
         run_image_import(&state, &path);
-        println!("
-DONE");
+        println!(
+            "
+DONE"
+        );
         return;
     }
 
@@ -223,8 +227,14 @@ DONE");
         .filter(|value| !value.is_empty())
         .collect();
 
-    for case in CASES.iter().filter(|case| keys.iter().any(|k| k == case.key)) {
-        println!("\n================ CASE {} : {} ================", case.key, case.title);
+    for case in CASES
+        .iter()
+        .filter(|case| keys.iter().any(|k| k == case.key))
+    {
+        println!(
+            "\n================ CASE {} : {} ================",
+            case.key, case.title
+        );
         println!("期待: {}", case.expected);
         if let Some(seed) = case.seed_general.as_ref() {
             let id =
@@ -388,7 +398,10 @@ DONE");
                         serde_json::from_value(value).unwrap();
                     let first = extraction.patterns.into_iter().next().unwrap();
                     println!("---- さらに一般化 ----");
-                    println!("before: {} [{}]", first.title, first.generalization_decision);
+                    println!(
+                        "before: {} [{}]",
+                        first.title, first.generalization_decision
+                    );
                     match commands::patterns::start_pattern_generalization(
                         &state, problem_id, first,
                     ) {
@@ -407,8 +420,7 @@ DONE");
                                     .unwrap()
                                 };
                                 if st == "completed" {
-                                    let v: serde_json::Value =
-                                        serde_json::from_str(&res).unwrap();
+                                    let v: serde_json::Value = serde_json::from_str(&res).unwrap();
                                     println!("{}", serde_json::to_string_pretty(&v).unwrap());
                                     break;
                                 }

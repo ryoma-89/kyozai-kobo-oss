@@ -4,11 +4,12 @@
 
 use kyozai_kobo_lib::commands::latex::{render_bodies, render_document, run_compile_with};
 use kyozai_kobo_lib::commands::projects::items_of;
+use kyozai_kobo_lib::commands::solution_flow::render_flow_blocks;
 use kyozai_kobo_lib::commands::templates::{
     seed_default_template, validate_templates, DEFAULT_ANSWER_TEMPLATE, DEFAULT_PROBLEM_TEMPLATE,
 };
 use kyozai_kobo_lib::db;
-use kyozai_kobo_lib::models::{ProjectItem, ProjectSettings};
+use kyozai_kobo_lib::models::{ProjectItem, ProjectSettings, SolutionFlowBlock};
 use rusqlite::params;
 use std::path::PathBuf;
 
@@ -243,7 +244,7 @@ fn tex_generation_problems_and_answers() {
 
     let tex_a = build_tex("テスト教材", &settings, &items, "answers");
     assert!(tex_a.contains("【解答】"));
-    assert!(tex_a.contains("【解説】"));
+    assert!(tex_a.contains("【考え方】"));
     assert!(tex_a.contains("平方完成"));
     assert!(!tex_a.contains("\\fbox{"));
     assert!(!tex_a.contains("\\begin{tcolorbox}"));
@@ -550,7 +551,7 @@ fn template_markers_and_custom_placeholders() {
         !doc3[..sep].contains("【解説】"),
         "解説がANSWER_BODY側に含まれている"
     );
-    assert!(doc3[sep..].contains("【解説】"));
+    assert!(doc3[sep..].contains("【考え方】"));
 }
 
 #[test]
@@ -1028,17 +1029,19 @@ fn bank_export_import_roundtrip() {
             params![problem_id],
         )
         .unwrap();
-    let solution_variants_json = r#"[{"id":"variant-main","strategy":{"id":"strategy-coordinate","title":"座標設定","summary":"座標を置いて計算する。","difficulty":"standard","answerLength":"medium","concepts":["座標"]},"role":"main","solution":"\\includegraphics{imgabc.png}","explanation":"図を使う解説 \\includegraphics{imgabc.png}","explanationOutdated":false}]"#;
+    let common_flow_blocks_json = r#"[{"id":"common-view","type":"text","content":"共通Flow \\includegraphics{imgabc.png}"}]"#;
+    let solution_variants_json = r#"[{"id":"variant-main","strategy":{"id":"strategy-coordinate","title":"座標設定","summary":"座標を置いて計算する。","difficulty":"standard","answerLength":"medium","concepts":["座標"]},"role":"main","solution":"\\includegraphics{imgabc.png}","explanation":"図を使う解説 \\includegraphics{imgabc.png}","explanationOutdated":false,"flowBlocks":[{"id":"variant-view","type":"text","content":"解法別Flow \\includegraphics{imgabc.png}"}]}]"#;
     conn_a
         .execute(
             "UPDATE problems
              SET statement_latex = statement_latex || ' \\includegraphics{imgabc.png}',
                  statement_latex_two_column = statement_latex_two_column || ' \\includegraphics{imgabc.png}',
                  solution_variants_json = ?2,
+                 common_flow_blocks_json = ?3,
                  answer_completed = 1,
                  explanation_completed = 1
              WHERE id=?1",
-            params![problem_id, solution_variants_json],
+            params![problem_id, solution_variants_json, common_flow_blocks_json],
         )
         .unwrap();
 
@@ -1051,6 +1054,12 @@ fn bank_export_import_roundtrip() {
     assert_eq!(
         data.subjects[0].fields[0].units[0].problems[0]
             .solution_variants
+            .len(),
+        1
+    );
+    assert_eq!(
+        data.subjects[0].fields[0].units[0].problems[0]
+            .common_flow_blocks
             .len(),
         1
     );
@@ -1113,6 +1122,15 @@ fn bank_export_import_roundtrip() {
         imported_variants.contains(&new_stored),
         "解法Variantの添付参照が新しい保存名へ置換されていない"
     );
+    let imported_common_flow: String = conn_b
+        .query_row(
+            "SELECT common_flow_blocks_json FROM problems LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!imported_common_flow.contains("imgabc.png"));
+    assert!(imported_common_flow.contains(&new_stored));
     let tag: String = conn_b
         .query_row(
             "SELECT t.name FROM tags t JOIN problem_tags pt ON pt.tag_id=t.id LIMIT 1",
@@ -1325,7 +1343,9 @@ fn pattern_item_keeps_its_snapshot_when_the_library_changes() {
     assert!(!items[0].pattern_updated);
     let bodies = render_bodies(&items, &default_settings());
     assert!(bodies.body.contains("\\begin{tcolorbox}"));
-    assert!(bodies.body.contains("平均値の定理で平均変化率を導関数の値に置き換える"));
+    assert!(bodies
+        .body
+        .contains("平均値の定理で平均変化率を導関数の値に置き換える"));
     assert!(
         bodies.answer_plain.contains("\\begin{tcolorbox}"),
         "定石カードは解答冊子にも入れる"
@@ -1396,4 +1416,65 @@ fn pattern_card_compiles_with_real_tex() {
     assert!(success, "{}\n{}", message, log);
     let pdf = pdf.expect("PDFパスが返ること");
     assert!(std::fs::metadata(&pdf).unwrap().len() > 1000);
+}
+
+#[test]
+fn aligned_solution_flow_formula_compiles_with_real_tex() {
+    let uplatex = which("uplatex");
+    let dvipdfmx = which("dvipdfmx");
+    let (Some(uplatex), Some(dvipdfmx)) = (uplatex, dvipdfmx) else {
+        eprintln!("TeX環境が見つからないためFlow数式のPDF生成テストをスキップ");
+        return;
+    };
+    let flow = render_flow_blocks(&[SolutionFlowBlock {
+        id: "aligned-calculation".into(),
+        block_type: "formula".into(),
+        latex: r"\begin{aligned}
+          &\left|\sum_{k=1}^{n}z_k\right|^2-\sum_{k=1}^{n}|z_k|^2\\
+          &=2\sum_{1\leqq j<k\leqq n}(x_jx_k+y_jy_k)
+        \end{aligned}"
+            .into(),
+        ..Default::default()
+    }]);
+    assert!(flow.contains("\\[\n\\begin{aligned}"));
+    let tex = format!(
+        "\\documentclass[uplatex]{{ujarticle}}\n\\usepackage{{amsmath,amssymb}}\n\\begin{{document}}\n{}\n\\end{{document}}\n",
+        flow
+    );
+    let build = tempdir::TempDir::new("kyozai-flow-aligned-pdf").unwrap();
+    let (success, pdf, log, message) =
+        run_compile_with(&uplatex, &dvipdfmx, build.path(), &tex).unwrap();
+    assert!(success, "{}\n{}", message, log);
+    assert!(pdf.expect("PDFパスが返ること").exists());
+}
+
+#[test]
+fn generated_solution_flow_formula_stays_inside_a_two_column_linewidth() {
+    let uplatex = which("uplatex");
+    let dvipdfmx = which("dvipdfmx");
+    let (Some(uplatex), Some(dvipdfmx)) = (uplatex, dvipdfmx) else {
+        eprintln!("TeX環境が見つからないためFlow二段組テストをスキップ");
+        return;
+    };
+    let flow = render_flow_blocks(&[SolutionFlowBlock {
+        id: "polar-conditions".into(),
+        block_type: "formula".into(),
+        latex: r"z_k=r_k(\cos\theta_k+i\sin\theta_k),\qquad r_k=|z_k|>0,\qquad 0\leqq\theta_k\leqq\dfrac{\pi}{2}"
+            .into(),
+        ..Default::default()
+    }]);
+    assert!(flow.contains("\\begin{gathered}"));
+    let tex = format!(
+        "\\documentclass[uplatex,a4paper,11pt]{{ujarticle}}\n\\usepackage{{amsmath,amssymb,multicol}}\n\\usepackage[margin=20mm]{{geometry}}\n\\begin{{document}}\n\\begin{{multicols}}{{2}}\n{}\n\\end{{multicols}}\n\\end{{document}}\n",
+        flow
+    );
+    let build = tempdir::TempDir::new("kyozai-flow-two-column-pdf").unwrap();
+    let (success, pdf, log, message) =
+        run_compile_with(&uplatex, &dvipdfmx, build.path(), &tex).unwrap();
+    assert!(success, "{}\n{}", message, log);
+    assert!(
+        !log.contains("Overfull \\hbox"),
+        "Flow数式が二段組の列幅を超えています\n{log}"
+    );
+    assert!(pdf.expect("PDFパスが返ること").exists());
 }

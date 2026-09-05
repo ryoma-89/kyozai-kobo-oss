@@ -62,7 +62,7 @@ type ProblemLatexField =
 const TAB_LABELS: Record<Tab, string> = {
   statement: "問題文",
   answer: "解答",
-  explanation: "解説",
+  explanation: "考え方",
 };
 
 const SNIPPETS: { label: string; text: string; cursorOffset?: number }[] = [
@@ -129,6 +129,7 @@ function editableProblemSignature(problem: ProblemFull): string {
     statement_latex_two_column: problem.statement_latex_two_column,
     answer_latex: problem.answer_latex,
     explanation_latex: problem.explanation_latex,
+    common_flow_blocks: problem.common_flow_blocks,
     solution_variants: problem.solution_variants,
     answer_completed: problem.answer_completed,
     explanation_completed: problem.explanation_completed,
@@ -191,6 +192,7 @@ export function ProblemEditor() {
   const [aiPreset, setAiPreset] = useState<(AiConvertPreset & { targetTab?: Tab }) | null>(null);
   const [contentReviewJob, setContentReviewJob] = useState<AiJob | null>(null);
   const [contentReviewStarting, setContentReviewStarting] = useState(false);
+  const [solutionFlowStarting, setSolutionFlowStarting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<ProblemFull | null>(null);
   const previewBoxRef = useRef<HTMLDivElement>(null);
@@ -401,6 +403,7 @@ export function ProblemEditor() {
         statement_latex_two_column: p.statement_latex_two_column,
         answer_latex: p.answer_latex,
         explanation_latex: p.explanation_latex,
+        common_flow_blocks: p.common_flow_blocks,
         solution_variants: p.solution_variants,
         answer_completed: p.answer_completed,
         explanation_completed: p.explanation_completed,
@@ -474,6 +477,7 @@ export function ProblemEditor() {
           statement_latex_two_column: mine.statement_latex_two_column,
           answer_latex: mine.answer_latex,
           explanation_latex: mine.explanation_latex,
+          common_flow_blocks: mine.common_flow_blocks,
           solution_variants: mine.solution_variants,
           answer_completed: mine.answer_completed,
           explanation_completed: mine.explanation_completed,
@@ -533,8 +537,8 @@ export function ProblemEditor() {
     previewScope === "full"
       ? [
           { label: "問題文", source: previewStatement },
+          { label: "【考え方】", source: problem.explanation_latex },
           { label: "【解答】", source: problem.answer_latex },
-          { label: "【解説】", source: problem.explanation_latex },
         ]
       : [{ label: TAB_LABELS[tab], source: currentPreviewSource }];
 
@@ -588,17 +592,18 @@ export function ProblemEditor() {
       && value !== problem.explanation_latex
     ) {
       changes.explanation_completed = false;
+      // 構造化Flowの描画結果を直接編集した場合は、そのLaTeXをlegacy flowの正本にする。
+      changes.common_flow_blocks = [];
       const variants = problem.solution_variants ?? [];
-      if (variants.length === 1) {
-        changes.solution_variants = [{
-          ...variants[0],
-          explanation: value,
-          explanationSections: value.trim()
-            ? [{ solutionBlockIds: variants[0].solutionBlocks?.map((block) => block.id) ?? [], content: value }]
-            : [],
-          explanationOutdated: false,
-        }];
-      }
+      changes.solution_variants = variants.map((variant, index) => ({
+        ...variant,
+        flowBlocks: [],
+        explanation: index === 0 ? value : undefined,
+        explanationSections: index === 0 && value.trim()
+          ? [{ solutionBlockIds: variant.solutionBlocks?.map((block) => block.id) ?? [], content: value }]
+          : [],
+        explanationOutdated: false,
+      }));
     }
     patch(changes);
   };
@@ -897,13 +902,13 @@ ${latex}
       "【問題文（二段組用）】",
       problem.statement_latex_two_column.trim() || "（未入力）",
       "",
+      "【考え方（互換欄）】",
+      problem.explanation_latex.trim() || "（未入力）",
+      "",
       "【解答】",
       problem.answer_latex.trim() || "（未入力）",
       "",
-      "【解説】",
-      problem.explanation_latex.trim() || "（未入力）",
-      "",
-      `【完成状態】解答=${problem.answer_completed ? "完成" : "未完成"}、解説=${problem.explanation_completed ? "完成" : "未完成"}`,
+      `【完成状態】解答=${problem.answer_completed ? "完成" : "未完成"}、考え方=${problem.explanation_completed ? "完成" : "未完成"}`,
     ].join("\n");
 
   const startContentReview = async () => {
@@ -936,6 +941,47 @@ ${latex}
       showToast(String(error), "error");
     } finally {
       setContentReviewStarting(false);
+    }
+  };
+
+  const startSolutionFlowFromExistingAnswer = async () => {
+    if (dirtyRef.current) {
+      showToast("考え方を生成する前に、現在の問題と解答を保存してください", "error");
+      return;
+    }
+    if (!problem.answer_latex.trim()) {
+      showToast("考え方を生成するには、先に解答を保存してください", "error");
+      return;
+    }
+    setSolutionFlowStarting(true);
+    try {
+      const job = await aiCreateJob({
+        sourceType: "text",
+        conversionMode: "solution_flow_from_answer",
+        options: {
+          solutionSubject: problemSolutionSubject,
+          solutionLayout: "two_column",
+          solutionDetail: "standard",
+          useTemplateContext: true,
+        },
+        inputText: [
+          "【問題文】",
+          problem.statement_latex.trim() || problem.statement_latex_two_column.trim(),
+          "",
+          "【変更してはいけない既存解答】",
+          problem.answer_latex.trim(),
+        ].join("\n"),
+        targetEntityType: "problem",
+        targetEntityId: problem.id,
+        targetField: "solution_flow",
+      });
+      showToast(
+        `考え方の生成をバックグラウンドで開始しました（AI #${job.id}）。完了後にAI一覧から内容を反映できます`,
+      );
+    } catch (error) {
+      showToast(String(error), "error");
+    } finally {
+      setSolutionFlowStarting(false);
     }
   };
 
@@ -1149,7 +1195,7 @@ ${latex}
               checked={problem.explanation_completed}
               onChange={(e) => patch({ explanation_completed: e.target.checked })}
             />
-            解説完成
+            考え方完成
           </label>
           <span style={{ color: "var(--muted)" }}>
             保存すると問題バンク一覧に表示されます
@@ -1250,7 +1296,7 @@ ${latex}
             onClick={() => void startContentReview()}
             disabled={contentReviewStarting}
             className="btn btn-solid btn-sm"
-            title="保存済みの問題文・解答・解説をまとめてAIで点検し、指摘から修正できます"
+            title="保存済みの問題文・考え方・解答をまとめてAIで点検し、指摘から修正できます"
           >
             <Icon name="sparkle" size={15} />
             {contentReviewStarting ? "チェック開始中..." : "AIチェック"}
@@ -1346,21 +1392,25 @@ ${latex}
             }}
             disabled={!problem.statement_latex.trim() && !problem.statement_latex_two_column.trim()}
             className="btn btn-outline btn-sm"
-            title="保存済みの問題文・解答・解説から、再利用可能な定石候補を一般化して抽出"
+            title="保存済みの問題文・解答・考え方から、再利用可能な定石候補を一般化して抽出"
           >
             <Icon name="sparkle" size={15} /> この問題から定石を抽出
           </button>
           <button
-            onClick={() => setShowAiSolution(true)}
-            disabled={!problem.statement_latex.trim() || !problem.answer_latex.trim()}
-            className="btn btn-outline btn-sm"
-            title={
-              problem.answer_latex.trim()
-                ? "現在の最新版解答を固定し、選択済み解法・式番号・場合分けに沿った解説を生成"
-                : "先に解答を入力または生成してください"
+            onClick={() => void startSolutionFlowFromExistingAnswer()}
+            disabled={
+              solutionFlowStarting
+              || !problem.answer_latex.trim()
+              || (!problem.statement_latex.trim() && !problem.statement_latex_two_column.trim())
             }
+            className="btn btn-outline btn-sm"
+            title="保存済みの解答を変更せず、問題へ結び付けた定石を適切な位置に挿入した考え方をバックグラウンド生成"
           >
-            <Icon name="sparkle" size={15} /> {problem.explanation_latex.trim() ? "解説を再生成" : "この解答から解説を生成"}
+            <Icon name="sparkle" size={15} /> {solutionFlowStarting
+              ? "開始中…"
+              : problem.explanation_latex.trim()
+                ? "既存解答から考え方を再生成"
+                : "既存解答から考え方を生成"}
           </button>
         </div>
 
@@ -1637,15 +1687,16 @@ ${latex}
         <AiSolutionWorkflowDialog
           problem={problem}
           solutionSubject={problemSolutionSubject}
-          onChange={(solutionVariants, answerLatex, explanationLatex) => {
+          onChange={(solutionVariants, answerLatex, explanationLatex, commonFlowBlocks) => {
             patch({
               solution_variants: solutionVariants,
               answer_latex: answerLatex,
               explanation_latex: explanationLatex,
+              common_flow_blocks: commonFlowBlocks,
               answer_completed: false,
               explanation_completed: false,
             });
-            setTab("answer");
+            setTab("explanation");
           }}
           onClose={() => setShowAiSolution(false)}
         />
@@ -1696,7 +1747,7 @@ ${latex}
               server: conflict.statement_latex_two_column,
             },
             { label: "解答", mine: problem.answer_latex, server: conflict.answer_latex },
-            { label: "解説", mine: problem.explanation_latex, server: conflict.explanation_latex },
+            { label: "考え方", mine: problem.explanation_latex, server: conflict.explanation_latex },
             {
               label: "AI解法・検証情報",
               mine: JSON.stringify(problem.solution_variants, null, 2),
@@ -1802,7 +1853,7 @@ ${latex}
                     </pre>
                     {versionView.explanation_latex && (
                       <>
-                        <p className="section-label">解説</p>
+                        <p className="section-label">考え方</p>
                         <pre
                           className="rounded p-2 font-mono whitespace-pre-wrap"
                           style={{ background: "var(--panel-2)" }}

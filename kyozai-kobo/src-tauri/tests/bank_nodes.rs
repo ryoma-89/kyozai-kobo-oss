@@ -1,6 +1,8 @@
 use kyozai_kobo_lib::commands::{bank, problems, projects, tree};
 use kyozai_kobo_lib::db;
-use kyozai_kobo_lib::models::SearchQuery;
+use kyozai_kobo_lib::models::{
+    ProblemSolutionVariant, ProblemUpdate, SearchQuery, SolutionFlowBlock, SolutionStrategy,
+};
 use kyozai_kobo_lib::state::AppState;
 use std::sync::Arc;
 
@@ -25,6 +27,79 @@ fn empty_search(bank_node_id: Option<i64>) -> SearchQuery {
         required_filter: None,
         tag: None,
     }
+}
+
+#[test]
+fn structured_solution_flow_round_trips_through_problem_versions() {
+    let (_dir, state) = setup();
+    let node = tree::create_bank_node(&state, None, "数学III".into()).unwrap();
+    let problem_id =
+        problems::create_problem_in_bank_node(&state, node, "Flow保存".into()).unwrap();
+    let current = problems::get_problem(&state, problem_id).unwrap();
+    let common = vec![SolutionFlowBlock {
+        id: "common-viewpoint".into(),
+        block_type: "text".into(),
+        content: "共通の着眼点".into(),
+        ..Default::default()
+    }];
+    let variant = ProblemSolutionVariant {
+        id: "variant-main".into(),
+        role: "main".into(),
+        strategy: SolutionStrategy {
+            id: "strategy-main".into(),
+            title: "標準解法".into(),
+            summary: "共通の着眼点から完答する。".into(),
+            ..Default::default()
+        },
+        solution: "試験答案".into(),
+        flow_blocks: vec![SolutionFlowBlock {
+            id: "variant-reason".into(),
+            block_type: "text".into(),
+            content: "この候補を選ぶ理由".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    problems::update_problem(
+        &state,
+        ProblemUpdate {
+            id: problem_id,
+            bank_node_id: Some(current.bank_node_id),
+            unit_id: current.unit_id,
+            title: current.title,
+            statement_latex: "問題文".into(),
+            statement_latex_two_column: "問題文".into(),
+            answer_latex: "試験答案".into(),
+            explanation_latex: "この値は構造化Flowから再描画される".into(),
+            common_flow_blocks: common,
+            solution_variants: vec![variant],
+            answer_completed: false,
+            explanation_completed: false,
+            difficulty: current.difficulty,
+            difficulty_rank: current.difficulty_rank,
+            is_required: current.is_required,
+            memo: current.memo,
+            tags: current.tags,
+            expected_version: Some(current.version),
+        },
+    )
+    .unwrap();
+
+    let saved = problems::get_problem(&state, problem_id).unwrap();
+    assert_eq!(saved.answer_latex, "試験答案");
+    assert_eq!(saved.common_flow_blocks.len(), 1);
+    assert_eq!(saved.solution_variants[0].flow_blocks.len(), 1);
+    assert!(saved.explanation_latex.contains("共通の着眼点"));
+    assert!(saved.explanation_latex.contains("この候補を選ぶ理由"));
+    assert!(!saved
+        .explanation_latex
+        .contains("この値は構造化Flowから再描画される"));
+
+    let versions = problems::list_versions(&state, problem_id).unwrap();
+    assert_eq!(versions.len(), 1);
+    let before = problems::get_version(&state, versions[0].id).unwrap();
+    assert!(before.common_flow_blocks.is_empty());
+    assert!(before.solution_variants.is_empty());
 }
 
 #[test]

@@ -262,6 +262,10 @@ fn dispatch_inner(
             }
         }
         "get_problem" => ok(problems::get_problem(state, arg(args, "id")?)?),
+        "render_solution_flow_latex" => ok(solution_flow::render_solution_flow_latex(
+            arg(args, "commonFlowBlocks")?,
+            arg(args, "solutionVariants")?,
+        )?),
         "create_problem" => {
             if let Some(bank_node_id) = arg::<Option<i64>>(args, "bankNodeId")? {
                 ok(problems::create_problem_in_bank_node(
@@ -295,6 +299,7 @@ fn dispatch_inner(
             arg(args, "patternType")?,
         )?),
         "get_pattern" => ok(patterns::get_pattern(state, arg(args, "id")?)?),
+        "pattern_snapshot" => ok(patterns::pattern_snapshot(state, arg(args, "patternId")?)?),
         "update_pattern" => ok(patterns::update_pattern(state, arg(args, "payload")?)?),
         "duplicate_pattern" => ok(patterns::duplicate_pattern(state, arg(args, "id")?)?),
         "get_pattern_delete_impact" => ok(patterns::get_pattern_delete_impact(
@@ -366,11 +371,9 @@ fn dispatch_inner(
             state,
             arg(args, "patternId")?,
         )?),
-        "start_pattern_edit" => patterns::start_pattern_edit(
-            state,
-            arg(args, "patternId")?,
-            arg(args, "instruction")?,
-        ),
+        "start_pattern_edit" => {
+            patterns::start_pattern_edit(state, arg(args, "patternId")?, arg(args, "instruction")?)
+        }
         "apply_pattern_edit" => ok(patterns::apply_pattern_edit(
             state,
             arg(args, "patternId")?,

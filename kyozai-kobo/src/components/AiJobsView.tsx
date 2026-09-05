@@ -40,6 +40,7 @@ function jobModeLabel(job: AiJob): string | null {
     generate_explanation: "解説生成",
     generate_strategy_explanation: "確定解答から解説生成",
     generate_strategy_solution: "選択解法から答案生成",
+    solution_flow_from_answer: "既存解答から考え方生成",
     generate_topic_guide: "解説部品生成",
     generate_problem_layouts: "表示形式生成",
     problem_bank_import: "問題取込",
@@ -66,11 +67,12 @@ function StatusBadge({ status }: { status: AiJobStatus }) {
   );
 }
 
-function directInsertLabel(job: AiJob): "解答" | "解説" | null {
+function directInsertLabel(job: AiJob): "解答" | "解説" | "考え方" | null {
+  const structuredFlow = job.conversionMode === "solution_flow_from_answer";
   if (
     job.conversionMode === "revise_source"
     || job.status !== "completed"
-    || job.compileStatus !== "ok"
+    || (!structuredFlow && job.compileStatus !== "ok")
     || !!job.insertedAt
     || job.targetEntityType !== "problem"
     || job.targetEntityId === null
@@ -79,6 +81,7 @@ function directInsertLabel(job: AiJob): "解答" | "解説" | null {
   }
   if (job.targetField === "answer_latex") return "解答";
   if (job.targetField === "explanation_latex") return "解説";
+  if (structuredFlow && job.targetField === "solution_flow") return "考え方";
   return null;
 }
 
@@ -110,6 +113,7 @@ function targetFieldLabel(field: string): string | null {
   }
   if (field === "answer_latex" || field === "snap_answer") return "解答";
   if (field === "explanation_latex" || field === "snap_explanation") return "解説";
+  if (field === "solution_flow") return "考え方";
   if (field === "latex_source") return "部品本文";
   if (field === "review") return "AIチェック";
   return null;
@@ -236,10 +240,11 @@ export function AiJobsView() {
       : `問題 #${job.targetEntityId}`;
     const hasReviewItems = job.warnings.length > 0 || job.uncertainFragments.length > 0;
     const backgroundExplanation = job.options.backgroundWorkflowResult === "solution_explanation";
+    const backgroundFlow = job.options.backgroundWorkflowResult === "solution_flow_from_answer";
     const accepted = await confirm(
-      `${problemName}の${label}へ生成結果を${backgroundExplanation ? "反映" : "挿入"}しますか？\n`
-      + (backgroundExplanation
-        ? "生成元の解答が変更されている場合は、安全のため反映を中止します。"
+      `${problemName}の${label}へ生成結果を${backgroundExplanation || backgroundFlow ? "反映" : "挿入"}しますか？\n`
+      + (backgroundExplanation || backgroundFlow
+        ? `生成元の解答が変更されている場合は、安全のため反映を中止します。${backgroundFlow ? "解答自体は変更しません。" : ""}`
         : "既存の内容がある場合は末尾へ追記します。")
       + (hasReviewItems ? "\n警告・要確認箇所があるため、内容を確認してから実行してください。" : ""),
     );
@@ -247,7 +252,7 @@ export function AiJobsView() {
     setInsertingJobId(job.id);
     try {
       await aiInsertIntoTargetProblem(job.id, true);
-      showToast(`${problemName}の${label}へ${backgroundExplanation ? "反映" : "挿入"}しました`);
+      showToast(`${problemName}の${label}へ${backgroundExplanation || backgroundFlow ? "反映" : "挿入"}しました`);
       await load();
     } catch (e) {
       showToast(String(e), "error");
@@ -385,6 +390,8 @@ export function AiJobsView() {
                             ? "反映中..."
                             : job.options.backgroundWorkflowResult === "solution_explanation"
                               ? "解説を問題へ反映"
+                              : job.options.backgroundWorkflowResult === "solution_flow_from_answer"
+                                ? "考え方を問題へ反映"
                               : `${directInsertLabel(job)}へ挿入`}
                         </button>
                       )}

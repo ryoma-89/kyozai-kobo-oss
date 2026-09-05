@@ -333,12 +333,11 @@ pub fn items_of(conn: &Connection, project_id: i64) -> Result<Vec<ProjectItem>, 
             let pattern_exists: bool = r.get(44)?;
             let library_pattern_version: i64 = r.get(45)?;
             // 教材側はスナップショットで固定されている。定石ライブラリ側の版が進んだら知らせる。
-            let snapshot_pattern_version = serde_json::from_str::<serde_json::Value>(
-                &snap_pattern_json,
-            )
-            .ok()
-            .and_then(|value| value.get("version").and_then(serde_json::Value::as_i64))
-            .unwrap_or(0);
+            let snapshot_pattern_version =
+                serde_json::from_str::<serde_json::Value>(&snap_pattern_json)
+                    .ok()
+                    .and_then(|value| value.get("version").and_then(serde_json::Value::as_i64))
+                    .unwrap_or(0);
             let pattern_updated = item_type == "pattern"
                 && pattern_exists
                 && library_pattern_version != snapshot_pattern_version;

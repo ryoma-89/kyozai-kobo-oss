@@ -21,14 +21,14 @@ y&=(1-t)\sin\theta
 
 $0<x<8$を固定し、
 \[
-\cos\alpha=\frac{x}{8},
+\cos\alpha=\dfrac{x}{8},
 \qquad
-0<\alpha<\frac{\pi}{2}
+0<\alpha<\dfrac{\pi}{2}
 \]
 とする。$x=8t\cos\theta>0$であるから、$t>0$かつ
 $\cos\theta>0$であり、
 \[
-t=\frac{x}{8\cos\theta}
+t=\dfrac{x}{8\cos\theta}
 \]
 となる。$\cos\theta$は
 $0\leqq\theta\leqq\dfrac{\pi}{2}$で減少するので、
@@ -36,7 +36,7 @@ $0\leqq\theta\leqq\dfrac{\pi}{2}$で減少するので、
 \begin{aligned}
 0\leqq t\leqq1
 &\Longleftrightarrow
-0<\frac{x}{8\cos\theta}\leqq1\\
+0<\dfrac{x}{8\cos\theta}\leqq1\\
 &\Longleftrightarrow
 x\leqq8\cos\theta\\
 &\Longleftrightarrow
@@ -48,7 +48,7 @@ x\leqq8\cos\theta\\
 である。また、
 \[
 f_x(\theta)
-=\sin\theta-\frac{x}{8}\tan\theta
+=\sin\theta-\dfrac{x}{8}\tan\theta
 \]
 とおく。ここで、所属条件から$t$を消去する。
 \[
@@ -98,18 +98,18 @@ y&=f_x(\theta)
 $0\leqq\theta\leqq\alpha<\dfrac{\pi}{2}$では
 \[
 f_x'(\theta)
-=\cos\theta-\frac{x}{8\cos^2\theta}
-=\frac{\cos^3\theta-\dfrac{x}{8}}{\cos^2\theta}
+=\cos\theta-\dfrac{x}{8\cos^2\theta}
+=\dfrac{\cos^3\theta-\dfrac{x}{8}}{\cos^2\theta}
 \]
 である。ここで、
 \[
-\cos^3\beta=\frac{x}{8},
+\cos^3\beta=\dfrac{x}{8},
 \qquad
-0<\beta<\frac{\pi}{2}
+0<\beta<\dfrac{\pi}{2}
 \]
 となる$\beta$をとる。$0<\dfrac{x}{8}<1$であるから、
 \[
-\frac{x}{8}<\left(\frac{x}{8}\right)^{1/3}<1
+\dfrac{x}{8}<\left(\dfrac{x}{8}\right)^{\frac{1}{3}}<1
 \]
 である。$\cos\alpha=\dfrac{x}{8}$、
 $\cos\beta=\left(\dfrac{x}{8}\right)^{1/3}$より
@@ -139,7 +139,7 @@ f_x'(\theta)&<0 &&(\beta<\theta\leqq\alpha)
 f_x(\beta)
 &=\sin\beta-\cos^3\beta\tan\beta\\
 &=(1-\cos^2\beta)\sin\beta\\
-&=\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+&=\left\{1-\left(\dfrac{x}{8}\right)^{\frac{2}{3}}\right\}^{\frac{3}{2}}
 \end{aligned}
 \]
 であり、$f_x(0)=f_x(\alpha)=0$である。したがって、増減表は
@@ -154,12 +154,12 @@ f_x(\theta)&0&\nearrow&
 \]
 となる。この表より、$f_x(\theta)$は$\theta=\beta$のとき最大となり、最大値は
 \[
-\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\left\{1-\left(\dfrac{x}{8}\right)^{\frac{2}{3}}\right\}^{\frac{3}{2}}
 \]
 である。さらに、$f_x$は$0\leqq\theta\leqq\alpha$で連続であるから、$f_x$の値域は
 \[
 0\leqq f_x(\theta)\leqq
-\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\left\{1-\left(\dfrac{x}{8}\right)^{\frac{2}{3}}\right\}^{\frac{3}{2}}
 \]
 である。よって、$0<x<8$を固定すると、
 \[
@@ -178,7 +178,7 @@ y&=f_x(\theta)
 \end{gathered}\\
 &\Longleftrightarrow
 0\leqq y\leqq
-\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3/2}
+\left\{1-\left(\dfrac{x}{8}\right)^{\frac{2}{3}}\right\}^{\frac{3}{2}}
 \end{aligned}
 \]
 となる。
@@ -203,7 +203,7 @@ X(x,y)\in D
 \[
 V
 =\pi\int_0^8
-\left\{1-\left(\frac{x}{8}\right)^{2/3}\right\}^{3}
+\left\{1-\left(\dfrac{x}{8}\right)^{\frac{2}{3}}\right\}^{3}
 \,dx
 \]
 である。$x=8u^3$とおくと、$0\leqq u\leqq1$かつ$dx=24u^2\,du$であるから、
@@ -214,7 +214,7 @@ V
 &=24\pi\int_0^1
 \left(u^2-3u^4+3u^6-u^8\right)\,du\\
 &=24\pi
-\left(\frac13-\frac35+\frac37-\frac19\right)\\
-&=\frac{128\pi}{105}
+\left(\dfrac{1}{3}-\dfrac{3}{5}+\dfrac{3}{7}-\dfrac{1}{9}\right)\\
+&=\dfrac{128\pi}{105}
 \end{aligned}
 \]

@@ -1,7 +1,7 @@
 //! 問題バンクのインポート・エクスポートと整理（一括移動・削除）
 
 use crate::db::now_str;
-use crate::models::ProblemSolutionVariant;
+use crate::models::{ProblemSolutionVariant, SolutionFlowBlock};
 use crate::state::{err_str, AppState};
 use base64::Engine;
 use rusqlite::{params, Connection};
@@ -24,6 +24,8 @@ pub struct BankProblem {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    #[serde(default)]
+    pub common_flow_blocks: Vec<SolutionFlowBlock>,
     #[serde(default)]
     pub solution_variants: Vec<ProblemSolutionVariant>,
     #[serde(default)]
@@ -99,7 +101,7 @@ fn problem_to_bank(
     problem_id: i64,
 ) -> rusqlite::Result<BankProblem> {
     let mut p = conn.query_row(
-        "SELECT title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo FROM problems WHERE id=?1",
+        "SELECT title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo FROM problems WHERE id=?1",
         params![problem_id],
         |r| {
             Ok(BankProblem {
@@ -108,13 +110,14 @@ fn problem_to_bank(
                 statement_latex_two_column: r.get(2)?,
                 answer_latex: r.get(3)?,
                 explanation_latex: r.get(4)?,
-                solution_variants: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
-                answer_completed: r.get::<_, i64>(6)? != 0,
-                explanation_completed: r.get::<_, i64>(7)? != 0,
-                difficulty: r.get(8)?,
-                difficulty_rank: r.get(9)?,
-                is_required: r.get::<_, i64>(10)? != 0,
-                memo: r.get(11)?,
+                common_flow_blocks: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
+                solution_variants: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
+                answer_completed: r.get::<_, i64>(7)? != 0,
+                explanation_completed: r.get::<_, i64>(8)? != 0,
+                difficulty: r.get(9)?,
+                difficulty_rank: r.get(10)?,
+                is_required: r.get::<_, i64>(11)? != 0,
+                memo: r.get(12)?,
                 tags: vec![],
                 attachments: vec![],
             })
@@ -406,6 +409,7 @@ fn import_problem_into_bank_node(
     };
     let mut answer = problem.answer_latex.clone();
     let mut explanation = problem.explanation_latex.clone();
+    let mut common_flow_blocks = problem.common_flow_blocks.clone();
     let mut solution_variants = problem.solution_variants.clone();
     let mut restored: Vec<(String, String)> = vec![];
     for attachment in &problem.attachments {
@@ -434,6 +438,11 @@ fn import_problem_into_bank_node(
                 statement_two_column.replace(&attachment.stored_name, &new_stored);
             answer = answer.replace(&attachment.stored_name, &new_stored);
             explanation = explanation.replace(&attachment.stored_name, &new_stored);
+            for block in &mut common_flow_blocks {
+                block.content = block.content.replace(&attachment.stored_name, &new_stored);
+                block.latex = block.latex.replace(&attachment.stored_name, &new_stored);
+                block.text = block.text.replace(&attachment.stored_name, &new_stored);
+            }
             for variant in &mut solution_variants {
                 variant.solution = variant
                     .solution
@@ -449,6 +458,11 @@ fn import_problem_into_bank_node(
                         .content
                         .replace(&attachment.stored_name, &new_stored);
                 }
+                for block in &mut variant.flow_blocks {
+                    block.content = block.content.replace(&attachment.stored_name, &new_stored);
+                    block.latex = block.latex.replace(&attachment.stored_name, &new_stored);
+                    block.text = block.text.replace(&attachment.stored_name, &new_stored);
+                }
             }
         }
         restored.push((attachment.file_name.clone(), new_stored));
@@ -456,8 +470,8 @@ fn import_problem_into_bank_node(
 
     let rank = super::problems::normalize_rank(problem.difficulty_rank.clone());
     conn.execute(
-        "INSERT INTO problems (unit_id, bank_node_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+        "INSERT INTO problems (unit_id, bank_node_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
         params![
             unit_id,
             bank_node_id,
@@ -466,6 +480,7 @@ fn import_problem_into_bank_node(
             statement_two_column,
             answer,
             explanation,
+            serde_json::to_string(&common_flow_blocks).map_err(err_str)?,
             serde_json::to_string(&solution_variants).map_err(err_str)?,
             problem.answer_completed as i64,
             problem.explanation_completed as i64,
@@ -672,6 +687,7 @@ pub fn apply_bank_import(
                     };
                     let mut answer = p.answer_latex.clone();
                     let mut explanation = p.explanation_latex.clone();
+                    let mut common_flow_blocks = p.common_flow_blocks.clone();
                     let mut solution_variants = p.solution_variants.clone();
                     let mut restored: Vec<(String, String)> = vec![]; // (file_name, new_stored)
                     for a in &p.attachments {
@@ -702,6 +718,11 @@ pub fn apply_bank_import(
                                 statement_two_column.replace(&a.stored_name, &new_stored);
                             answer = answer.replace(&a.stored_name, &new_stored);
                             explanation = explanation.replace(&a.stored_name, &new_stored);
+                            for block in &mut common_flow_blocks {
+                                block.content = block.content.replace(&a.stored_name, &new_stored);
+                                block.latex = block.latex.replace(&a.stored_name, &new_stored);
+                                block.text = block.text.replace(&a.stored_name, &new_stored);
+                            }
                             for variant in &mut solution_variants {
                                 variant.solution =
                                     variant.solution.replace(&a.stored_name, &new_stored);
@@ -716,6 +737,12 @@ pub fn apply_bank_import(
                                     section.content =
                                         section.content.replace(&a.stored_name, &new_stored);
                                 }
+                                for block in &mut variant.flow_blocks {
+                                    block.content =
+                                        block.content.replace(&a.stored_name, &new_stored);
+                                    block.latex = block.latex.replace(&a.stored_name, &new_stored);
+                                    block.text = block.text.replace(&a.stored_name, &new_stored);
+                                }
                             }
                         }
                         restored.push((a.file_name.clone(), new_stored));
@@ -723,8 +750,8 @@ pub fn apply_bank_import(
 
                     let rank = super::problems::normalize_rank(p.difficulty_rank.clone());
                     conn.execute(
-                        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                        "INSERT INTO problems (unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
                         params![
                             unit_id,
                             p.title,
@@ -732,6 +759,7 @@ pub fn apply_bank_import(
                             statement_two_column,
                             answer,
                             explanation,
+                            serde_json::to_string(&common_flow_blocks).map_err(err_str)?,
                             serde_json::to_string(&solution_variants).map_err(err_str)?,
                             p.answer_completed as i64,
                             p.explanation_completed as i64,

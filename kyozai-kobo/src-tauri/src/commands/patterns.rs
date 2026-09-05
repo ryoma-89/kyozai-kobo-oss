@@ -88,7 +88,12 @@ fn validate_proposal(proposal: &PatternProposal) -> Result<(), String> {
     }
     if !matches!(
         proposal.source_type.as_str(),
-        "solution_used" | "explanation_used" | "ai_inferred" | "image_import" | "ai_chat" | "manual"
+        "solution_used"
+            | "explanation_used"
+            | "ai_inferred"
+            | "image_import"
+            | "ai_chat"
+            | "manual"
     ) {
         return Err("定石候補の抽出根拠が不正です".into());
     }
@@ -135,8 +140,7 @@ fn validate_proposal(proposal: &PatternProposal) -> Result<(), String> {
     if !(1..=4).contains(&proposal.specificity_level) {
         return Err("定石候補の抽象度は1〜4で指定してください".into());
     }
-    if !proposal.reusability_score.is_finite()
-        || !(0.0..=1.0).contains(&proposal.reusability_score)
+    if !proposal.reusability_score.is_finite() || !(0.0..=1.0).contains(&proposal.reusability_score)
     {
         return Err("定石候補の再利用可能性は0〜1で指定してください".into());
     }
@@ -726,10 +730,7 @@ fn current_pattern_version(state: &AppState, pattern_id: i64) -> Result<i64, Str
 }
 
 /// 既存の定石を、AIが読み書きするProposalの形へ写す。
-pub fn pattern_edit_proposal(
-    state: &AppState,
-    pattern_id: i64,
-) -> Result<PatternProposal, String> {
+pub fn pattern_edit_proposal(state: &AppState, pattern_id: i64) -> Result<PatternProposal, String> {
     let pattern = get_pattern(state, pattern_id)?;
     Ok(PatternProposal {
         proposal_id: format!("pattern-{pattern_id}"),
@@ -1434,7 +1435,10 @@ pub fn apply_pattern_proposal(
                 payload.action.as_str(),
                 "merge_into_existing" | "add_example_to_existing"
             ) {
-                append_unique_text(&current.examples, &proposal_example_lines(&payload.proposal))
+                append_unique_text(
+                    &current.examples,
+                    &proposal_example_lines(&payload.proposal),
+                )
             } else {
                 current.examples.clone()
             };

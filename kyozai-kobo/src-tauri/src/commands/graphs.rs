@@ -2190,7 +2190,7 @@ mod tests {
         let mut planar: Value = serde_json::from_str(&valid_spatial_json()).unwrap();
         planar["objects"][0]["type"] = serde_json::json!("planarGraph3d");
         planar["objects"][0]["name"] = serde_json::json!("XY平面の領域");
-        planar["objects"][0]["geometry"] = serde_json::json!({"expression":"x^2+y^2<=4 ^ 1<x<3/2","xMin":-4,"xMax":4,"yMin":-4,"yMax":4,"resolution":64,"tMin":0,"tMax":6.283185307179586,"fill":true,"plane":"xy"});
+        planar["objects"][0]["geometry"] = serde_json::json!({"expression":"x^2+y^2<=4 ^ 1<x<3/2","xMin":-4,"xMax":4,"yMin":-4,"yMax":4,"resolution":64,"tMin":0,"tMax":std::f64::consts::TAU,"fill":true,"plane":"xy"});
         assert!(validated_graph_json(&planar.to_string()).is_ok());
         planar["objects"][0]["geometry"]["resolution"] = serde_json::json!(500);
         assert!(validated_graph_json(&planar.to_string()).is_err());

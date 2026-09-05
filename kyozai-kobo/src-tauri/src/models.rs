@@ -2,6 +2,40 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct SolutionPatternRef {
+    pub pattern_id: i64,
+    pub strategy_id: i64,
+    #[serde(default)]
+    pub pattern_version: Option<i64>,
+    #[serde(default)]
+    pub pattern_title: Option<String>,
+    #[serde(default)]
+    pub strategy_title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionStrategyEvaluation {
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default)]
+    pub high_school_appropriate: bool,
+    #[serde(default)]
+    pub exam_natural: bool,
+    #[serde(default)]
+    pub calculation_cost: String,
+    #[serde(default)]
+    pub clarity: String,
+    #[serde(default)]
+    pub educational_value: String,
+    #[serde(default)]
+    pub distinctness: String,
+    #[serde(default)]
+    pub recommendation_reason: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SolutionStrategySuitability {
     #[serde(default)]
     pub exam_answer: bool,
@@ -27,6 +61,12 @@ pub struct SolutionStrategy {
     pub suitability: Option<SolutionStrategySuitability>,
     #[serde(default)]
     pub note: Option<String>,
+    /// Pattern全体から今回の解法に使うCandidateを追跡する参照。
+    /// Candidateだけを表示するためには使わない。
+    #[serde(default)]
+    pub pattern_refs: Vec<SolutionPatternRef>,
+    #[serde(default)]
+    pub evaluation: Option<SolutionStrategyEvaluation>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -89,6 +129,31 @@ pub struct ExplanationSection {
     pub content: String,
 }
 
+/// 解法の発見・判断・見通しを教材化する可変長Block。
+/// block_typeごとに使うフィールドだけが設定される。Pattern本文はAIではなく
+/// canonical Patternから取得したsnapshotを正本として保持する。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SolutionFlowBlock {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub block_type: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub latex: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub pattern_id: Option<i64>,
+    #[serde(default)]
+    pub pattern_version: Option<i64>,
+    #[serde(default)]
+    pub snapshot: Option<PatternSnapshot>,
+    #[serde(default)]
+    pub used_strategy_ids: Vec<i64>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProblemSolutionVariant {
@@ -109,6 +174,8 @@ pub struct ProblemSolutionVariant {
     pub explanation_sections: Vec<ExplanationSection>,
     #[serde(default)]
     pub explanation_outdated: bool,
+    #[serde(default)]
+    pub flow_blocks: Vec<SolutionFlowBlock>,
 }
 
 #[derive(Serialize)]
@@ -206,8 +273,10 @@ pub struct ProblemFull {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
-    /// Strategy -> Solution -> Explanation を保持する拡張データ。
-    /// 従来の answer_latex / explanation_latex は主解法と別解を連結した互換出力として残す。
+    /// 解法分岐前の共通する着眼・Pattern引用。
+    pub common_flow_blocks: Vec<SolutionFlowBlock>,
+    /// Strategy -> Flow -> Exam Answer を保持する拡張データ。
+    /// 従来の answer_latex / explanation_latex は答案とFlowを連結した互換出力として残す。
     pub solution_variants: Vec<ProblemSolutionVariant>,
     pub answer_completed: bool,
     pub explanation_completed: bool,
@@ -236,6 +305,8 @@ pub struct ProblemUpdate {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    #[serde(default)]
+    pub common_flow_blocks: Vec<SolutionFlowBlock>,
     #[serde(default)]
     pub solution_variants: Vec<ProblemSolutionVariant>,
     #[serde(default)]
@@ -268,6 +339,7 @@ pub struct VersionFull {
     pub statement_latex_two_column: String,
     pub answer_latex: String,
     pub explanation_latex: String,
+    pub common_flow_blocks: Vec<SolutionFlowBlock>,
     pub solution_variants: Vec<ProblemSolutionVariant>,
     pub answer_completed: bool,
     pub explanation_completed: bool,

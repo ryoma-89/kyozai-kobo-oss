@@ -427,17 +427,19 @@ pub fn render_bodies(items: &[ProjectItem], settings: &ProjectSettings) -> Bodie
                 let mut ans_core_plain = String::from("\\noindent\\textbf{【解答】}\\par\n");
                 ans_core_plain.push_str(&item.snap_answer);
                 ans_core_plain.push('\n');
-                let mut ans_core_inline = ans_core_plain.clone();
+                let mut ans_core_inline = String::new();
                 if has_expl {
-                    ans_core_inline
-                        .push_str("\\par\\vspace{0.5em}\n\\noindent\\textbf{【解説】}\\par\n");
+                    // 教材の基本順序は「考え方 → 試験答案」。旧explanationも
+                    // legacy flowとして同じ位置へ出し、内容自体は失わない。
+                    ans_core_inline.push_str("\\noindent\\textbf{【考え方】}\\par\n");
                     ans_core_inline.push_str(&item.snap_explanation);
-                    ans_core_inline.push('\n');
+                    ans_core_inline.push_str("\n\\par\\vspace{0.75em}\n");
                     explanation.push_str(&head);
-                    explanation.push_str("\\noindent\\textbf{【解説】}\\par\n");
+                    explanation.push_str("\\noindent\\textbf{【考え方】}\\par\n");
                     explanation.push_str(&item.snap_explanation);
                     explanation.push_str("\n\\par\\medskip\n\n");
                 }
+                ans_core_inline.push_str(&ans_core_plain);
 
                 let wrap = |core: &str| {
                     if answer_only_cols {
@@ -1603,14 +1605,14 @@ pub fn build_problem_preview_doc(
     }
     doc.push_str(statement);
     doc.push('\n');
+    if !explanation.trim().is_empty() {
+        doc.push_str("\\par\\vspace{0.8em}\n\\noindent\\textbf{【考え方】}\\par\n");
+        doc.push_str(explanation);
+        doc.push('\n');
+    }
     if !answer.trim().is_empty() {
         doc.push_str("\\par\\vspace{0.8em}\n\\noindent\\textbf{【解答】}\\par\n");
         doc.push_str(answer);
-        doc.push('\n');
-    }
-    if !explanation.trim().is_empty() {
-        doc.push_str("\\par\\vspace{0.8em}\n\\noindent\\textbf{【解説】}\\par\n");
-        doc.push_str(explanation);
         doc.push('\n');
     }
     if layout_mode == "two_column" {

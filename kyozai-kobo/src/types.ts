@@ -50,6 +50,26 @@ export type BankNodeDeleteStrategy = "delete_all" | "move_to_parent";
 
 export type Difficulty = "基礎" | "標準" | "発展";
 
+export interface SolutionPatternRef {
+  patternId: number;
+  strategyId: number;
+  /** Rust側でcanonical Patternから補完する表示用情報。 */
+  patternVersion?: number;
+  patternTitle?: string;
+  strategyTitle?: string;
+}
+
+export interface SolutionStrategyEvaluation {
+  complete: boolean;
+  highSchoolAppropriate: boolean;
+  examNatural: boolean;
+  calculationCost: "low" | "medium" | "high";
+  clarity: "low" | "medium" | "high";
+  educationalValue: "low" | "medium" | "high";
+  distinctness: "low" | "medium" | "high";
+  recommendationReason: string;
+}
+
 export interface SolutionStrategy {
   id: string;
   title: string;
@@ -63,6 +83,9 @@ export interface SolutionStrategy {
     alternativeSolution?: boolean;
   };
   note?: string;
+  /** 解法の起点になったPattern Candidate。表示内容の抽出には使わない。 */
+  patternRefs?: SolutionPatternRef[];
+  evaluation?: SolutionStrategyEvaluation;
 }
 
 export interface ProblemAnalysis {
@@ -103,6 +126,37 @@ export interface ExplanationSection {
   content: string;
 }
 
+export type SolutionFlowBlock =
+  | {
+      id: string;
+      type: "text";
+      content: string;
+    }
+  | {
+      id: string;
+      type: "pattern";
+      patternId: number;
+      patternVersion: number;
+      snapshot: PatternSnapshot;
+      /** 全Candidateを表示したまま、カード後の説明と解法の対応を追跡するために使う。 */
+      usedStrategyIds: number[];
+    }
+  | {
+      id: string;
+      type: "formula";
+      latex: string;
+    }
+  | {
+      id: string;
+      type: "heading";
+      text: string;
+    }
+  | {
+      id: string;
+      type: "caution";
+      content: string;
+    };
+
 export interface ProblemSolutionVariant {
   id: string;
   strategy: SolutionStrategy;
@@ -114,6 +168,8 @@ export interface ProblemSolutionVariant {
   explanation?: string;
   explanationSections?: ExplanationSection[];
   explanationOutdated?: boolean;
+  /** 答案を逐語的に説明せず、解法の発見・判断・見通しを表す可変長Block列。 */
+  flowBlocks?: SolutionFlowBlock[];
 }
 
 export interface StrategyValidationResult {
@@ -160,6 +216,7 @@ export interface ProblemFull {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  common_flow_blocks: SolutionFlowBlock[];
   solution_variants: ProblemSolutionVariant[];
   answer_completed: boolean;
   explanation_completed: boolean;
@@ -189,6 +246,7 @@ export interface VersionFull {
   statement_latex_two_column: string;
   answer_latex: string;
   explanation_latex: string;
+  common_flow_blocks: SolutionFlowBlock[];
   solution_variants: ProblemSolutionVariant[];
   answer_completed: boolean;
   explanation_completed: boolean;
@@ -510,6 +568,8 @@ export interface PatternDeleteImpact {
 }
 
 export interface PatternSnapshot {
+  /** Snapshot取得時のcanonical Pattern版。旧snapshotは0として扱う。 */
+  version: number;
   uuid: string;
   title: string;
   summary: string;
@@ -1069,11 +1129,21 @@ export interface AiStructuredResult {
 
 export interface AiSolutionWorkflowResult {
   schemaVersion: 1;
-  kind: "solution-strategies" | "strategy-validation" | "solution-plan" | "solution-verification";
+  kind:
+    | "solution-strategies"
+    | "strategy-validation"
+    | "solution-plan"
+    | "solution-common-flow"
+    | "solution-flow"
+    | "solution-flow-from-answer"
+    | "solution-verification";
   analysis?: ProblemAnalysis;
   strategies?: SolutionStrategy[];
   validation?: StrategyValidationResult;
   plan?: SolutionPlan;
+  flow?: SolutionFlowBlock[];
+  commonFlow?: SolutionFlowBlock[];
+  variantFlows?: Array<{ variantId: string; flow: SolutionFlowBlock[] }>;
   verification?: VerificationResult;
   /** Generic AI-job views use these optional compatibility fields. */
   plainText?: string;

@@ -12,5 +12,6 @@ pub mod problems;
 pub mod projects;
 pub mod sample;
 pub mod settings;
+pub mod solution_flow;
 pub mod templates;
 pub mod tree;

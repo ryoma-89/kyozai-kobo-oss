@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS subjects (
@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS problems (
     statement_latex_two_column TEXT NOT NULL DEFAULT '',
     answer_latex TEXT NOT NULL DEFAULT '',
     explanation_latex TEXT NOT NULL DEFAULT '',
+    common_flow_blocks_json TEXT NOT NULL DEFAULT '[]',
     solution_variants_json TEXT NOT NULL DEFAULT '[]',
     answer_completed INTEGER NOT NULL DEFAULT 0,
     explanation_completed INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     statement_latex_two_column TEXT NOT NULL DEFAULT '',
     answer_latex TEXT NOT NULL DEFAULT '',
     explanation_latex TEXT NOT NULL DEFAULT '',
+    common_flow_blocks_json TEXT NOT NULL DEFAULT '[]',
     solution_variants_json TEXT NOT NULL DEFAULT '[]',
     answer_completed INTEGER NOT NULL DEFAULT 0,
     explanation_completed INTEGER NOT NULL DEFAULT 0,
@@ -646,6 +648,20 @@ END;
         "problem_versions",
         "solution_variants_json",
         "solution_variants_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    // 解法分岐前の共通Flow。VariantごとのFlowは後方互換な
+    // solution_variants_json内に追加し、別の平行システムを作らない。
+    ensure_column(
+        conn,
+        "problems",
+        "common_flow_blocks_json",
+        "common_flow_blocks_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        conn,
+        "problem_versions",
+        "common_flow_blocks_json",
+        "common_flow_blocks_json TEXT NOT NULL DEFAULT '[]'",
     )?;
     // 問題文は一段組版と二段組版を別々に保持する。既存問題は従来版を
     // 両方へ引き継ぎ、AIまたは手編集で二段組版だけを後から最適化できる。
@@ -1287,6 +1303,59 @@ pub fn backup_db(data_dir: &PathBuf) {
 mod tests {
     use super::*;
     use tempdir::TempDir;
+
+    #[test]
+    fn v16_adds_flow_columns_without_changing_legacy_problem_data() {
+        let dir = TempDir::new("kyozai-v16-flow-migration").unwrap();
+        let path = dir.path().join("kyozai-kobo.db");
+        let old = Connection::open(&path).unwrap();
+        let old_schema = SCHEMA.replace(
+            "    common_flow_blocks_json TEXT NOT NULL DEFAULT '[]',\n",
+            "",
+        );
+        old.execute_batch(&old_schema).unwrap();
+        old.execute(
+            "INSERT INTO subjects(id,name,sort_order) VALUES(1,'数学',0)",
+            [],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO fields(id,subject_id,name,sort_order) VALUES(1,1,'数学III',0)",
+            [],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO units(id,field_id,name,sort_order) VALUES(1,1,'微分',0)",
+            [],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO problems(id,unit_id,title,answer_latex,explanation_latex,created_at,updated_at)
+             VALUES(1,1,'既存問題','既存答案','既存解説','2026-01-01','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        old.execute_batch("PRAGMA user_version=15;").unwrap();
+        drop(old);
+
+        let migrated = open_db(dir.path()).unwrap();
+        let row: (String, String, String) = migrated
+            .query_row(
+                "SELECT answer_latex,explanation_latex,common_flow_blocks_json FROM problems WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("既存答案".into(), "既存解説".into(), "[]".into()));
+        let version_flow_column: i64 = migrated
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('problem_versions') WHERE name='common_flow_blocks_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version_flow_column, 1);
+    }
 
     #[test]
     fn v14_migrates_part_membership_without_changing_part_id() {

@@ -181,7 +181,7 @@ fn migration_adds_pattern_schema_without_losing_existing_assets() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        16
     );
     assert_eq!(
         conn.query_row("SELECT title FROM problems WHERE id=91", [], |row| row
@@ -604,8 +604,7 @@ fn search_concepts_reach_a_more_general_existing_pattern() {
 
     // titleは既存定石と重ならないが、searchConceptsで到達できる想定の候補。
     let mut candidate = proposal("内分表示から通過範囲を求める", "solution_used");
-    candidate.summary =
-        "内分表示された点の動く範囲を、媒介変数の条件へ言い換えて求める。".into();
+    candidate.summary = "内分表示された点の動く範囲を、媒介変数の条件へ言い換えて求める。".into();
     candidate.situation = "内分表示された点が動く範囲を求めたい。".into();
     candidate.search_concepts = vec!["媒介変数".into(), "存在条件".into(), "文字消去".into()];
     candidate.tags = vec!["媒介変数".into()];
@@ -661,7 +660,9 @@ fn example_action_appends_raw_technique_and_saves_version() {
     )
     .unwrap();
     let before = patterns::get_pattern(&state, general).unwrap();
-    let versions_before = patterns::list_pattern_versions(&state, general).unwrap().len();
+    let versions_before = patterns::list_pattern_versions(&state, general)
+        .unwrap()
+        .len();
 
     let mut candidate = proposal("内分表示から通過範囲を求める", "solution_used");
     candidate.raw_technique = "線分上の点を内分表示し、媒介変数を消去する。".into();
@@ -749,8 +750,7 @@ fn child_pattern_action_creates_specialization_relations() {
     let parent_view = patterns::get_pattern(&state, parent).unwrap();
     assert!(
         parent_view.related_patterns.iter().any(|relation| {
-            relation.pattern_id == applied.pattern_id
-                && relation.relation_type == "specialization"
+            relation.pattern_id == applied.pattern_id && relation.relation_type == "specialization"
         }),
         "上位から下位へはspecialization"
     );
@@ -910,9 +910,12 @@ fn generalized_title_still_matches_the_seeded_parent_pattern() {
 #[test]
 fn unrelated_pattern_is_not_matched_by_a_single_shared_word() {
     let (_dir, state) = make_state();
-    let unrelated =
-        patterns::create_pattern(&state, "余事象を考えて確率を求める".into(), "strategy".into())
-            .unwrap();
+    let unrelated = patterns::create_pattern(
+        &state,
+        "余事象を考えて確率を求める".into(),
+        "strategy".into(),
+    )
+    .unwrap();
     let mut update = pattern_update(unrelated, 1, "余事象を考えて確率を求める");
     update.summary = "求めにくい確率は、余事象の確率を1から引いて求める。".into();
     update.situation = "少なくとも1つという条件の確率を求めたいとき。".into();
@@ -1054,7 +1057,7 @@ fn migration_from_v14_adds_pattern_item_columns_without_losing_materials() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        16
     );
     assert_eq!(
         conn.query_row("SELECT content FROM project_items WHERE id=72", [], |row| {
@@ -1172,7 +1175,8 @@ fn problem_based_source_types_still_require_their_problem() {
 #[test]
 fn ai_edit_applies_only_after_approval_and_keeps_history() {
     let (_dir, state) = make_state();
-    let id = patterns::create_pattern(&state, "接線による積分評価".into(), "strategy".into()).unwrap();
+    let id =
+        patterns::create_pattern(&state, "接線による積分評価".into(), "strategy".into()).unwrap();
     patterns::update_pattern(&state, pattern_update(id, 1, "接線による積分評価")).unwrap();
     let before = patterns::get_pattern(&state, id).unwrap();
     let versions_before = patterns::list_pattern_versions(&state, id).unwrap().len();
@@ -1219,11 +1223,16 @@ fn ai_edit_applies_only_after_approval_and_keeps_history() {
 #[test]
 fn ai_edit_reports_conflict_when_the_pattern_moved_on() {
     let (_dir, state) = make_state();
-    let id = patterns::create_pattern(&state, "はさみうちの原理".into(), "strategy".into()).unwrap();
+    let id =
+        patterns::create_pattern(&state, "はさみうちの原理".into(), "strategy".into()).unwrap();
     patterns::update_pattern(&state, pattern_update(id, 1, "はさみうちの原理")).unwrap();
     let stale = patterns::get_pattern(&state, id).unwrap().version;
     // 別の場所で先に更新された状況を作る。
-    patterns::update_pattern(&state, pattern_update(id, stale, "はさみうちの原理（更新）")).unwrap();
+    patterns::update_pattern(
+        &state,
+        pattern_update(id, stale, "はさみうちの原理（更新）"),
+    )
+    .unwrap();
 
     let mut edited = patterns::pattern_edit_proposal(&state, id).unwrap();
     edited.title = "AIが書き直したタイトル".into();
@@ -1247,7 +1256,11 @@ fn child_pattern_is_not_recommended_against_an_unrelated_match() {
         "strategy".into(),
     )
     .unwrap();
-    let mut update = pattern_update(unrelated, 1, "小区間で接線と弦を使い長方形近似の誤差をはさむ");
+    let mut update = pattern_update(
+        unrelated,
+        1,
+        "小区間で接線と弦を使い長方形近似の誤差をはさむ",
+    );
     update.summary = "区分求積の誤差を接線と弦ではさんで評価する。".into();
     update.tags = vec!["接線".into()];
     update.facets = PatternFacets {

@@ -682,7 +682,7 @@ C(x,y)\in R
 \text{「点 }A(a,0),B(0,b)\text{ が条件を満たし，}\\
 \text{実数 }a,b\text{ が存在する」}
 \end{gathered}\\
-&\Longleftrightarrow \frac{x^2}{16}+\frac{y^2}{4}=1
+&\Longleftrightarrow \dfrac{x^2}{16}+\dfrac{y^2}{4}=1
 \end{aligned}"#;
     assert!(scan_solution_layout(wide_equivalence, "two_column")
         .iter()
@@ -698,7 +698,7 @@ C(x,y)\in R
 \text{「点 }A(a,0),B(0,b)\text{ が条件を満たし，}\\
 \text{実数 }a,b\text{ が存在する」}
 \end{gathered}\\
-&\Longleftrightarrow \frac{x^2}{16}+\frac{y^2}{4}=1
+&\Longleftrightarrow \dfrac{x^2}{16}+\dfrac{y^2}{4}=1
 \end{aligned}"#;
     assert!(!scan_solution_layout(wrapped_equivalence, "two_column")
         .iter()
@@ -1448,7 +1448,7 @@ p^2+q^2=5
     assert!(!snapshot.contains("逆に"));
     assert!(!snapshot.contains("以上を一続きの同値変形でまとめると"));
     assert!(!snapshot.contains("以上の準備のもとで"));
-    assert!(snapshot.contains("|x|&>\\frac32"));
+    assert!(snapshot.contains("|x|&>\\dfrac{3}{2}"));
     assert!(!snapshot.contains("|y|&>"));
     assert!(!snapshot.contains("すなわち"));
     assert!(snapshot.contains("\\text{「直線 }y=3x+k\\text{ が双曲線 }"));
@@ -1508,7 +1508,7 @@ p^2+q^2=5
     );
     assert!(compound_snapshot.contains("\\text{を満たす実数 }\\theta,t\\text{ が存在する」}"));
     assert!(compound_snapshot
-        .contains("0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"));
+        .contains("0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\dfrac{x}{8\\cos\\theta}\\leqq1"));
     assert!(compound_snapshot.contains("&\\Longleftrightarrow\n0\\leqq\\theta\\leqq\\alpha"));
     assert!(compound_snapshot.matches("X(x,y)\\in D").count() >= 3);
     assert_eq!(
@@ -1531,8 +1531,10 @@ p^2+q^2=5
     ));
     assert!(compound_snapshot.contains("$0<x<8$を固定し"));
     assert!(compound_snapshot.contains("$0\\leqq\\theta\\leqq\\alpha<\\dfrac{\\pi}{2}$では"));
-    assert!(compound_snapshot.contains("\\cos^3\\beta=\\frac{x}{8}"));
-    assert!(compound_snapshot.contains("\\frac{x}{8}<\\left(\\frac{x}{8}\\right)^{1/3}<1"));
+    assert!(compound_snapshot.contains("\\cos^3\\beta=\\dfrac{x}{8}"));
+    assert!(
+        compound_snapshot.contains("\\dfrac{x}{8}<\\left(\\dfrac{x}{8}\\right)^{\\frac{1}{3}}<1")
+    );
     assert!(compound_snapshot.contains("0<\\beta<\\alpha"));
     assert!(compound_snapshot.contains("f_x'(\\theta)&>0"));
     assert!(compound_snapshot.contains("f_x'(\\beta)&=0"));
@@ -1564,7 +1566,7 @@ p^2+q^2=5
         "0&\\leqq y\\leqq\n\\left\\{1-\\left(\\dfrac{x}{8}\\right)^{2/3}\\right\\}^{3/2}"
     ));
     assert!(compound_snapshot.contains("V\n=\\pi\\int_0^8"));
-    assert!(compound_snapshot.contains("\\frac{128\\pi}{105}"));
+    assert!(compound_snapshot.contains("\\dfrac{128\\pi}{105}"));
     assert!(compound_snapshot.contains("$x=0$では$0\\leqq y\\leqq1$"));
     assert!(compound_snapshot.contains("$x=8$では$t=1$かつ$\\theta=0$"));
     assert!(compound_snapshot.contains("\\Longleftrightarrow"));
@@ -1746,8 +1748,8 @@ y&=s(1-t)
 \left\{
 \begin{aligned}
 D&>0\\
-x&=-\frac{3k}{8}\\
-y&=-\frac{k}{8}
+x&=-\dfrac{3k}{8}\\
+y&=-\dfrac{k}{8}
 \end{aligned}
 \right.\\
 \text{を満たす実数 }k\text{ が存在する」}
@@ -1791,8 +1793,8 @@ y&=-\frac{k}{8}
 \left\{
 \begin{aligned}
 D&>0\\
-x&=-\frac{3k}{8}\\
-y&=-\frac{k}{8}
+x&=-\dfrac{3k}{8}\\
+y&=-\dfrac{k}{8}
 \end{aligned}
 \right.\\
 \text{「これらを満たす実数 }k\text{ が存在する」}
@@ -1893,7 +1895,7 @@ y&=-\frac{k}{8}
 \begin{aligned}
 M(x,y)\in R
 &\Longleftrightarrow
-|k|>4,\quad x=-\frac{3k}{8},\quad y=-\frac{k}{8}
+|k|>4,\quad x=-\dfrac{3k}{8},\quad y=-\dfrac{k}{8}
 \text{を満たす実数 }k\text{ が存在する}
 \end{aligned}
 \]
@@ -1949,20 +1951,20 @@ M(x,y)\in R
 \left\{
 \begin{aligned}
 |k|&>4\\
-x&=-\frac{3k}{8}\\
-y&=-\frac{k}{8}
+x&=-\dfrac{3k}{8}\\
+y&=-\dfrac{k}{8}
 \end{aligned}
 \right.\\
 &\Longleftrightarrow
 \left\{
 \begin{aligned}
 x&=3y\\
-|x|&>\frac32
+|x|&>\dfrac{3}{2}
 \end{aligned}
 \right.
 \end{aligned}
 \]
-したがって、求める軌跡は直線$x=3y$上で$|x|>\frac32$を満たす部分である。"#;
+したがって、求める軌跡は直線$x=3y$上で$|x|>\dfrac{3}{2}$を満たす部分である。"#;
 
     let aligned = r#"\textbf{【着眼点】}\par
 参照する解答では、判別式と解と係数の関係で中点を$k$によって表し、その存在条件を消去している。
@@ -1973,9 +1975,9 @@ x&=3y\\
 M(x,y)\in R
 &\Longleftrightarrow \text{問題文の条件を満たす実数 }k\text{ が存在する}\\
 &\Longleftrightarrow
-\left\{\begin{aligned}|k|&>4\\x&=-\frac{3k}{8}\\y&=-\frac{k}{8}\end{aligned}\right.\\
+\left\{\begin{aligned}|k|&>4\\x&=-\dfrac{3k}{8}\\y&=-\dfrac{k}{8}\end{aligned}\right.\\
 &\Longleftrightarrow
-\left\{\begin{aligned}x&=3y\\|x|&>\frac32\end{aligned}\right.
+\left\{\begin{aligned}x&=3y\\|x|&>\dfrac{3}{2}\end{aligned}\right.
 \end{aligned}
 \]
 第1の同値変形では交点が異なる2点となる条件と中点座標をまとめ、第2の同値変形で$k$を消去している。"#;
@@ -1991,10 +1993,10 @@ M(x,y)\in R
     );
 
     let drifted = r#"\textbf{【定石】}\par
-通常の一方向の計算で$x=3y$と$|x|>\frac32$を得る。
+通常の一方向の計算で$x=3y$と$|x|>\dfrac{3}{2}$を得る。
 \textbf{【逆向きの確認】}\par
 逆に、この条件を満たす点をとり、十分性を確認する。
-以上より、$M(x,y)\in R\Longleftrightarrow x=3y,\ |x|>\frac32$である。
+以上より、$M(x,y)\in R\Longleftrightarrow x=3y,\ |x|>\dfrac{3}{2}$である。
 端点は判別式が0となるので軌跡に含まれない。"#;
     let warnings = scan_explanation_reference_alignment(input, drifted);
     for code in [
@@ -2254,7 +2256,7 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     assert!(TRAJECTORY_REGION_INSTRUCTIONS
         .contains("増減表の後は同じ条件を値域へ変形するために1回だけ再掲"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS
-        .contains("0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\frac{x}{8\\cos\\theta}\\leqq1"));
+        .contains("0\\leqq t\\leqq1\n&\\Longleftrightarrow\n0<\\dfrac{x}{8\\cos\\theta}\\leqq1"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("この範囲は十分でもある"));
     assert!(TRAJECTORY_REGION_INSTRUCTIONS.contains("線分上の条件から得られる正しい定義域"));
     assert!(
@@ -2311,7 +2313,7 @@ fn ai_problem_bank_output_supports_multiple_problems_and_rejects_bad_sources() {
     );
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("${}_5\\mathrm{C}_2$"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("{}_n\\mathrm{C}_r="));
-    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\frac{n!}{r!(n-r)!}"));
+    assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("\\dfrac{n!}{r!(n-r)!}"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS
         .contains("\\arcsin、\\arccos、\\arctan等のarcを付けた関数名は高校範囲外"));
     assert!(SOLUTION_FIXED_INSTRUCTIONS.contains("必ず$x=\\sin y$と書き直してから"));
@@ -2557,7 +2559,8 @@ fn problem_preview_document_reflects_single_and_two_column_layouts() {
     let single = build_problem_preview_doc(template, "問題文", "解答", "解説", "single_column");
     assert!(single.contains("問題文"));
     assert!(single.contains("【解答】"));
-    assert!(single.contains("【解説】"));
+    assert!(single.contains("【考え方】"));
+    assert!(single.find("【考え方】") < single.find("【解答】"));
     assert!(!single.contains("\\begin{multicols}{2}"));
 
     let two_column = build_problem_preview_doc(template, "問題文", "解答", "解説", "two_column");
@@ -2759,7 +2762,7 @@ fn spatial_ai_output_validation_rejects_commands_unknown_fields_and_bad_coordina
 }
 
 /// スキーマを変更したらここだけ更新する（移行テストが全部この定数を見る）。
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 
 #[test]
 fn schema_migration_sets_user_version() {
@@ -3142,7 +3145,7 @@ async fn authenticated_graph_crud_validates_json_and_detects_conflicts() {
         "expressions": [{
             "id":"e1","input":"y=x^2","name":"","visible":true,"color":"#2563eb",
             "lineWidth":2,"lineStyle":"solid","fillColor":"#2563eb","fillOpacity":0.25,
-            "fillStyle":"solid","tmin":0,"tmax":6.28
+            "fillStyle":"solid","tmin":0,"tmax":std::f64::consts::TAU
         }],
         "points": [],
         "labels": [],

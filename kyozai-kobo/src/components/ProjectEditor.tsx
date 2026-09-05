@@ -95,7 +95,7 @@ function buildProjectReviewSource(project: ProjectFull): string {
     `説明: ${project.description || "（なし）"}`,
     `問題数: ${project.items.filter((item) => item.item_type === "problem").length}`,
     `全項目数: ${project.items.length}`,
-    `解説を出力: ${project.settings.include_explanation ? "はい" : "いいえ"}`,
+    `考え方を出力: ${project.settings.include_explanation ? "はい" : "いいえ"}`,
     `問題冊子レイアウト: ${project.settings.problem_two_column ? "二段組" : "一段組"}`,
     `解答冊子レイアウト: ${project.settings.two_column_mode === "none" ? "一段組" : "二段組"}`,
     "",
@@ -113,10 +113,10 @@ function buildProjectReviewSource(project: ProjectFull): string {
         item.snap_statement || "（空欄）",
         "【問題文（二段組用）】",
         item.snap_statement_two_column || item.snap_statement || "（空欄）",
+        "【考え方】",
+        item.snap_explanation || "（空欄）",
         "【解答】",
         item.snap_answer || "（空欄）",
-        "【解説】",
-        item.snap_explanation || "（空欄）",
       );
       return;
     }
@@ -1431,7 +1431,7 @@ function SettingsModal({
           {checkRow("章ごとに問題番号をリセット（番号付き章では 2-1 形式）", "reset_numbering_per_chapter")}
           {checkRow("解答冊子に問題文を含める", "include_statement_in_answers")}
           {checkRow("解答冊子の問題文を枠で囲む", "box_statement_in_answers")}
-          {checkRow("解答冊子に解説を含める", "include_explanation")}
+          {checkRow("解答冊子に考え方を含める", "include_explanation")}
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>

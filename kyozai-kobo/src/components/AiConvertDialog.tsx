@@ -4,6 +4,7 @@ import {
   aiCancelJob,
   aiCreateJob,
   aiGetJob,
+  aiInsertIntoTargetProblem,
   aiMarkInserted,
   aiRecompileJob,
   aiRetryJob,
@@ -16,8 +17,14 @@ import {
 } from "../api";
 import { useApp, type ProjectReviewFix } from "../store";
 import { buildFileUrl, isTauri } from "../transport";
-import type { AiExtractedProblem, AiJob } from "../types";
+import type {
+  AiExtractedProblem,
+  AiJob,
+  AiSolutionWorkflowResult,
+  SolutionFlowBlock,
+} from "../types";
 import { LatexEditor } from "./LatexEditor";
+import { LatexPreview } from "./LatexPreview";
 import { BankNodePicker } from "./ProblemList";
 import { Icon } from "./Icon";
 
@@ -205,6 +212,131 @@ function extractedProblemsOf(job?: AiJob | null): AiExtractedProblem[] {
       problem.statementLatexTwoColumn || problem.statementLatex,
     sourceImageIndexes: [...problem.sourceImageIndexes],
   }));
+}
+
+function solutionFlowResultOf(job?: AiJob | null): AiSolutionWorkflowResult | null {
+  const result = job?.structuredResult;
+  if (!result || (result as { kind?: unknown }).kind !== "solution-flow-from-answer") {
+    return null;
+  }
+  return result as AiSolutionWorkflowResult;
+}
+
+function formulaPreviewSource(latex: string): string {
+  const trimmed = latex.trim();
+  if (!trimmed || trimmed.startsWith("\\[") || trimmed.startsWith("$$")) return trimmed;
+  return `\\[${trimmed}\\]`;
+}
+
+/** 旧ジョブも教材向けの表現で確認できるよう、生成工程を示す語だけを補正する。 */
+function learnerFacingFlowText(source: string): string {
+  const replacements: Array<[string, string]> = [
+    ["既存答案の結論に至る", "求める結論が得られる"],
+    ["保存済み答案の結論に至る", "求める結論が得られる"],
+    ["既存の答案の結論に至る", "求める結論が得られる"],
+    ["保存済みの答案の結論に至る", "求める結論が得られる"],
+    ["既存答案の置換", "この置換"],
+    ["保存済み答案の置換", "この置換"],
+    ["既存の答案の置換", "この置換"],
+    ["保存済みの答案の置換", "この置換"],
+    ["保存済みの既存答案", "この解法"],
+    ["保存済みの答案", "この解法"],
+    ["保存済み答案", "この解法"],
+    ["既存の答案", "この解法"],
+    ["既存答案", "この解法"],
+    ["既存の解答", "この解法"],
+    ["保存済みの解答", "この解法"],
+    ["参照答案", "この解法"],
+    ["参照解答", "この解法"],
+    ["元の答案", "この解法"],
+    ["元の解答", "この解法"],
+  ];
+  return replacements.reduce(
+    (value, [from, to]) => value.split(from).join(to),
+    source,
+  );
+}
+
+function SolutionFlowBlockPreview({ block }: { block: SolutionFlowBlock }) {
+  if (block.type === "pattern") {
+    return (
+      <article
+        className="rounded border px-3 py-2"
+        style={{ borderColor: "var(--accent)", background: "var(--accent-dim)" }}
+      >
+        <div className="mb-1 flex items-center gap-2">
+          <span className="badge badge-muted">定石</span>
+          <span className="text-[10px]" style={{ color: "var(--muted)" }}>
+            保存版 v{block.patternVersion}
+          </span>
+        </div>
+        <div className="font-semibold">
+          <LatexPreview source={block.snapshot.title} />
+        </div>
+        {block.snapshot.strategies.length > 0 && (
+          <div className="mt-2 space-y-1.5">
+            {block.snapshot.strategies.map((strategy, index) => (
+              <div
+                key={strategy.id ?? `${strategy.title}-${index}`}
+                className="rounded border px-2 py-1.5 text-xs"
+                style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+              >
+                <div className="font-semibold">
+                  {block.snapshot.strategies.length > 1 ? `${index + 1}. ` : ""}
+                  {strategy.title}
+                </div>
+                {strategy.description.trim() && (
+                  <div className="mt-1">
+                    <LatexPreview source={strategy.description} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </article>
+    );
+  }
+
+  if (block.type === "heading") {
+    return (
+      <div className="border-b pb-1 text-sm font-bold" style={{ borderColor: "var(--border)" }}>
+        <LatexPreview source={block.text} />
+      </div>
+    );
+  }
+
+  const source = block.type === "formula"
+    ? formulaPreviewSource(block.latex)
+    : learnerFacingFlowText(block.content);
+  if (!source.trim()) return null;
+  return (
+    <div
+      className={`rounded px-2 py-1.5 text-sm ${block.type === "caution" ? "border-l-4" : ""}`}
+      style={
+        block.type === "caution"
+          ? { borderColor: "var(--warn)", background: "var(--warn-dim)" }
+          : { background: "var(--panel-2)" }
+      }
+    >
+      {block.type === "caution" && (
+        <div className="mb-1 text-xs font-semibold" style={{ color: "var(--warn)" }}>
+          注意
+        </div>
+      )}
+      <LatexPreview source={source} />
+    </div>
+  );
+}
+
+function SolutionFlowBlockList({ blocks }: { blocks: SolutionFlowBlock[] }) {
+  return (
+    <div className="space-y-2">
+      {blocks.map((block) => (
+        <SolutionFlowBlockPreview key={block.id} block={block} />
+      ))}
+    </div>
+  );
 }
 
 type ProjectReviewFixTarget = Omit<ProjectReviewFix, "projectId" | "action">;
@@ -888,6 +1020,34 @@ export function AiConvertDialog({
     }
   };
 
+  const applyGeneratedSolutionFlow = async () => {
+    if (!job || job.status !== "completed" || job.insertedAt) return;
+    if (!solutionFlowResultOf(job)) {
+      showToast("構造化された考え方を取得できませんでした", "error");
+      return;
+    }
+    const confirmedWarnings = await guardInsert();
+    if (!confirmedWarnings) return;
+    const target = job.targetEntityName.trim()
+      ? `問題「${job.targetEntityName.trim()}」`
+      : job.targetEntityId !== null
+        ? `問題 #${job.targetEntityId}`
+        : "生成元の問題";
+    if (!(await confirm(
+      `${target}へ、表示中の考え方を反映しますか？\n既存の解答は変更しません。`,
+    ))) return;
+    setBusy(true);
+    try {
+      await aiInsertIntoTargetProblem(job.id, true);
+      showToast(`${target}へ考え方を反映しました`);
+      onClose();
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /** ジョブ入力画像のURL（履歴から開いた場合用） */
   const jobImageUrl = (name: string): string | null => {
     if (!job) return null;
@@ -929,6 +1089,7 @@ export function AiConvertDialog({
   const isProjectReviewMode = mode === "project_review";
   const isContentReviewMode = mode === "content_review";
   const isReviewMode = isProjectReviewMode || isContentReviewMode;
+  const isSolutionFlowFromAnswerMode = mode === "solution_flow_from_answer";
 
   // ---- 入力ステップ ----
   const renderInput = () => (
@@ -1873,7 +2034,134 @@ export function AiConvertDialog({
     );
   };
 
+  const renderSolutionFlowReview = () => {
+    const result = solutionFlowResultOf(job);
+    const commonFlow = result?.commonFlow ?? [];
+    const variantFlows = result?.variantFlows ?? [];
+    const sourceVariants = Array.isArray(job?.options.solutionVariantsSource)
+      ? job.options.solutionVariantsSource
+      : [];
+    const blockCount = commonFlow.length
+      + variantFlows.reduce((total, variant) => total + variant.flow.length, 0);
+    const roleOf = (variantId: string): "main" | "alternative" => {
+      const source = sourceVariants.find((value) => (
+        typeof value === "object"
+        && value !== null
+        && "variantId" in value
+        && value.variantId === variantId
+      ));
+      return source
+        && typeof source === "object"
+        && "role" in source
+        && source.role === "alternative"
+        ? "alternative"
+        : "main";
+    };
+    let alternativeIndex = 0;
+
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="badge badge-muted">考え方 {blockCount}ブロック</span>
+          <span className="badge badge-muted">解法 {variantFlows.length}件</span>
+          <span className="text-[11px]" style={{ color: "var(--muted)" }}>
+            定石は保存時点の内容を全候補表示しています
+          </span>
+          <span className="ml-auto text-[11px]" style={{ color: "var(--success)" }}>
+            既存の解答は変更しません
+          </span>
+        </div>
+
+        {job?.status === "failed" ? (
+          <section
+            className="rounded border p-3 text-sm whitespace-pre-wrap"
+            style={{
+              color: "var(--danger)",
+              borderColor: "rgba(241,106,117,0.45)",
+              background: "var(--danger-dim)",
+            }}
+          >
+            考え方の生成に失敗しました
+            {job.errorMessage ? `\n${job.errorMessage}` : ""}
+          </section>
+        ) : !result || blockCount === 0 ? (
+          <section
+            className="rounded border p-3 text-sm"
+            style={{ color: "var(--danger)", borderColor: "rgba(241,106,117,0.45)" }}
+          >
+            構造化された考え方を取得できませんでした。再生成してください。
+          </section>
+        ) : (
+          <div className="grid min-h-0 flex-1 grid-rows-2 gap-3 overflow-hidden lg:grid-cols-2 lg:grid-rows-1">
+            <section className="flex min-h-0 flex-col overflow-hidden">
+              <h3 className="section-label mb-1">生成元（問題・既存解答）</h3>
+              <div
+                className="min-h-0 flex-1 overflow-y-auto rounded border p-3"
+                style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+              >
+                <LatexPreview source={job?.inputText ?? ""} />
+              </div>
+            </section>
+
+            <section className="flex min-h-0 flex-col overflow-hidden">
+              <h3 className="section-label mb-1">生成された考え方</h3>
+              <div
+                className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded border p-3"
+                style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+              >
+                {commonFlow.length > 0 && (
+                  <section>
+                    <h4 className="mb-2 text-sm font-bold">共通部分</h4>
+                    <SolutionFlowBlockList blocks={commonFlow} />
+                  </section>
+                )}
+                {variantFlows.map((variant) => {
+                  const role = roleOf(variant.variantId);
+                  if (role === "alternative") alternativeIndex += 1;
+                  const label = role === "main"
+                    ? "主解法"
+                    : variantFlows.filter((item) => roleOf(item.variantId) === "alternative").length > 1
+                      ? `別解 ${alternativeIndex}`
+                      : "別解";
+                  return (
+                    <section key={variant.variantId}>
+                      <h4 className="mb-2 text-sm font-bold">{label}</h4>
+                      <SolutionFlowBlockList blocks={variant.flow} />
+                    </section>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+        )}
+
+        <div
+          className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t pt-2"
+          style={{ borderColor: "var(--border)" }}
+        >
+          {job?.insertedAt && (
+            <span className="badge" style={{ color: "var(--success)", borderColor: "rgba(197,183,223,0.4)" }}>
+              問題へ反映済み
+            </span>
+          )}
+          <button onClick={retry} disabled={busy} className="btn btn-ghost btn-sm">
+            再生成
+          </button>
+          {!job?.insertedAt && job?.status === "completed" && result && blockCount > 0 && (
+            <button onClick={() => void applyGeneratedSolutionFlow()} disabled={busy} className="btn btn-solid btn-sm">
+              {busy ? "反映中..." : "考え方を問題へ反映"}
+            </button>
+          )}
+          <button onClick={onClose} className="btn btn-outline btn-sm">
+            閉じる
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderReview = () => {
+    if (isSolutionFlowFromAnswerMode) return renderSolutionFlowReview();
     if (isReviewMode) return renderReviewResult();
     return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
@@ -2055,7 +2343,7 @@ export function AiConvertDialog({
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5" style={{ borderColor: "var(--border)" }}>
           <h2 className="text-sm font-bold">
             <span className="brand-mark mr-1.5">▸</span>
-            {preset?.title ?? (isProjectReviewMode ? "教材全体のAI確認" : isContentReviewMode ? (job?.targetEntityType === "part" ? "部品をAIチェック" : "問題をAIチェック") : isRevisionMode ? "AIで既存ソースを修正" : isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
+            {preset?.title ?? (isSolutionFlowFromAnswerMode ? "既存解答から考え方を生成" : isProjectReviewMode ? "教材全体のAI確認" : isContentReviewMode ? (job?.targetEntityType === "part" ? "部品をAIチェック" : "問題をAIチェック") : isRevisionMode ? "AIで既存ソースを修正" : isTopicGuideMode ? "分野・解法の解説部品を生成" : isGenerationMode ? "AIで解答・解説を生成" : isProblemImportMode ? "AIで問題バンクへ取り込む" : "AI変換（写真・テキスト → LaTeX）")}
             {job && (
               <span className="badge badge-muted ml-2">ジョブ #{job.id}</span>
             )}

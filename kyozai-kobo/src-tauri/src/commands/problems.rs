@@ -9,8 +9,13 @@ fn parse_solution_variants(json: String) -> Vec<ProblemSolutionVariant> {
     serde_json::from_str(&json).unwrap_or_default()
 }
 
+fn parse_flow_blocks(json: String) -> Vec<SolutionFlowBlock> {
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
 fn normalize_solution_variants(
     mut variants: Vec<ProblemSolutionVariant>,
+    common_pattern_ids: &HashSet<i64>,
 ) -> Result<Vec<ProblemSolutionVariant>, String> {
     if variants.len() > 6 {
         return Err("解法は最大6件まで保存できます".into());
@@ -81,6 +86,10 @@ fn normalize_solution_variants(
         }
         variant.solution_blocks.truncate(100);
         variant.explanation_sections.truncate(100);
+        variant.flow_blocks = super::solution_flow::normalize_saved_flow_blocks(
+            std::mem::take(&mut variant.flow_blocks),
+            common_pattern_ids,
+        )?;
     }
     if !variants.is_empty() && !main_seen {
         variants[0].role = "main".into();
@@ -223,7 +232,7 @@ pub fn get_problem(state: &AppState, id: i64) -> Result<ProblemFull, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut p = conn
         .query_row(
-            "SELECT id, bank_node_id, unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at, version FROM problems WHERE id=?1",
+            "SELECT id, bank_node_id, unit_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at, version FROM problems WHERE id=?1",
             params![id],
             |r| {
                 Ok(ProblemFull {
@@ -235,18 +244,19 @@ pub fn get_problem(state: &AppState, id: i64) -> Result<ProblemFull, String> {
                     statement_latex_two_column: r.get(5)?,
                     answer_latex: r.get(6)?,
                     explanation_latex: r.get(7)?,
-                    solution_variants: parse_solution_variants(r.get(8)?),
-                    answer_completed: r.get::<_, i64>(9)? != 0,
-                    explanation_completed: r.get::<_, i64>(10)? != 0,
-                    difficulty: r.get(11)?,
-                    difficulty_rank: r.get(12)?,
-                    is_required: r.get::<_, i64>(13)? != 0,
-                    memo: r.get(14)?,
-                    created_at: r.get(15)?,
-                    updated_at: r.get(16)?,
+                    common_flow_blocks: parse_flow_blocks(r.get(8)?),
+                    solution_variants: parse_solution_variants(r.get(9)?),
+                    answer_completed: r.get::<_, i64>(10)? != 0,
+                    explanation_completed: r.get::<_, i64>(11)? != 0,
+                    difficulty: r.get(12)?,
+                    difficulty_rank: r.get(13)?,
+                    is_required: r.get::<_, i64>(14)? != 0,
+                    memo: r.get(15)?,
+                    created_at: r.get(16)?,
+                    updated_at: r.get(17)?,
                     tags: vec![],
                     attachments: vec![],
-                    version: r.get(17)?,
+                    version: r.get(18)?,
                 })
             },
         )
@@ -299,8 +309,8 @@ pub fn create_problem_in_bank_node(
 
 pub(crate) fn save_version(conn: &Connection, problem_id: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO problem_versions (problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, saved_at)
-         SELECT id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, ?2 FROM problems WHERE id=?1",
+        "INSERT INTO problem_versions (problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, saved_at)
+         SELECT id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, ?2 FROM problems WHERE id=?1",
         params![problem_id, now_str()],
     )?;
     // 履歴は最大30件
@@ -354,7 +364,26 @@ pub fn update_problem(state: &AppState, payload: ProblemUpdate) -> Result<i64, S
     // 更新前の内容をバージョンとして保存
     save_version(&tx, payload.id).map_err(err_str)?;
     let difficulty_rank = normalize_rank(payload.difficulty_rank);
-    let solution_variants = normalize_solution_variants(payload.solution_variants)?;
+    let common_flow_blocks = super::solution_flow::normalize_saved_flow_blocks(
+        payload.common_flow_blocks,
+        &HashSet::new(),
+    )?;
+    let common_pattern_ids: HashSet<i64> = common_flow_blocks
+        .iter()
+        .filter_map(|block| block.pattern_id)
+        .collect();
+    let solution_variants =
+        normalize_solution_variants(payload.solution_variants, &common_pattern_ids)?;
+    let has_structured_flow = !common_flow_blocks.is_empty()
+        || solution_variants
+            .iter()
+            .any(|variant| !variant.flow_blocks.is_empty());
+    let explanation_latex = if has_structured_flow {
+        super::solution_flow::render_teaching_flow_latex(&common_flow_blocks, &solution_variants)
+    } else {
+        payload.explanation_latex
+    };
+    let common_flow_blocks_json = serde_json::to_string(&common_flow_blocks).map_err(err_str)?;
     let solution_variants_json = serde_json::to_string(&solution_variants).map_err(err_str)?;
     let (bank_node_id, unit_id) = if let Some(bank_node_id) = payload.bank_node_id {
         let unit_id = super::tree::legacy_unit_for_bank_node(&tx, bank_node_id)?;
@@ -366,7 +395,7 @@ pub fn update_problem(state: &AppState, payload: ProblemUpdate) -> Result<i64, S
         (bank_node_id, payload.unit_id)
     };
     tx.execute(
-        "UPDATE problems SET unit_id=?1, bank_node_id=?2, title=?3, statement_latex=?4, statement_latex_two_column=?5, answer_latex=?6, explanation_latex=?7, solution_variants_json=?8, answer_completed=?9, explanation_completed=?10, difficulty=?11, difficulty_rank=?12, is_required=?13, memo=?14, updated_at=?15, version=version+1 WHERE id=?16",
+        "UPDATE problems SET unit_id=?1, bank_node_id=?2, title=?3, statement_latex=?4, statement_latex_two_column=?5, answer_latex=?6, explanation_latex=?7, common_flow_blocks_json=?8, solution_variants_json=?9, answer_completed=?10, explanation_completed=?11, difficulty=?12, difficulty_rank=?13, is_required=?14, memo=?15, updated_at=?16, version=version+1 WHERE id=?17",
         params![
             unit_id,
             bank_node_id,
@@ -374,7 +403,8 @@ pub fn update_problem(state: &AppState, payload: ProblemUpdate) -> Result<i64, S
             payload.statement_latex,
             payload.statement_latex_two_column,
             payload.answer_latex,
-            payload.explanation_latex,
+            explanation_latex,
+            common_flow_blocks_json,
             solution_variants_json,
             payload.answer_completed as i64,
             payload.explanation_completed as i64,
@@ -396,8 +426,8 @@ pub fn duplicate_problem(state: &AppState, id: i64) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let now = now_str();
     conn.execute(
-        "INSERT INTO problems (unit_id, bank_node_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
-         SELECT unit_id, bank_node_id, title || ' (コピー)', statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, ?2, ?2 FROM problems WHERE id=?1",
+        "INSERT INTO problems (unit_id, bank_node_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, created_at, updated_at)
+         SELECT unit_id, bank_node_id, title || ' (コピー)', statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, ?2, ?2 FROM problems WHERE id=?1",
         params![id, now],
     )
     .map_err(err_str)?;
@@ -448,7 +478,7 @@ pub fn list_versions(state: &AppState, problem_id: i64) -> Result<Vec<VersionSum
 pub fn get_version(state: &AppState, version_id: i64) -> Result<VersionFull, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     conn.query_row(
-        "SELECT id, problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, saved_at FROM problem_versions WHERE id=?1",
+        "SELECT id, problem_id, title, statement_latex, statement_latex_two_column, answer_latex, explanation_latex, common_flow_blocks_json, solution_variants_json, answer_completed, explanation_completed, difficulty, difficulty_rank, is_required, memo, saved_at FROM problem_versions WHERE id=?1",
         params![version_id],
         |r| {
             Ok(VersionFull {
@@ -459,14 +489,15 @@ pub fn get_version(state: &AppState, version_id: i64) -> Result<VersionFull, Str
                 statement_latex_two_column: r.get(4)?,
                 answer_latex: r.get(5)?,
                 explanation_latex: r.get(6)?,
-                solution_variants: parse_solution_variants(r.get(7)?),
-                answer_completed: r.get::<_, i64>(8)? != 0,
-                explanation_completed: r.get::<_, i64>(9)? != 0,
-                difficulty: r.get(10)?,
-                difficulty_rank: r.get(11)?,
-                is_required: r.get::<_, i64>(12)? != 0,
-                memo: r.get(13)?,
-                saved_at: r.get(14)?,
+                common_flow_blocks: parse_flow_blocks(r.get(7)?),
+                solution_variants: parse_solution_variants(r.get(8)?),
+                answer_completed: r.get::<_, i64>(9)? != 0,
+                explanation_completed: r.get::<_, i64>(10)? != 0,
+                difficulty: r.get(11)?,
+                difficulty_rank: r.get(12)?,
+                is_required: r.get::<_, i64>(13)? != 0,
+                memo: r.get(14)?,
+                saved_at: r.get(15)?,
             })
         },
     )
@@ -492,6 +523,7 @@ pub fn restore_version(state: &AppState, version_id: i64) -> Result<(), String> 
             statement_latex_two_column=(SELECT statement_latex_two_column FROM problem_versions WHERE id=?1),
             answer_latex=(SELECT answer_latex FROM problem_versions WHERE id=?1),
             explanation_latex=(SELECT explanation_latex FROM problem_versions WHERE id=?1),
+            common_flow_blocks_json=(SELECT common_flow_blocks_json FROM problem_versions WHERE id=?1),
             solution_variants_json=(SELECT solution_variants_json FROM problem_versions WHERE id=?1),
             answer_completed=(SELECT answer_completed FROM problem_versions WHERE id=?1),
             explanation_completed=(SELECT explanation_completed FROM problem_versions WHERE id=?1),

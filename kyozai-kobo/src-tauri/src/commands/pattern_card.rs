@@ -85,7 +85,6 @@ fn join_item_lines(lines: &[String], indent: &str) -> String {
     out
 }
 
-
 /// 候補1件分の行。空の項目は行ごと出さない。
 fn entry_lines(entry: &PatternStrategyInput) -> Option<Vec<String>> {
     let title = entry.title.trim();
@@ -102,6 +101,15 @@ fn entry_lines(entry: &PatternStrategyInput) -> Option<Vec<String>> {
 /// カードに出すのはタイトルと候補となる考え方だけ。
 /// 候補が1つならそのまま、複数なら itemize の項目として並べる。
 pub fn render_pattern_card(snapshot: &PatternSnapshot) -> String {
+    render_pattern_card_with_usage(snapshot, &[])
+}
+
+/// Pattern全体を必ず表示する。`used_strategy_ids` は解法との対応を追跡する
+/// 保存情報であり、カード本文へ「今回使用」等の印は付けない。
+pub fn render_pattern_card_with_usage(
+    snapshot: &PatternSnapshot,
+    _used_strategy_ids: &[i64],
+) -> String {
     let title = title_text(&snapshot.title);
     let title_option = if title.is_empty() {
         String::new()
@@ -110,11 +118,7 @@ pub fn render_pattern_card(snapshot: &PatternSnapshot) -> String {
     };
     let mut out = format!("\\begin{{tcolorbox}}{title_option}\n");
 
-    let entries: Vec<Vec<String>> = snapshot
-        .strategies
-        .iter()
-        .filter_map(entry_lines)
-        .collect();
+    let entries: Vec<Vec<String>> = snapshot.strategies.iter().filter_map(entry_lines).collect();
     match entries.len() {
         0 => {}
         1 => {
@@ -200,10 +204,27 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.strategies.truncate(1);
         let tex = render_pattern_card(&snapshot);
-        assert!(!tex.contains("\\begin{itemize}"), "候補が1つなら箇条書きにしない");
+        assert!(
+            !tex.contains("\\begin{itemize}"),
+            "候補が1つなら箇条書きにしない"
+        );
         assert!(!tex.contains("\\item"));
         assert!(tex.contains("平均値の定理の利用"));
         assert!(tex.contains("\\dfrac{f(b)-f(a)}{b-a}=f'(c)"));
+    }
+
+    #[test]
+    fn usage_metadata_does_not_change_the_pattern_card() {
+        let mut snapshot = snapshot();
+        snapshot.strategies[0].id = Some(101);
+        snapshot.strategies[1].id = Some(102);
+        let with_usage = render_pattern_card_with_usage(&snapshot, &[101]);
+        let without_usage = render_pattern_card(&snapshot);
+        assert_eq!(with_usage, without_usage);
+        assert!(!with_usage.contains("今回使用"));
+        assert!(with_usage.contains("平均値の定理の利用"));
+        assert!(with_usage.contains("定積分の評価の利用"));
+        assert_eq!(with_usage.matches("\\item ").count(), 2);
     }
 
     #[test]
@@ -228,9 +249,18 @@ mod tests {
     fn display_math_is_not_preceded_or_followed_by_a_line_break_command() {
         let tex = render_pattern_card(&snapshot());
         // 「\\ の直後に別行立て数式」「別行立て数式の直後に \\」はLaTeXがエラーにする。
-        assert!(!tex.contains("\\\\\n  \\["), "別行立て数式の前に改行命令を置かない");
-        assert!(!tex.contains("\\]\\\\"), "別行立て数式の直後に改行命令を置かない");
-        assert!(tex.contains("平均値の定理の利用\\\\"), "見出しと本文は改行でつなぐ");
+        assert!(
+            !tex.contains("\\\\\n  \\["),
+            "別行立て数式の前に改行命令を置かない"
+        );
+        assert!(
+            !tex.contains("\\]\\\\"),
+            "別行立て数式の直後に改行命令を置かない"
+        );
+        assert!(
+            tex.contains("平均値の定理の利用\\\\"),
+            "見出しと本文は改行でつなぐ"
+        );
     }
 
     #[test]

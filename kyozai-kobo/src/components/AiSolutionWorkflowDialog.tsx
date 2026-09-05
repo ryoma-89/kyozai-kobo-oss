@@ -1,20 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { aiCancelJob, aiCreateJob, aiGetJob } from "../api";
+import {
+  aiCancelJob,
+  aiCreateJob,
+  aiGetJob,
+  getPatternSnapshot,
+  renderSolutionFlowLatex,
+} from "../api";
 import type {
   AiJob,
   AiSolutionWorkflowResult,
   ProblemFull,
   ProblemSolutionVariant,
   SolutionBlock,
+  SolutionFlowBlock,
   SolutionPlan,
   SolutionStrategy,
   StrategyValidationResult,
   VerificationResult,
 } from "../types";
 import type { SolutionSubject } from "./AiConvertDialog";
-import { useApp } from "../store";
 import { Icon } from "./Icon";
 import { Modal } from "./ui";
+import { PatternPicker } from "./PatternPicker";
 
 const RUNNING = new Set(["queued", "preprocessing", "waiting_for_codex", "converting", "validating", "compiling"]);
 
@@ -78,6 +85,12 @@ function composeVariantExplanations(variants: ProblemSolutionVariant[]): string 
     .join("\n\n");
 }
 
+function legacyFlowBlocks(text: string): SolutionFlowBlock[] {
+  return text.trim()
+    ? [{ id: "legacy-flow-1", type: "text", content: text }]
+    : [];
+}
+
 function legacyVariant(problem: ProblemFull): ProblemSolutionVariant | null {
   if (!problem.answer_latex.trim() && !problem.explanation_latex.trim()) return null;
   return {
@@ -100,6 +113,7 @@ function legacyVariant(problem: ProblemFull): ProblemSolutionVariant | null {
       ? [{ solutionBlockIds: blocksFromSolution(problem.answer_latex).map((block) => block.id), content: problem.explanation_latex }]
       : [],
     explanationOutdated: false,
+    flowBlocks: legacyFlowBlocks(problem.explanation_latex),
   };
 }
 
@@ -175,6 +189,12 @@ function initialVariantsForProblem(problem: ProblemFull): ProblemSolutionVariant
       }));
     }
   }
+  reconciled = reconciled.map((variant) => ({
+    ...variant,
+    flowBlocks: variant.flowBlocks?.length
+      ? variant.flowBlocks
+      : legacyFlowBlocks(variant.explanation ?? ""),
+  }));
   return reconciled;
 }
 
@@ -195,7 +215,7 @@ function fallbackCustomStrategy(text: string): SolutionStrategy {
 function strategyFeatures(strategy: SolutionStrategy): string[] {
   const features: string[] = [];
   if (strategy.suitability?.examAnswer) features.push("答案向き");
-  if (strategy.suitability?.textbookExplanation) features.push("解説向き");
+  if (strategy.suitability?.textbookExplanation) features.push("教材Flow向き");
   if (strategy.suitability?.alternativeSolution) features.push("別解向き");
   if (strategy.answerLength === "short") features.push("最短候補");
   if (strategy.note) features.push(strategy.note);
@@ -237,6 +257,22 @@ function StrategyCard({
               主要知識: {strategy.concepts.join(" / ")}
             </p>
           )}
+          {!!strategy.patternRefs?.length && (
+            <div className="mt-2 rounded border px-2 py-1.5 text-[11px]" style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}>
+              <span className="font-semibold">この解法で使用する定石</span>
+              {strategy.patternRefs.map((reference) => (
+                <p key={`${reference.patternId}-${reference.strategyId}`} className="mt-0.5">
+                  「{reference.patternTitle ?? `Pattern #${reference.patternId}`}」
+                  → Candidate: {reference.strategyTitle ?? `#${reference.strategyId}`}
+                </p>
+              ))}
+            </div>
+          )}
+          {strategy.evaluation && (
+            <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+              評価: 計算量 {strategy.evaluation.calculationCost} / 見通し {strategy.evaluation.clarity} / 教育的価値 {strategy.evaluation.educationalValue} — {strategy.evaluation.recommendationReason}
+            </p>
+          )}
         </div>
       </div>
       {selected && (
@@ -249,6 +285,125 @@ function StrategyCard({
   );
 }
 
+function newFlowBlock(type: Exclude<SolutionFlowBlock["type"], "pattern">): SolutionFlowBlock {
+  const id = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  if (type === "formula") return { id, type, latex: "" };
+  if (type === "heading") return { id, type, text: "" };
+  return { id, type, content: "" };
+}
+
+function FlowEditor({
+  label,
+  blocks,
+  onChange,
+  onAddPattern,
+}: {
+  label: string;
+  blocks: SolutionFlowBlock[];
+  onChange: (blocks: SolutionFlowBlock[]) => void;
+  onAddPattern: () => void;
+}) {
+  const replace = (index: number, block: SolutionFlowBlock) => {
+    const next = [...blocks];
+    next[index] = block;
+    onChange(next);
+  };
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= blocks.length) return;
+    const next = [...blocks];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+  return (
+    <section className="mt-3">
+      <label className="section-label mb-1 block">{label}</label>
+      <div className="space-y-2">
+        {blocks.length === 0 && (
+          <p className="rounded border border-dashed p-3 text-xs" style={{ borderColor: "var(--border)", color: "var(--muted)" }}>
+            共通部分や補足が不要なら空のままで構いません。
+          </p>
+        )}
+        {blocks.map((block, index) => (
+          <div key={block.id} className="rounded border p-2" style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}>
+            <div className="mb-1 flex items-center gap-1">
+              <span className="badge badge-muted">{block.type === "pattern" ? "定石" : block.type}</span>
+              <span className="flex-1" />
+              <button type="button" className="btn btn-ghost btn-sm" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={index === blocks.length - 1} onClick={() => move(index, 1)}>↓</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(blocks.filter((_, itemIndex) => itemIndex !== index))}>削除</button>
+            </div>
+            {(block.type === "text" || block.type === "caution") && (
+              <textarea
+                className="input min-h-20 w-full resize-y text-xs leading-5"
+                value={block.content}
+                onChange={(event) => replace(index, { ...block, content: event.target.value })}
+                placeholder={block.type === "caution" ? "見落としやすい条件・注意点" : "着眼点・選択理由・見通し"}
+              />
+            )}
+            {block.type === "formula" && (
+              <textarea
+                className="input min-h-16 w-full resize-y font-mono text-xs leading-5"
+                value={block.latex}
+                onChange={(event) => replace(index, { ...block, latex: event.target.value })}
+                placeholder="LaTeX数式（表示数式の中身）"
+              />
+            )}
+            {block.type === "heading" && (
+              <input
+                className="input w-full text-xs"
+                value={block.text}
+                onChange={(event) => replace(index, { ...block, text: event.target.value })}
+                placeholder="見出し"
+              />
+            )}
+            {block.type === "pattern" && (
+              <div className="rounded border p-2" style={{ borderColor: "var(--accent)", background: "var(--accent-dim)" }}>
+                <p className="font-semibold">{block.snapshot.title}</p>
+                <p className="mt-0.5 text-[11px]" style={{ color: "var(--muted)" }}>保存版 v{block.patternVersion} — Candidateは常に全件表示し、選択理由は直後の文章に書きます</p>
+                <div className="mt-2 space-y-1">
+                  {block.snapshot.strategies.map((strategy, strategyIndex) => {
+                    const strategyId = strategy.id ?? null;
+                    const used = strategyId !== null && block.usedStrategyIds.includes(strategyId);
+                    return (
+                      <label key={strategyId ?? `${strategy.title}-${strategyIndex}`} className="flex items-start gap-2 rounded px-2 py-1 text-xs" style={used ? { background: "var(--panel)" } : undefined}>
+                        <input
+                          type="checkbox"
+                          checked={used}
+                          disabled={strategyId === null}
+                          onChange={() => {
+                            if (strategyId === null) return;
+                            const usedStrategyIds = used
+                              ? block.usedStrategyIds.filter((id) => id !== strategyId)
+                              : [...block.usedStrategyIds, strategyId];
+                            replace(index, { ...block, usedStrategyIds });
+                          }}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="font-semibold">{strategyIndex + 1}. {strategy.title}</span>
+                          {strategy.description && <span className="mt-0.5 block whitespace-pre-wrap">{strategy.description}</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {(["text", "formula", "heading", "caution"] as const).map((type) => (
+          <button key={type} type="button" className="btn btn-outline btn-sm" onClick={() => onChange([...blocks, newFlowBlock(type)])}>
+            ＋ {type === "text" ? "文章" : type === "formula" ? "数式" : type === "heading" ? "見出し" : "注意"}
+          </button>
+        ))}
+        <button type="button" className="btn btn-outline btn-sm" onClick={onAddPattern}>＋ 定石</button>
+      </div>
+    </section>
+  );
+}
+
 export function AiSolutionWorkflowDialog({
   problem,
   solutionSubject,
@@ -257,10 +412,14 @@ export function AiSolutionWorkflowDialog({
 }: {
   problem: ProblemFull;
   solutionSubject: SolutionSubject;
-  onChange: (variants: ProblemSolutionVariant[], answer: string, explanation: string) => void;
+  onChange: (
+    variants: ProblemSolutionVariant[],
+    answer: string,
+    explanation: string,
+    commonFlowBlocks: SolutionFlowBlock[],
+  ) => void;
   onClose: () => void;
 }) {
-  const { showToast } = useApp();
   const initialVariants = initialVariantsForProblem(problem);
   const [screen, setScreen] = useState<"start" | "candidates" | "custom" | "variants">(
     initialVariants.length > 0 ? "variants" : "start",
@@ -268,28 +427,49 @@ export function AiSolutionWorkflowDialog({
   const [candidates, setCandidates] = useState<SolutionStrategy[]>([]);
   const [selected, setSelected] = useState<Record<string, "main" | "alternative">>({});
   const [variants, setVariants] = useState<ProblemSolutionVariant[]>(initialVariants);
+  const [commonFlow, setCommonFlow] = useState<SolutionFlowBlock[]>(problem.common_flow_blocks ?? []);
+  const [patternTarget, setPatternTarget] = useState<"common" | string | null>(null);
   const [analysisSummary, setAnalysisSummary] = useState("");
   const [customText, setCustomText] = useState("");
   const [customValidation, setCustomValidation] = useState<StrategyValidationResult | null>(null);
-  const [explanationGuidance, setExplanationGuidance] = useState("");
+  const [flowGuidance, setFlowGuidance] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
-  const [activeJobMode, setActiveJobMode] = useState<string | null>(null);
+  const [, setActiveJobMode] = useState<string | null>(null);
   const operationRef = useRef(0);
   const mountedRef = useRef(true);
   const lastActionRef = useRef<(() => Promise<void>) | null>(null);
+  const publishVersionRef = useRef(0);
 
   useEffect(() => () => {
     mountedRef.current = false;
     operationRef.current += 1;
   }, []);
 
-  const commit = (next: ProblemSolutionVariant[]) => {
+  const commit = (
+    next: ProblemSolutionVariant[],
+    nextCommonFlow: SolutionFlowBlock[] = commonFlow,
+  ) => {
     const ordered = orderedVariants(next);
     setVariants(ordered);
-    onChange(ordered, composeVariantSolutions(ordered), composeVariantExplanations(ordered));
+    const answer = composeVariantSolutions(ordered);
+    const fallback = composeVariantExplanations(ordered);
+    onChange(ordered, answer, fallback, nextCommonFlow);
+    const publishVersion = ++publishVersionRef.current;
+    void renderSolutionFlowLatex(nextCommonFlow, ordered)
+      .then((rendered) => {
+        if (publishVersion === publishVersionRef.current && mountedRef.current) {
+          onChange(ordered, answer, rendered || fallback, nextCommonFlow);
+        }
+      })
+      .catch(() => undefined);
+  };
+
+  const commitCommonFlow = (blocks: SolutionFlowBlock[]) => {
+    setCommonFlow(blocks);
+    commit(variants.map((variant) => ({ ...variant, verification: undefined })), blocks);
   };
 
   const runJob = async (
@@ -384,11 +564,18 @@ export function AiSolutionWorkflowDialog({
   const generateSolution = async (
     strategy: SolutionStrategy,
     plan: SolutionPlan,
+    generatedCommonFlow: SolutionFlowBlock[],
+    solutionFlow: SolutionFlowBlock[],
   ): Promise<string> => {
     const solutionJob = await runJob(
       "generate_strategy_solution",
       problem.statement_latex,
-      { selectedStrategy: strategy, solutionPlan: plan },
+      {
+        selectedStrategy: strategy,
+        solutionPlan: plan,
+        commonFlow: generatedCommonFlow,
+        solutionFlow,
+      },
       `「${strategy.title}」で試験答案を生成しています…`,
     );
     const blockingWarnings = solutionJob.warnings.filter((warning) => warning.severity === "error");
@@ -400,10 +587,55 @@ export function AiSolutionWorkflowDialog({
     return solution;
   };
 
-  const verifySolution = async (strategy: SolutionStrategy, solution: string): Promise<VerificationResult> => {
+  const generateCommonSolutionFlow = async (
+    strategies: SolutionStrategy[],
+  ): Promise<SolutionFlowBlock[]> => {
+    const job = await runJob(
+      "solution_common_flow",
+      problem.statement_latex,
+      { selectedStrategies: strategies, flowGuidance: flowGuidance.trim() },
+      "解法に共通する着眼点と定石を構成しています…",
+    );
+    return workflowResult(job).flow ?? [];
+  };
+
+  const generateVariantSolutionFlow = async (
+    strategy: SolutionStrategy,
+    plan: SolutionPlan,
+    generatedCommonFlow: SolutionFlowBlock[],
+  ): Promise<SolutionFlowBlock[]> => {
+    const commonPatternIds = generatedCommonFlow
+      .filter((block): block is Extract<SolutionFlowBlock, { type: "pattern" }> => block.type === "pattern")
+      .map((block) => block.patternId);
+    const job = await runJob(
+      "solution_flow",
+      problem.statement_latex,
+      {
+        selectedStrategy: strategy,
+        solutionPlan: plan,
+        commonPatternIds,
+        flowGuidance: flowGuidance.trim(),
+      },
+      `「${strategy.title}」の考え方を構成しています…`,
+    );
+    return workflowResult(job).flow ?? [];
+  };
+
+  const verifySolution = async (
+    strategy: SolutionStrategy,
+    solution: string,
+    generatedCommonFlow: SolutionFlowBlock[],
+    solutionFlow: SolutionFlowBlock[],
+  ): Promise<VerificationResult> => {
     const input = [
       "【問題文】",
       problem.statement_latex,
+      "",
+      "【共通の考え方（構造化データ）】",
+      JSON.stringify(generatedCommonFlow),
+      "",
+      "【この解法の考え方（構造化データ）】",
+      JSON.stringify(solutionFlow),
       "",
       "【検証対象の解答】",
       solution,
@@ -422,16 +654,18 @@ export function AiSolutionWorkflowDialog({
   const generateVariant = async (
     strategy: SolutionStrategy,
     role: "main" | "alternative",
+    plan: SolutionPlan,
+    generatedCommonFlow: SolutionFlowBlock[],
     previous?: ProblemSolutionVariant,
   ): Promise<ProblemSolutionVariant> => {
-    const plan = await generateSolutionPlan(strategy);
-    let solution = await generateSolution(strategy, plan);
+    const flowBlocks = await generateVariantSolutionFlow(strategy, plan, generatedCommonFlow);
+    let solution = await generateSolution(strategy, plan, generatedCommonFlow, flowBlocks);
     let verification: VerificationResult;
     try {
-      verification = await verifySolution(strategy, solution);
+      verification = await verifySolution(strategy, solution, generatedCommonFlow, flowBlocks);
       if (verification.correctedSolution?.trim()) {
         solution = verification.correctedSolution.trim();
-        verification = await verifySolution(strategy, solution);
+        verification = await verifySolution(strategy, solution, generatedCommonFlow, flowBlocks);
         if (verification.correctedSolution?.trim()) solution = verification.correctedSolution.trim();
       }
     } catch (cause) {
@@ -440,8 +674,6 @@ export function AiSolutionWorkflowDialog({
         issues: [{ severity: "warning", message: `検証処理に失敗しました。生成済み答案は保持されています: ${String(cause)}` }],
       };
     }
-    const inheritedExplanation = previous?.explanation
-      ?? (role === "main" && problem.explanation_latex.trim() ? problem.explanation_latex : undefined);
     return {
       id: previous?.id ?? `variant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       strategy,
@@ -450,20 +682,33 @@ export function AiSolutionWorkflowDialog({
       solution,
       solutionBlocks: blocksFromSolution(solution),
       verification,
-      explanation: inheritedExplanation,
-      explanationSections: previous?.explanationSections ?? [],
-      explanationOutdated: !!inheritedExplanation,
+      explanation: undefined,
+      explanationSections: [],
+      explanationOutdated: false,
+      flowBlocks,
     };
   };
 
   const generateMany = async (entries: Array<{ strategy: SolutionStrategy; role: "main" | "alternative" }>) => {
+    const plans = new Map<string, SolutionPlan>();
+    for (const entry of entries) {
+      plans.set(entry.strategy.id, await generateSolutionPlan(entry.strategy));
+    }
+    const generatedCommonFlow = await generateCommonSolutionFlow(entries.map((entry) => entry.strategy));
+    setCommonFlow(generatedCommonFlow);
     const next: ProblemSolutionVariant[] = [];
     for (const entry of entries) {
       const previous = variants.find((variant) => variant.strategy.id === entry.strategy.id);
-      next.push(await generateVariant(entry.strategy, entry.role, previous));
-      commit(next);
+      next.push(await generateVariant(
+        entry.strategy,
+        entry.role,
+        plans.get(entry.strategy.id)!,
+        generatedCommonFlow,
+        previous,
+      ));
+      commit(next, generatedCommonFlow);
     }
-    commit(next);
+    commit(next, generatedCommonFlow);
     setScreen("variants");
   };
 
@@ -499,43 +744,15 @@ export function AiSolutionWorkflowDialog({
     }
   };
 
-  const generateExplanation = async (variant: ProblemSolutionVariant) => {
-    const input = [
-      "【問題文】",
-      problem.statement_latex,
-      "",
-      "【参照する解答】",
-      variant.solution,
-    ].join("\n");
-    const job = await runJob(
-      "generate_strategy_explanation",
-      input,
-      {
-        selectedStrategy: variant.strategy,
-        explanationGuidance: explanationGuidance.trim(),
-        backgroundWorkflowResult: "solution_explanation",
-        solutionVariantId: variant.id,
-        solutionSource: variant.solution,
-      },
-      `「${variant.strategy.title}」の確定済み解答に沿って解説を作成しています…`,
-    );
-    const explanation = job.outputLatex.trim();
-    const blockingWarnings = job.warnings.filter((warning) => warning.severity === "error");
-    if (blockingWarnings.length > 0) {
-      throw new Error(`生成解説を安全に使用できません: ${blockingWarnings.map((warning) => warning.message).join(" / ")}`);
-    }
-    if (!explanation) throw new Error("解説を取得できませんでした");
-    const blocks = variant.solutionBlocks?.length ? variant.solutionBlocks : blocksFromSolution(variant.solution);
-    commit(variants.map((item) => item.id === variant.id ? {
-      ...item,
-      explanation,
-      explanationOutdated: false,
-      explanationSections: [{ solutionBlockIds: blocks.map((block) => block.id), content: explanation }],
-    } : item));
-  };
-
   const regenerateSolution = async (variant: ProblemSolutionVariant) => {
-    const regenerated = await generateVariant(variant.strategy, variant.role, variant);
+    const plan = await generateSolutionPlan(variant.strategy);
+    const regenerated = await generateVariant(
+      variant.strategy,
+      variant.role,
+      plan,
+      commonFlow,
+      variant,
+    );
     commit(variants.map((item) => item.id === variant.id ? regenerated : item));
   };
 
@@ -550,15 +767,6 @@ export function AiSolutionWorkflowDialog({
   };
 
   const closeDialog = () => {
-    if (busy && activeJobMode === "generate_strategy_explanation") {
-      showToast(
-        activeJobId === null
-          ? "解説生成をバックグラウンドへ移しました。完了後にAI一覧から確認できます"
-          : `解説生成 #${activeJobId}をバックグラウンドへ移しました。完了後にAI一覧から確認できます`,
-      );
-      onClose();
-      return;
-    }
     operationRef.current += 1;
     if (activeJobId !== null) void aiCancelJob(activeJobId).catch(() => undefined);
     onClose();
@@ -574,12 +782,44 @@ export function AiSolutionWorkflowDialog({
     });
   };
 
+  const addPatternBlock = async (patternId: number) => {
+    const snapshot = await getPatternSnapshot(patternId);
+    const block: SolutionFlowBlock = {
+      id: `flow-pattern-${patternId}-${Date.now()}`,
+      type: "pattern",
+      patternId,
+      patternVersion: snapshot.version,
+      snapshot,
+      usedStrategyIds: [],
+    };
+    const usageBlock: SolutionFlowBlock = {
+      id: `${block.id}-usage`,
+      type: "text",
+      content: "ここでは、この定石を用いる。",
+    };
+    if (patternTarget === "common") {
+      if (!commonFlow.some((item) => item.type === "pattern" && item.patternId === patternId)) {
+        commitCommonFlow([...commonFlow, block, usageBlock]);
+      }
+      return;
+    }
+    if (patternTarget) {
+      const commonHasPattern = commonFlow.some((item) => item.type === "pattern" && item.patternId === patternId);
+      commit(variants.map((variant) => {
+        if (variant.id !== patternTarget || commonHasPattern) return variant;
+        const flowBlocks = variant.flowBlocks ?? [];
+        if (flowBlocks.some((item) => item.type === "pattern" && item.patternId === patternId)) return variant;
+        return { ...variant, flowBlocks: [...flowBlocks, block, usageBlock], verification: undefined };
+      }));
+    }
+  };
+
   const renderStart = () => (
     <div className="space-y-3">
-      <p className="text-sm">生成方法を選択してください。どのモードでも内部では解法を確定してから答案を設計します。</p>
+      <p className="text-sm">生成方法を選択してください。どのモードでも、解法候補を評価し「考え方」を決めてから答案へ圧縮します。</p>
       <button className="card w-full p-4 text-left" disabled={busy} onClick={() => execute(quickGenerate)}>
         <div className="flex items-center gap-2 font-bold"><Icon name="sparkle" size={16} /> クイック生成</div>
-        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>AIが最適と判断した標準解法ですぐに答案を生成します。</p>
+        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>AIが推奨する標準解法から、考え方と試験答案を生成します。</p>
       </button>
       <button className="card w-full p-4 text-left" disabled={busy} onClick={() => execute(chooseStrategies)}>
         <div className="font-bold">解法を選んで生成</div>
@@ -587,7 +827,7 @@ export function AiSolutionWorkflowDialog({
       </button>
       <button className="card w-full p-4 text-left" disabled={busy} onClick={() => { setScreen("custom"); setCustomValidation(null); }}>
         <div className="font-bold">解法を指定して生成</div>
-        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>自然言語で方針を入力し、成立性を確認してから答案化します。</p>
+        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>自然言語で方針を入力し、成立性を確認してからFlowと答案を作ります。</p>
       </button>
     </div>
   );
@@ -622,7 +862,7 @@ export function AiSolutionWorkflowDialog({
       <button className="btn btn-outline btn-sm" onClick={() => { setScreen("custom"); setCustomValidation(null); }}>＋ 自分で解法を指定</button>
       <div className="flex justify-between gap-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
         <button className="btn btn-ghost" onClick={() => setScreen("start")}>戻る</button>
-        <button className="btn btn-solid" disabled={busy || Object.keys(selected).length === 0} onClick={() => execute(generateSelected)}>この解法で答案を生成</button>
+        <button className="btn btn-solid" disabled={busy || Object.keys(selected).length === 0} onClick={() => execute(generateSelected)}>この解法でFlowと答案を生成</button>
       </div>
     </div>
   );
@@ -631,7 +871,7 @@ export function AiSolutionWorkflowDialog({
     <div className="space-y-3">
       <div>
         <h3 className="text-sm font-bold">自分で解法を指定</h3>
-        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>説明不足はAIが意図を補います。数学的に成立するか確認してから答案を生成します。</p>
+        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>説明不足はAIが意図を補います。数学的に成立するか確認してからFlowと答案を生成します。</p>
       </div>
       <textarea
         className="input min-h-32 w-full resize-y text-sm"
@@ -653,7 +893,7 @@ export function AiSolutionWorkflowDialog({
       )}
       <div className="flex justify-between gap-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
         <button className="btn btn-ghost" onClick={() => setScreen(candidates.length ? "candidates" : "start")}>戻る</button>
-        <button className="btn btn-solid" disabled={busy || !customText.trim()} onClick={() => execute(validateCustom)}>成立性を確認して答案を生成</button>
+        <button className="btn btn-solid" disabled={busy || !customText.trim()} onClick={() => execute(validateCustom)}>成立性を確認してFlowと答案を生成</button>
       </div>
     </div>
   );
@@ -661,15 +901,25 @@ export function AiSolutionWorkflowDialog({
   const renderVariants = () => (
     <div className="space-y-4">
       <div className="rounded border p-3" style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}>
-        <label className="section-label mb-1 block">解説の追加指示（任意）</label>
+        <label className="section-label mb-1 block">考え方の追加指示（任意）</label>
         <input
           className="input w-full text-xs"
-          value={explanationGuidance}
-          onChange={(event) => setExplanationGuidance(event.target.value)}
-          placeholder="もっと詳しく / 初学者向け / この式変形を詳しく / 図形的意味も追加"
+          value={flowGuidance}
+          onChange={(event) => setFlowGuidance(event.target.value)}
+          placeholder="候補比較を重視 / 初学者向け / 図形的な見通しも追加"
           maxLength={1000}
         />
-        <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>どの指定でも、確定済み解答と異なる解法には切り替えません。</p>
+        <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>再生成時も、答案の実況ではなく着眼・選択理由・見通しを作ります。</p>
+      </div>
+      <div className="card p-3">
+        <h3 className="text-sm font-bold">考え方 — 共通部分</h3>
+        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>解法分岐より前の着眼点や、複数Candidateを含む共通定石です。共通部分がなければ空で構いません。</p>
+        <FlowEditor
+          label="共通Flow Blocks"
+          blocks={commonFlow}
+          onChange={commitCommonFlow}
+          onAddPattern={() => setPatternTarget("common")}
+        />
       </div>
       {orderedVariants(variants).map((variant, index) => (
         <article key={variant.id} className="card p-3">
@@ -681,9 +931,18 @@ export function AiSolutionWorkflowDialog({
             ) : (
               <span className="badge badge-warn">要確認</span>
             )}
-            {variant.explanationOutdated && <span className="badge badge-warn">解説の再生成を推奨</span>}
           </div>
           <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>{variant.strategy.summary}</p>
+          <FlowEditor
+            label={variant.role === "main" ? "解法1のFlow" : `別解${index}のFlow`}
+            blocks={variant.flowBlocks ?? []}
+            onChange={(flowBlocks) => commit(variants.map((item) => item.id === variant.id ? {
+              ...item,
+              flowBlocks,
+              verification: undefined,
+            } : item))}
+            onAddPattern={() => setPatternTarget(variant.id)}
+          />
           <label className="section-label mb-1 mt-3 block">試験答案（編集可能）</label>
           <textarea
             className="input min-h-48 w-full resize-y font-mono text-xs leading-5"
@@ -695,7 +954,6 @@ export function AiSolutionWorkflowDialog({
                 solution,
                 solutionBlocks: blocksFromSolution(solution),
                 verification: undefined,
-                explanationOutdated: !!item.explanation,
               } : item));
             }}
           />
@@ -709,52 +967,24 @@ export function AiSolutionWorkflowDialog({
             </div>
           )}
           <div className="mt-2 flex flex-wrap justify-end gap-2">
-            <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => execute(() => regenerateSolution(variant))}>解答を再生成</button>
-            <button className="btn btn-solid btn-sm" disabled={busy || !variant.solution.trim()} onClick={() => execute(() => generateExplanation(variant))}>
-              {variant.explanation ? "解説を再生成" : "この解答から解説を生成"}
-            </button>
+            <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => execute(() => regenerateSolution(variant))}>Flowと解答を再生成</button>
           </div>
-          {variant.explanation !== undefined && (
-            <>
-              <label className="section-label mb-1 mt-3 block">解説（編集可能）</label>
-              <textarea
-                className="input min-h-40 w-full resize-y font-mono text-xs leading-5"
-                value={variant.explanation}
-                onChange={(event) => commit(variants.map((item) => item.id === variant.id ? {
-                  ...item,
-                  explanation: event.target.value,
-                  explanationOutdated: false,
-                  explanationSections: [{
-                    solutionBlockIds: (item.solutionBlocks ?? []).map((block) => block.id),
-                    content: event.target.value,
-                  }],
-                } : item))}
-              />
-            </>
-          )}
         </article>
       ))}
       <div className="flex flex-wrap justify-between gap-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
         <button className="btn btn-outline" disabled={busy} onClick={() => execute(chooseStrategies)}>解法候補を選び直す</button>
-        <button className="btn btn-solid" onClick={closeDialog}>
-          {busy && activeJobMode === "generate_strategy_explanation"
-            ? "バックグラウンドへ"
-            : "問題へ反映して閉じる"}
-        </button>
+        <button className="btn btn-solid" onClick={closeDialog}>問題へ反映して閉じる</button>
       </div>
     </div>
   );
 
   return (
-    <Modal title="AI解答作成 — 解法を確定してから答案・解説を生成" onClose={closeDialog} wide>
+    <Modal title="AI解答作成 — 考え方を決めてから試験答案へ圧縮" onClose={closeDialog} wide>
       {busy && (
         <div className="mb-3 rounded border p-3" style={{ borderColor: "var(--accent)", background: "var(--accent-dim)" }}>
           <div className="flex items-center gap-2">
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-t-transparent" style={{ borderColor: "var(--accent)", borderTopColor: "transparent" }} />
             <p className="min-w-0 flex-1 text-sm font-semibold">{progress || "AI処理を実行しています…"}</p>
-            {activeJobMode === "generate_strategy_explanation" && (
-              <button className="btn btn-outline btn-sm" onClick={closeDialog}>バックグラウンドへ</button>
-            )}
             <button className="btn btn-ghost btn-sm" onClick={() => void cancelCurrent()}>中止</button>
           </div>
         </div>
@@ -773,6 +1003,19 @@ export function AiSolutionWorkflowDialog({
       {screen === "candidates" && renderCandidates()}
       {screen === "custom" && renderCustom()}
       {screen === "variants" && renderVariants()}
+      {patternTarget && (
+        <PatternPicker
+          title="Flowへ定石を追加"
+          existingIds={[
+            ...commonFlow,
+            ...(patternTarget === "common"
+              ? []
+              : variants.find((variant) => variant.id === patternTarget)?.flowBlocks ?? []),
+          ].filter((block): block is Extract<SolutionFlowBlock, { type: "pattern" }> => block.type === "pattern").map((block) => block.patternId)}
+          onPick={(pattern) => addPatternBlock(pattern.id)}
+          onClose={() => setPatternTarget(null)}
+        />
+      )}
     </Modal>
   );
 }

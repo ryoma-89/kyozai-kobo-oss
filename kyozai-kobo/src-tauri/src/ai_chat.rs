@@ -28,7 +28,7 @@ const MAX_MESSAGE_CHARS: usize = 20_000;
 const MAX_TOOL_RESULT_CHARS: usize = 30_000;
 const QUALITY_CONFIRMATION_PREFIX: &str = "__AI_CHAT_PART_QUALITY_CONFIRMATION__";
 /// instruction は既存AIジョブの solutionGuidance / explanationGuidance /
-/// revisionGuidance へ渡る。ai::create_job 側が1,000文字で弾くため、
+/// flowGuidance / revisionGuidance へ渡る。ai::create_job 側が1,000文字で弾くため、
 /// Tool側でも同じ上限で検査し、plannerが書き直せるエラーを返す。
 const MAX_TOOL_INSTRUCTION_CHARS: usize = 1_000;
 
@@ -207,6 +207,7 @@ fn tool_permission(name: &str) -> Option<Permission> {
         | "replace_material_problem"
         | "create_topic_explanation"
         | "generate_solution"
+        | "generate_solution_flow"
         | "generate_explanation"
         | "revise_problem_content"
         | "undo_action"
@@ -305,7 +306,7 @@ pub fn planner_output_schema() -> Value {
                             "create_problem","update_problem","update_part","create_material",
                             "add_problem_to_material","reorder_material_problems",
                             "replace_material_problem","create_topic_explanation","propose_solution_strategies",
-                            "generate_solution","generate_explanation","revise_problem_content","generate_pdf",
+                            "generate_solution","generate_solution_flow","generate_explanation","revise_problem_content","generate_pdf",
                             "create_graph","create_2d_figure","create_3d_figure",
                             "create_pattern_proposal",
                             "undo_action","redo_action","get_action_history"
@@ -339,8 +340,11 @@ const AGENT_INSTRUCTIONS: &str = r#"あなたは教材工房のAIエージェン
 - 問題の解答を依頼され、ユーザーが解法をまだ指定・選択していない場合は、get_problemの後にpropose_solution_strategiesを使う。候補結果を番号付きで簡潔に提示し、そのターンではgenerate_solutionを呼ばず、主解法・別解として採用する候補をユーザーへ尋ねる。
 - propose_solution_strategiesの結果を受け取っても、最新のユーザーメッセージが「クイック」「おまかせ」「最適な方法で」等を明示していない限り、同じターン内で勝手に解法を決定してはならない。
 - ユーザーが候補番号・解法名・自然言語の方針を選んだ後だけ、generate_solutionのstrategyへその方針を具体的に渡す。複数選択では1件をstrategy_role=main、残りをalternativeとして独立に呼ぶ。
-- 解答・解説生成はgenerate_solution / generate_explanationを使う。generate_solutionは選択済みStrategyから答案設計、答案、検証を順に行う。既存解答の上書きが必要なら明示する。
-- 既存の解答・解説へ指定内容を追加・修正するときはrevise_problem_contentを使い、target_fieldで対象欄を指定する。解答と解説の両方なら、解答、解説の順に実行する。
+- 解答生成はgenerate_solutionを使う。generate_solutionは選択済みStrategyから答案設計、答案、検証を順に行う。既存解答の上書きが必要なら明示する。
+- ユーザーが「考え方」の生成・再生成・修正を求めた場合は、必ずgenerate_solution_flowを使う。既存解答を変更せず、Problemへ結び付けられた定石を使う構造化Flowのバックグラウンド生成である。修正内容はinstructionへ渡す。generate_explanationやtarget_field=explanation_latexを「考え方」に使ってはならない。
+- generate_solution_flowの結果はバックグラウンド開始の通知であり、完成やProblemへの反映ではない。Tool結果のjobIdを案内し、完了後にAI一覧で内容を確認して反映できると伝える。同じ依頼でジョブを重複して開始しない。
+- generate_explanationは、ユーザーが旧データとの互換用の「旧形式の解説」「legacy explanation」を明示的に要求し、対象Problemに構造化Flowがない場合だけ使う。通常の「考え方」には使わない。
+- 既存の解答へ指定内容を追加・修正するときはrevise_problem_contentのtarget_field=answer_latexを使う。旧形式の解説を明示的に修正する場合だけtarget_field=explanation_latexを使う。解答と考え方の両方を直す場合は、解答を先に修正し、その完了後にgenerate_solution_flowで最新答案から考え方を再生成する。
 - 状態推移図、樹形図、フロー図など本文中の概念図は、revise_problem_contentで編集可能なTikZとして対象欄へ直接追加する。create_graph / create_2d_figure / create_3d_figureはグラフ・図形ライブラリへ保存する操作であり、問題の欄へは挿入しない。
 - 削除や階層変更のToolは公開されていない。できない操作は理由を説明する。
 - 1回の出力で依存関係のないToolはまとめてよいが、作成されたIDが必要な後続Toolは次のターンへ分ける。
@@ -362,8 +366,9 @@ fn tool_catalog() -> &'static str {
 - update_problem [WRITE]: problem_idの指定された欄だけ更新（未指定欄は保持）。
 - update_part [WRITE]: part_idの指定されたタイトル・分類・LaTeX等だけ更新（未指定欄は保持）。latex_sourceを更新するときはget_partで取得した全文を基礎にし、ユーザーが指定していない文章・式・見出し・TikZ図・画像参照を省略、要約、変更しない。数学部品のLaTeX更新は保存前に日本式表記、指定段組、既存内容の保持を検査する。指示に沿った図の追加・統合・更新は許可するが、指示と無関係な図の改変、図の大部分の消失、大幅な本文欠落があれば保存前警告として確認を求める。警告が出た候補はGUIコンテキストのfailedPartRevisionに保持されるため、修正依頼ではその候補全文、kind、warningsを直接使う。
 - generate_solution [WRITE]: problem_idと、ユーザーが選択・指定したstrategy、strategy_role(main/alternative)を使い、答案設計→試験答案→数学検証を行って保存する。
-- generate_explanation [WRITE]: 既存解答に沿う詳しい解説を生成し保存。
-- revise_problem_content [WRITE]: problem_id/target_field/instructionで既存の解答または解説を必要最小限だけ修正し、検査・試験コンパイル後に保存。本文中の状態推移図・樹形図・フロー図はこのToolでTikZとして追加する。（instructionは1,000文字以内）
+- generate_solution_flow [WRITE]: problem_idと任意のinstructionを使い、保存済み答案を変更せず、結び付けられた定石を適切な位置へ挿入した構造化「考え方」をバックグラウンド生成する。生成・再生成・修正はすべてこのToolを使う。完了後にAI一覧から確認してProblemへ反映する。（instructionは1,000文字以内）
+- generate_explanation [WRITE]: 構造化FlowがないProblemに、互換用の旧形式の解説LaTeXを生成する。ユーザーが「旧形式の解説」を明示した場合だけ使用し、「考え方」には使用しない。
+- revise_problem_content [WRITE]: problem_id/target_field/instructionで既存の解答、または構造化FlowがないProblemの旧形式の解説を必要最小限だけ修正し、検査・試験コンパイル後に保存。考え方の修正には使わずgenerate_solution_flowで再生成する。本文中の状態推移図・樹形図・フロー図はこのToolでTikZとして追加する。（instructionは1,000文字以内）
 - create_material [WRITE]: material_nameで教材を作成。
 - add_problem_to_material [WRITE]: material_idへproblem_idsをスナップショット追加。
 - reorder_material_problems [WRITE]: ordered_item_idsで教材全項目を並べ替え。
@@ -1276,6 +1281,35 @@ fn explicit_auto_requested(text: &str) -> bool {
     .any(|needle| text.contains(needle))
 }
 
+fn explicitly_requests_legacy_explanation(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    text.contains("旧形式の解説")
+        || text.contains("旧式の解説")
+        || text.contains("互換用の解説")
+        || lowered.contains("legacy explanation")
+        || lowered.contains("explanation_latex")
+}
+
+fn requests_structured_thinking(text: &str) -> bool {
+    (text.contains("考え方") || text.contains("解く流れ"))
+        && !explicitly_requests_legacy_explanation(text)
+}
+
+/// Plannerが旧名称を選んでも、「考え方」というユーザーの意図は新しい構造化Flowへ
+/// 決定的に寄せる。確認画面へ出す前に変換するため、表示と実処理も一致する。
+fn route_thinking_request(call: &mut AgentToolCall, user_text: &str) {
+    if !requests_structured_thinking(user_text) {
+        return;
+    }
+    let legacy_generation = call.name == "generate_explanation";
+    let legacy_revision = call.name == "revise_problem_content"
+        && call.arguments.target_field.as_deref() == Some("explanation_latex");
+    if legacy_generation || legacy_revision {
+        call.name = "generate_solution_flow".into();
+        call.arguments.target_field = None;
+    }
+}
+
 fn planner_history(state: &AppState, session_id: &str) -> Result<Value, String> {
     let conn = state.conn.lock().map_err(err_str)?;
     let mut stmt = conn
@@ -1407,8 +1441,9 @@ fn human_tool_label(name: &str) -> &'static str {
         "replace_material_problem" => "教材の問題を交換",
         "create_topic_explanation" => "分野解説を保存",
         "generate_solution" => "解答を生成・検査・保存",
-        "generate_explanation" => "解説を生成・検査・保存",
-        "revise_problem_content" => "解答・解説を修正・検査・保存",
+        "generate_solution_flow" => "考え方をバックグラウンド生成",
+        "generate_explanation" => "旧形式の解説を生成・検査・保存",
+        "revise_problem_content" => "解答または旧形式の解説を修正・検査・保存",
         "generate_pdf" => "PDFを生成",
         "create_graph" => "グラフを作成",
         "create_2d_figure" => "平面図形を作成",
@@ -1614,7 +1649,9 @@ fn run_agent_inner(
     let mut used_calls = 0usize;
 
     if let Some(calls) = approved_calls {
-        for call in calls {
+        let user_text = latest_user_content(state, session_id, user_message_id)?;
+        for mut call in calls {
+            route_thinking_request(&mut call, &user_text);
             if cancel.load(Ordering::SeqCst) {
                 return Err("キャンセルされました".into());
             }
@@ -1697,7 +1734,11 @@ fn run_agent_inner(
             },
             cancel,
         )?;
-        let plan = parse_plan(&raw)?;
+        let mut plan = parse_plan(&raw)?;
+        let user_text = latest_user_content(state, session_id, user_message_id)?;
+        for call in &mut plan.tool_calls {
+            route_thinking_request(call, &user_text);
+        }
         if plan.tool_calls.is_empty() {
             let message = if plan.assistant_message.trim().is_empty() {
                 "処理が完了しました。".to_string()
@@ -1725,7 +1766,6 @@ fn run_agent_inner(
         }
 
         let (_, execution_mode) = planner_context(state, session_id)?;
-        let user_text = latest_user_content(state, session_id, user_message_id)?;
         let bypass_confirmation = explicit_auto_requested(&user_text);
         let mut executable = vec![];
         let mut pending = vec![];
@@ -2007,6 +2047,7 @@ fn execute_tool(
         "replace_material_problem" => replace_material_tool(state, call, group_id),
         "create_topic_explanation" => create_topic_explanation_tool(state, call, group_id, cancel),
         "generate_solution" => generate_problem_content_tool(state, call, group_id, false, cancel),
+        "generate_solution_flow" => generate_solution_flow_tool(state, call),
         "generate_explanation" => {
             generate_problem_content_tool(state, call, group_id, true, cancel)
         }
@@ -2111,6 +2152,7 @@ fn problem_snapshot(state: &AppState, problem_id: i64) -> Result<Value, String> 
         "statement_latex_two_column":problem.statement_latex_two_column,
         "answer_latex":problem.answer_latex,
         "explanation_latex":problem.explanation_latex,
+        "common_flow_blocks":problem.common_flow_blocks,
         "solution_variants":problem.solution_variants,
         "answer_completed":problem.answer_completed,
         "explanation_completed":problem.explanation_completed,
@@ -2132,9 +2174,9 @@ fn restore_problem_snapshot(state: &AppState, snapshot: &Value) -> Result<(), St
         let conn = state.conn.lock().map_err(err_str)?;
         conn.execute(
             "INSERT INTO problems
-             (id,unit_id,title,statement_latex,statement_latex_two_column,answer_latex,explanation_latex,solution_variants_json,
+             (id,unit_id,title,statement_latex,statement_latex_two_column,answer_latex,explanation_latex,common_flow_blocks_json,solution_variants_json,
               answer_completed,explanation_completed,difficulty,difficulty_rank,is_required,memo,created_at,updated_at,version)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,1)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16,1)",
             params![
                 id,
                 snapshot["unit_id"].as_i64().ok_or("unit_idが不正です")?,
@@ -2143,6 +2185,7 @@ fn restore_problem_snapshot(state: &AppState, snapshot: &Value) -> Result<(), St
                 snapshot["statement_latex_two_column"].as_str().unwrap_or(""),
                 snapshot["answer_latex"].as_str().unwrap_or(""),
                 snapshot["explanation_latex"].as_str().unwrap_or(""),
+                snapshot["common_flow_blocks"].to_string(),
                 snapshot["solution_variants"].to_string(),
                 snapshot["answer_completed"].as_bool().unwrap_or(false) as i64,
                 snapshot["explanation_completed"].as_bool().unwrap_or(false) as i64,
@@ -2177,6 +2220,8 @@ fn restore_problem_snapshot(state: &AppState, snapshot: &Value) -> Result<(), St
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
+            common_flow_blocks: serde_json::from_value(snapshot["common_flow_blocks"].clone())
+                .unwrap_or_default(),
             solution_variants: serde_json::from_value(snapshot["solution_variants"].clone())
                 .unwrap_or_default(),
             answer_completed: snapshot["answer_completed"].as_bool().unwrap_or(false),
@@ -2355,6 +2400,7 @@ fn create_problem_tool(
             statement_latex_two_column: two_column.to_string(),
             answer_latex: args.answer_latex.clone().unwrap_or_default(),
             explanation_latex: args.explanation_latex.clone().unwrap_or_default(),
+            common_flow_blocks: Vec::new(),
             solution_variants: Vec::new(),
             answer_completed: false,
             explanation_completed: false,
@@ -2464,6 +2510,7 @@ fn update_problem_tool(
             statement_latex_two_column: statement_two,
             answer_latex: answer,
             explanation_latex: explanation,
+            common_flow_blocks: current.common_flow_blocks,
             solution_variants: current.solution_variants,
             answer_completed,
             explanation_completed,
@@ -3322,7 +3369,10 @@ fn create_pattern_proposal_tool(
     if instruction.chars().count() > 20_000 {
         return Err("定石にまとめる内容が長すぎます".into());
     }
-    let mut lines = vec!["---- 定石にまとめたい内容 ----".to_string(), instruction.to_string()];
+    let mut lines = vec![
+        "---- 定石にまとめたい内容 ----".to_string(),
+        instruction.to_string(),
+    ];
     // 会話で問題を見ている場合だけ、その問題文と解答を資料として添える。
     if let Some(problem_id) = call.arguments.problem_id.filter(|value| *value > 0) {
         let problem = commands::problems::get_problem(state, problem_id)?;
@@ -3469,6 +3519,35 @@ fn compose_variant_explanations(variants: &[ProblemSolutionVariant]) -> String {
         .join("\n\n")
 }
 
+/// 構造化Flowの互換LaTeXを直接生成・修正した場合は、それをlegacy flowへ
+/// 明示的に切り替える。古いFlow Blockを残すとProblem保存時の再描画が新しい
+/// explanation_latexを上書きしてしまうため、両者を同時に正本にはしない。
+fn variants_after_legacy_flow_edit(
+    mut variants: Vec<ProblemSolutionVariant>,
+    explanation: &str,
+) -> Vec<ProblemSolutionVariant> {
+    for (index, variant) in variants.iter_mut().enumerate() {
+        variant.flow_blocks.clear();
+        variant.explanation =
+            (index == 0 && !explanation.trim().is_empty()).then(|| explanation.to_string());
+        variant.explanation_sections = if index == 0 && !explanation.trim().is_empty() {
+            vec![crate::models::ExplanationSection {
+                solution_block_ids: variant
+                    .solution_blocks
+                    .iter()
+                    .map(|block| block.id.clone())
+                    .collect(),
+                title: None,
+                content: explanation.to_string(),
+            }]
+        } else {
+            vec![]
+        };
+        variant.explanation_outdated = false;
+    }
+    variants
+}
+
 fn legacy_solution_variant(solution: &str, explanation: &str) -> ProblemSolutionVariant {
     ProblemSolutionVariant {
         id: "variant-legacy".into(),
@@ -3485,6 +3564,8 @@ fn legacy_solution_variant(solution: &str, explanation: &str) -> ProblemSolution
                 alternative_solution: false,
             }),
             note: Some("既存データとの互換用".into()),
+            pattern_refs: vec![],
+            evaluation: None,
         },
         role: "main".into(),
         plan: None,
@@ -3494,6 +3575,16 @@ fn legacy_solution_variant(solution: &str, explanation: &str) -> ProblemSolution
         explanation: (!explanation.trim().is_empty()).then(|| explanation.to_string()),
         explanation_sections: vec![],
         explanation_outdated: false,
+        flow_blocks: if explanation.trim().is_empty() {
+            vec![]
+        } else {
+            vec![crate::models::SolutionFlowBlock {
+                id: "legacy-flow-1".into(),
+                block_type: "text".into(),
+                content: explanation.into(),
+                ..Default::default()
+            }]
+        },
     }
 }
 
@@ -3735,6 +3826,9 @@ fn generate_selected_strategy_solution_tool(
         explanation: inherited_explanation.clone(),
         explanation_sections: vec![],
         explanation_outdated: inherited_explanation.is_some(),
+        flow_blocks: previous
+            .map(|variant| variant.flow_blocks.clone())
+            .unwrap_or_default(),
     };
     if role == "main" {
         variants.retain(|item| item.role != "main");
@@ -3769,6 +3863,7 @@ fn generate_selected_strategy_solution_tool(
             statement_latex_two_column: latest.statement_latex_two_column,
             answer_latex,
             explanation_latex,
+            common_flow_blocks: latest.common_flow_blocks,
             solution_variants: variants,
             answer_completed,
             explanation_completed,
@@ -3835,6 +3930,93 @@ pub fn validate_generated_problem_latex_for_test(
     validated_generated_problem_latex(completed, field_label, "AI生成結果が空です")
 }
 
+fn has_structured_solution_flow(
+    common_flow_blocks: &[crate::models::SolutionFlowBlock],
+    solution_variants: &[ProblemSolutionVariant],
+) -> bool {
+    !common_flow_blocks.is_empty()
+        || solution_variants
+            .iter()
+            .any(|variant| !variant.flow_blocks.is_empty())
+}
+
+fn ensure_legacy_explanation_edit_is_safe(
+    problem: &crate::models::ProblemFull,
+) -> Result<(), String> {
+    if has_structured_solution_flow(&problem.common_flow_blocks, &problem.solution_variants) {
+        Err(
+            "この問題には構造化された考え方があります。旧explanation_latexを直接生成・修正するとFlow Blockと定石Snapshotが失われるため実行できません。考え方にはgenerate_solution_flowを使ってください"
+                .into(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+/// 保存済み答案を固定資料とする構造化Flow生成をキューへ積む。
+/// AI Chat自体は完了を待たず、他の画面・次の指示を使える状態へすぐ戻す。
+fn generate_solution_flow_tool(
+    state: &Arc<AppState>,
+    call: &AgentToolCall,
+) -> Result<ToolOutcome, String> {
+    let problem_id = require_positive(call.arguments.problem_id, "problem_id")?;
+    let problem = commands::problems::get_problem(state, problem_id)?;
+    let statement = if problem.statement_latex.trim().is_empty() {
+        problem.statement_latex_two_column.trim()
+    } else {
+        problem.statement_latex.trim()
+    };
+    if statement.is_empty() {
+        return Err("問題文が空のため考え方を生成できません".into());
+    }
+    if problem.answer_latex.trim().is_empty() {
+        return Err("考え方を生成するには、先に解答を保存してください".into());
+    }
+    let guidance = call.arguments.instruction.as_deref().unwrap_or("").trim();
+    checked_instruction(guidance, "考え方の指示")?;
+    let job = ai::create_job(
+        state,
+        ai::CreateJobPayload {
+            source_type: "text".into(),
+            conversion_mode: Some("solution_flow_from_answer".into()),
+            options: Some(json!({
+                "solutionSubject":solution_subject_for_problem(state, problem_id),
+                "solutionLayout":"two_column",
+                "solutionDetail":"standard",
+                "useTemplateContext":true,
+                "flowGuidance":guidance
+            })),
+            input_text: Some(format!(
+                "【問題文】\n{}\n\n【変更してはいけない既存解答】\n{}",
+                statement,
+                problem.answer_latex.trim()
+            )),
+            input_names: vec![],
+            target_entity_type: Some("problem".into()),
+            target_entity_id: Some(problem_id),
+            target_field: Some("solution_flow".into()),
+        },
+    )?;
+    let job_id = job
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or("AIジョブIDを取得できません")?;
+    Ok(ToolOutcome {
+        value: json!({
+            "jobId":job_id,
+            "problemId":problem_id,
+            "targetField":"solution_flow",
+            "background":true,
+            "status":job.get("status").cloned().unwrap_or_else(|| json!("queued")),
+            "nextAction":"AI一覧で生成結果を確認し、問題へ反映"
+        }),
+        summary: format!(
+            "問題 #{}の考え方生成をバックグラウンドで開始しました（AI #{}）。完了後にAI一覧から確認・反映できます",
+            problem_id, job_id
+        ),
+    })
+}
+
 fn generate_problem_content_tool(
     state: &Arc<AppState>,
     call: &AgentToolCall,
@@ -3863,6 +4045,9 @@ fn generate_problem_content_tool(
     }
     if explanation && current.answer_latex.trim().is_empty() {
         return Err("先に解答を生成または入力してください".into());
+    }
+    if explanation {
+        ensure_legacy_explanation_edit_is_safe(&current)?;
     }
     let before = problem_snapshot(state, problem_id)?;
     let mode = if explanation {
@@ -3942,6 +4127,16 @@ fn generate_problem_content_tool(
             generated.clone()
         }
     };
+    let next_explanation = if explanation {
+        merge(&latest.explanation_latex)
+    } else {
+        latest.explanation_latex.clone()
+    };
+    let next_variants = if explanation {
+        variants_after_legacy_flow_edit(latest.solution_variants.clone(), &next_explanation)
+    } else {
+        latest.solution_variants.clone()
+    };
     commands::problems::update_problem(
         state,
         ProblemUpdate {
@@ -3956,12 +4151,13 @@ fn generate_problem_content_tool(
             } else {
                 merge(&latest.answer_latex)
             },
-            explanation_latex: if explanation {
-                merge(&latest.explanation_latex)
+            explanation_latex: next_explanation,
+            common_flow_blocks: if explanation {
+                Vec::new()
             } else {
-                latest.explanation_latex
+                latest.common_flow_blocks
             },
-            solution_variants: latest.solution_variants,
+            solution_variants: next_variants,
             answer_completed,
             explanation_completed,
             difficulty: latest.difficulty,
@@ -4032,6 +4228,9 @@ fn revise_problem_content_tool(
         .as_deref()
         .ok_or("target_fieldが必要です")?;
     let current = commands::problems::get_problem(state, problem_id)?;
+    if target_field == "explanation_latex" {
+        ensure_legacy_explanation_edit_is_safe(&current)?;
+    }
     let before = problem_snapshot(state, problem_id)?;
     let (revision_target, field_label, source) = match target_field {
         "answer_latex" => (
@@ -4101,6 +4300,16 @@ fn revise_problem_content_tool(
         target_field == "answer_latex",
         target_field == "explanation_latex",
     );
+    let next_explanation = if target_field == "explanation_latex" {
+        revised.clone()
+    } else {
+        latest.explanation_latex.clone()
+    };
+    let next_variants = if target_field == "explanation_latex" {
+        variants_after_legacy_flow_edit(latest.solution_variants.clone(), &next_explanation)
+    } else {
+        latest.solution_variants.clone()
+    };
     commands::problems::update_problem(
         state,
         ProblemUpdate {
@@ -4115,12 +4324,13 @@ fn revise_problem_content_tool(
             } else {
                 latest.answer_latex
             },
-            explanation_latex: if target_field == "explanation_latex" {
-                revised
+            explanation_latex: next_explanation,
+            common_flow_blocks: if target_field == "explanation_latex" {
+                Vec::new()
             } else {
-                latest.explanation_latex
+                latest.common_flow_blocks
             },
-            solution_variants: latest.solution_variants,
+            solution_variants: next_variants,
             answer_completed,
             explanation_completed,
             difficulty: latest.difficulty,
@@ -4866,6 +5076,7 @@ mod tests {
         assert!(serialized.contains("get_part"));
         assert!(serialized.contains("update_part"));
         assert!(serialized.contains("propose_solution_strategies"));
+        assert!(serialized.contains("generate_solution_flow"));
         assert!(serialized.contains("strategy_role"));
         assert!(serialized.contains("revise_problem_content"));
         assert!(serialized.contains("generate_pdf"));
@@ -4883,6 +5094,10 @@ mod tests {
         assert!(tool_permission("create_pattern").is_none());
         assert!(tool_permission("update_pattern").is_none());
         assert!(tool_permission("delete_pattern").is_none());
+        assert!(matches!(
+            tool_permission("generate_solution_flow"),
+            Some(Permission::Write)
+        ));
     }
 
     #[test]
@@ -4938,6 +5153,102 @@ mod tests {
             tool_permission("propose_solution_strategies"),
             Some(Permission::Read)
         ));
+    }
+
+    #[test]
+    fn thinking_requests_use_the_structured_background_flow_tool() {
+        assert!(AGENT_INSTRUCTIONS.contains(
+            "「考え方」の生成・再生成・修正を求めた場合は、必ずgenerate_solution_flowを使う"
+        ));
+        assert!(AGENT_INSTRUCTIONS.contains(
+            "generate_explanationやtarget_field=explanation_latexを「考え方」に使ってはならない"
+        ));
+        assert!(tool_catalog()
+            .contains("generate_solution_flow [WRITE]: problem_idと任意のinstructionを使い"));
+
+        let plan = parse_plan(
+            r#"{
+                "assistant_message":"既存答案に沿う考え方をバックグラウンドで生成します",
+                "done":false,
+                "tool_calls":[{
+                    "call_id":"generate-thinking",
+                    "name":"generate_solution_flow",
+                    "arguments":{
+                        "problem_id":46,
+                        "instruction":"解答の見出しと式の順序を保つ"
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(plan.tool_calls.len(), 1);
+        assert_eq!(plan.tool_calls[0].name, "generate_solution_flow");
+        assert_eq!(plan.tool_calls[0].arguments.problem_id, Some(46));
+        assert_eq!(
+            plan.tool_calls[0].arguments.instruction.as_deref(),
+            Some("解答の見出しと式の順序を保つ")
+        );
+
+        let mut legacy_generation = AgentToolCall {
+            call_id: "legacy-generation".into(),
+            name: "generate_explanation".into(),
+            arguments: AgentToolArguments {
+                problem_id: Some(46),
+                ..Default::default()
+            },
+        };
+        route_thinking_request(&mut legacy_generation, "この問題の考え方を生成して");
+        assert_eq!(legacy_generation.name, "generate_solution_flow");
+
+        let mut legacy_revision = AgentToolCall {
+            call_id: "legacy-revision".into(),
+            name: "revise_problem_content".into(),
+            arguments: AgentToolArguments {
+                problem_id: Some(46),
+                target_field: Some("explanation_latex".into()),
+                instruction: Some("式の順序を直す".into()),
+                ..Default::default()
+            },
+        };
+        route_thinking_request(&mut legacy_revision, "考え方の式の順序を直して");
+        assert_eq!(legacy_revision.name, "generate_solution_flow");
+        assert_eq!(legacy_revision.arguments.target_field, None);
+
+        let mut explicitly_legacy = AgentToolCall {
+            call_id: "explicit-legacy".into(),
+            name: "generate_explanation".into(),
+            arguments: AgentToolArguments::default(),
+        };
+        route_thinking_request(
+            &mut explicitly_legacy,
+            "考え方ではなく旧形式の解説を生成して",
+        );
+        assert_eq!(explicitly_legacy.name, "generate_explanation");
+    }
+
+    #[test]
+    fn structured_flow_is_detected_before_a_legacy_explanation_edit() {
+        let empty_variants = vec![legacy_solution_variant("答案", "")];
+        assert!(!has_structured_solution_flow(&[], &empty_variants));
+
+        let common = vec![crate::models::SolutionFlowBlock {
+            id: "common-text".into(),
+            block_type: "text".into(),
+            content: "着眼点".into(),
+            ..Default::default()
+        }];
+        assert!(has_structured_solution_flow(&common, &empty_variants));
+
+        let mut structured_variants = empty_variants;
+        structured_variants[0]
+            .flow_blocks
+            .push(crate::models::SolutionFlowBlock {
+                id: "variant-text".into(),
+                block_type: "text".into(),
+                content: "方針".into(),
+                ..Default::default()
+            });
+        assert!(has_structured_solution_flow(&[], &structured_variants));
     }
 
     #[test]
@@ -5129,6 +5440,7 @@ mod tests {
                     statement_latex_two_column: String::new(),
                     answer_latex: String::new(),
                     explanation_latex: String::new(),
+                    common_flow_blocks: Vec::new(),
                     solution_variants: Vec::new(),
                     answer_completed: false,
                     explanation_completed: false,
@@ -5711,6 +6023,7 @@ mod tests {
                 statement_latex_two_column: String::new(),
                 answer_latex: "解答".into(),
                 explanation_latex: "解説".into(),
+                common_flow_blocks: Vec::new(),
                 solution_variants: Vec::new(),
                 answer_completed: true,
                 explanation_completed: true,
